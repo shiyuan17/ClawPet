@@ -88,8 +88,14 @@ type SessionSummary = {
   requestCount: number;
   failureCount: number;
   totalDuration: number;
+  totalTokens: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadInputTokens: number;
   logs: RequestLog[];
   previewText: string;
+  fullOutput: string;
+  latestError: string | null;
 };
 
 type FailureSummary = {
@@ -100,6 +106,20 @@ type FailureSummary = {
   platformNames: string[];
   logs: RequestLog[];
   nextStep: string;
+};
+
+type GatewayMonitorState = {
+  status: "checking" | "online" | "offline" | "unconfigured" | "unsupported";
+  checkedUrl?: string | null;
+  detail?: string | null;
+  latencyMs?: number | null;
+};
+
+type PreviewSection = "request" | "response" | "stream" | "raw";
+
+type JsonViewResult = {
+  text: string;
+  language: "json" | "text";
 };
 
 const animations: Record<AnimationName, AnimationDefinition> = {
@@ -168,13 +188,23 @@ const editingPlatformId = ref<string | null>(null);
 const platformForm = ref<PlatformDraft>(createPlatformDraft());
 const showPlatformTips = ref(false);
 const isPlatformModalOpen = ref(false);
-const selectedFeaturedPreset = ref("");
-const selectedMorePreset = ref("");
+const selectedGlobalPreset = ref("");
+const selectedChinaPreset = ref("");
 const selectedLogId = ref<string | null>(null);
 const selectedSessionId = ref<string | null>(null);
+const selectedSessionLogId = ref<string | null>(null);
 const selectedFailureKey = ref<string | null>(null);
+const timelinePreviewSection = ref<PreviewSection>("request");
+const sessionPreviewSection = ref<PreviewSection>("response");
+const sessionOverlayLogId = ref<string | null>(null);
 const currentSessionId = ref("");
 const proxyPort = ref(5005);
+const gatewayMonitor = ref<GatewayMonitorState>({
+  status: "checking",
+  checkedUrl: null,
+  detail: null,
+  latencyMs: null
+});
 const chatPlacement = ref({
   mode: "auto" as "auto" | "manual",
   x: 0,
@@ -194,17 +224,30 @@ const viewportSize = 280;
 const autoplayDelayMs = 9000;
 const playbackRate = 3;
 const platformPresets = getPlatformPresets();
-const featuredPlatformPresets = computed(() => platformPresets.filter((preset) => preset.featured));
-const morePlatformPresets = computed(() => platformPresets.filter((preset) => !preset.featured));
+const globalPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "global"));
+const chinaPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "china"));
+const openClawDefaultPlatformName = "OpenClaw 默认通道";
+
+function isImplicitSeededOpenAiPlatform(platform: PlatformConfig | null) {
+  if (!platform) {
+    return false;
+  }
+
+  return (
+    platform.name === "OpenAI" &&
+    platform.protocol === "openai" &&
+    platform.baseUrl === "https://api.openai.com" &&
+    platform.pathPrefix === "/openai" &&
+    platform.apiPath === "/v1/chat/completions" &&
+    platform.model === "gpt-4o-mini" &&
+    !platform.apiKey.trim()
+  );
+}
 
 const activeAnimation = computed(() => animations[currentAnimationName.value]);
 const currentFrame = computed(() => activeAnimation.value.config.frames[currentFrameIndex.value]);
 const activePlatform = computed(
-  () =>
-    platforms.value.find((platform) => platform.id === activePlatformId.value && platform.enabled) ||
-    platforms.value.find((platform) => platform.enabled) ||
-    platforms.value[0] ||
-    null
+  () => platforms.value.find((platform) => platform.id === activePlatformId.value && platform.enabled) || null
 );
 const enabledPlatformCount = computed(() => platforms.value.filter((platform) => platform.enabled).length);
 const openClawMessages = computed<OpenClawMessage[]>(() =>
@@ -304,15 +347,19 @@ const consolePanelStyle = computed(() => {
   const viewportWidth = bounds?.width ?? (typeof window === "undefined" ? 360 : window.innerWidth);
   const viewportHeight = bounds?.height ?? (typeof window === "undefined" ? 640 : window.innerHeight);
   const prefersWide = true;
-  const defaultWidth = Math.min(prefersWide ? 980 : 620, Math.max(prefersWide ? 720 : 420, viewportWidth - 32));
-  const defaultHeight = Math.min(prefersWide ? 700 : 620, Math.max(420, viewportHeight - 32));
+  const availableWidth = Math.max(320, viewportWidth - 32);
+  const availableHeight = Math.max(320, viewportHeight - 32);
+  const minWidth = Math.min(getPanelMinWidth(prefersWide), availableWidth);
+  const minHeight = Math.min(420, availableHeight);
+  const defaultWidth = Math.min(availableWidth, Math.max(minWidth, Math.round(viewportWidth * 0.8)));
+  const defaultHeight = Math.min(availableHeight, Math.max(minHeight, Math.round(viewportHeight * 0.8)));
   const panelWidth =
     panelPlacement.value.mode === "manual" && panelPlacement.value.width > 0
-      ? Math.min(Math.max(getPanelMinWidth(prefersWide), panelPlacement.value.width), viewportWidth - 32)
+      ? Math.min(Math.max(minWidth, panelPlacement.value.width), availableWidth)
       : defaultWidth;
   const panelHeight =
     panelPlacement.value.mode === "manual" && panelPlacement.value.height > 0
-      ? Math.min(Math.max(420, panelPlacement.value.height), viewportHeight - 32)
+      ? Math.min(Math.max(minHeight, panelPlacement.value.height), availableHeight)
       : defaultHeight;
   const gap = 18;
   const petLeft = petPosition.value.x;
@@ -322,12 +369,10 @@ const consolePanelStyle = computed(() => {
   const rightSpace = viewportWidth - petRight - gap - 16;
   const canPlaceLeft = leftSpace >= panelWidth;
   const canPlaceRight = rightSpace >= panelWidth;
-  const autoLeft = canPlaceLeft
-    ? petLeft - panelWidth - gap
-    : canPlaceRight
-      ? petRight + gap
-      : Math.min(Math.max(16, viewportWidth - panelWidth - 16), Math.max(16, petLeft - panelWidth * 0.5));
-  const autoTop = Math.min(Math.max(16, petCenterY - panelHeight / 2), Math.max(16, viewportHeight - panelHeight - 16));
+  const centeredAutoLeft = Math.max(16, Math.round((viewportWidth - panelWidth) / 2));
+  const centeredAutoTop = Math.max(16, Math.round((viewportHeight - panelHeight) / 2));
+  const autoLeft = centeredAutoLeft;
+  const autoTop = centeredAutoTop;
   const left =
     panelPlacement.value.mode === "manual"
       ? Math.min(Math.max(16, panelPlacement.value.x), Math.max(16, viewportWidth - panelWidth - 16))
@@ -337,7 +382,7 @@ const consolePanelStyle = computed(() => {
       ? Math.min(Math.max(16, panelPlacement.value.y), Math.max(16, viewportHeight - panelHeight - 16))
       : autoTop;
   const progress = panelMotionValue.value;
-  const originX = canPlaceLeft ? "right" : canPlaceRight ? "left" : "center";
+  const originX = "center";
 
   return {
     width: `${panelWidth}px`,
@@ -357,12 +402,38 @@ const metrics = computed(() => {
   const failures = requestLogs.value.filter((log) => isFailedLog(log)).length;
   const totalDuration = requestLogs.value.reduce((sum, log) => sum + log.duration, 0);
   const averageDuration = requestLogs.value.length > 0 ? Math.round(totalDuration / requestLogs.value.length) : 0;
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfSevenDays = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).getTime();
+  const todayTokens = requestLogs.value.reduce(
+    (sum, log) => (log.createdAt >= startOfToday ? sum + getEffectiveTotalTokens(log) : sum),
+    0
+  );
+  const sevenDayTokens = requestLogs.value.reduce(
+    (sum, log) => (log.createdAt >= startOfSevenDays ? sum + getEffectiveTotalTokens(log) : sum),
+    0
+  );
+  const totalTokens = requestLogs.value.reduce((sum, log) => sum + getEffectiveTotalTokens(log), 0);
+  const gatewayStatusValue =
+    gatewayMonitor.value.status === "online"
+      ? `在线${typeof gatewayMonitor.value.latencyMs === "number" ? ` · ${gatewayMonitor.value.latencyMs} ms` : ""}`
+      : gatewayMonitor.value.status === "offline"
+        ? "离线"
+        : gatewayMonitor.value.status === "unconfigured"
+          ? "未配置"
+          : gatewayMonitor.value.status === "unsupported"
+            ? "不可用"
+            : "检测中";
 
   return [
     { label: "启用平台", value: `${enabledPlatformCount.value}` },
     { label: "调用总数", value: `${requestLogs.value.length}` },
-    { label: "失败请求", value: `${failures}` },
-    { label: "平均耗时", value: `${averageDuration} ms` }
+    { label: "网关状态", value: gatewayStatusValue },
+    { label: "平均耗时", value: `${averageDuration} ms` },
+    { label: "今日 Token", value: `${todayTokens}` },
+    { label: "7 天 Token", value: `${sevenDayTokens}` },
+    { label: "累计 Token", value: `${totalTokens}` },
+    { label: "失败请求", value: `${failures}` }
   ];
 });
 const timelineEntries = computed(() => requestLogs.value);
@@ -378,9 +449,19 @@ const sessionSummaries = computed<SessionSummary[]>(() => {
       current.requestCount += 1;
       current.failureCount += isFailedLog(log) ? 1 : 0;
       current.totalDuration += log.duration;
+      current.totalTokens += getEffectiveTotalTokens(log);
+      current.promptTokens += getEffectivePromptTokens(log);
+      current.completionTokens += getEffectiveCompletionTokens(log);
+      current.cacheReadInputTokens += log.cacheReadInputTokens ?? 0;
       current.logs.push(log);
       if (preview.length > current.previewText.length) {
         current.previewText = preview;
+      }
+      if (log.streamSummary?.trim() || log.responseBody?.trim()) {
+        current.fullOutput = buildSessionOutput(current.logs);
+      }
+      if (log.error?.trim()) {
+        current.latestError = log.error.trim();
       }
     } else {
       map.set(log.sessionId, {
@@ -391,8 +472,14 @@ const sessionSummaries = computed<SessionSummary[]>(() => {
         requestCount: 1,
         failureCount: isFailedLog(log) ? 1 : 0,
         totalDuration: log.duration,
+        totalTokens: getEffectiveTotalTokens(log),
+        promptTokens: getEffectivePromptTokens(log),
+        completionTokens: getEffectiveCompletionTokens(log),
+        cacheReadInputTokens: log.cacheReadInputTokens ?? 0,
         logs: [log],
-        previewText: preview
+        previewText: preview,
+        fullOutput: buildSessionOutput([log]),
+        latestError: log.error?.trim() || null
       });
     }
   }
@@ -457,7 +544,22 @@ const selectedFailure = computed(() => {
 
   return failureSummaries.value.find((failure) => failure.key === selectedFailureKey.value) ?? failureSummaries.value[0];
 });
-const selectedSessionLog = computed(() => selectedSession.value?.logs[0] ?? null);
+const selectedSessionLog = computed(() => {
+  const session = selectedSession.value;
+  if (!session || !session.logs.length) {
+    return null;
+  }
+
+  return session.logs.find((log) => log.id === selectedSessionLogId.value) ?? session.logs[0];
+});
+const sessionOverlayLog = computed(() => {
+  const session = selectedSession.value;
+  if (!session || !session.logs.length || !sessionOverlayLogId.value) {
+    return null;
+  }
+
+  return session.logs.find((log) => log.id === sessionOverlayLogId.value) ?? null;
+});
 const selectedFailureLog = computed(() => selectedFailure.value?.logs[0] ?? null);
 
 let rafId = 0;
@@ -483,11 +585,12 @@ let panelMovePointerId: number | null = null;
 let panelResizePointerId: number | null = null;
 let panelMoveStart = { x: 0, y: 0, panelX: 0, panelY: 0 };
 let panelResizeStart = { x: 0, y: 0, width: 0, height: 0 };
+let gatewayMonitorTimer = 0;
 
 type TauriWindowApi = {
   close: () => Promise<void> | void;
   destroy: () => Promise<void> | void;
-  setIgnoreCursorEvents: (value: boolean) => Promise<void> | void;
+  setIgnoreCursorEvents: (value: boolean, options?: { forward?: boolean }) => Promise<void> | void;
 };
 
 type TauriNamespace = {
@@ -1012,12 +1115,20 @@ function handleResize() {
       return;
     }
 
+    const prefersWide = true;
+    const availableWidth = Math.max(320, bounds.width - 32);
+    const availableHeight = Math.max(320, bounds.height - 32);
+    const minWidth = Math.min(getPanelMinWidth(prefersWide), availableWidth);
+    const minHeight = Math.min(420, availableHeight);
+    const width = Math.min(Math.max(minWidth, panelPlacement.value.width), availableWidth);
+    const height = Math.min(Math.max(minHeight, panelPlacement.value.height), availableHeight);
+
     panelPlacement.value = {
       ...panelPlacement.value,
-      width: Math.min(panelPlacement.value.width, bounds.width - 32),
-      height: Math.min(panelPlacement.value.height, bounds.height - 32),
-      x: Math.min(Math.max(16, panelPlacement.value.x), Math.max(16, bounds.width - panelPlacement.value.width - 16)),
-      y: Math.min(Math.max(16, panelPlacement.value.y), Math.max(16, bounds.height - panelPlacement.value.height - 16))
+      width,
+      height,
+      x: Math.min(Math.max(16, panelPlacement.value.x), Math.max(16, bounds.width - width - 16)),
+      y: Math.min(Math.max(16, panelPlacement.value.y), Math.max(16, bounds.height - height - 16))
     };
   }
 }
@@ -1051,6 +1162,49 @@ async function syncLocalProxyServer() {
   }
 }
 
+async function refreshGatewayMonitor() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    gatewayMonitor.value = {
+      status: "unsupported",
+      checkedUrl: null,
+      detail: "当前运行环境不支持网关探测。",
+      latencyMs: null
+    };
+    return;
+  }
+
+  gatewayMonitor.value = {
+    ...gatewayMonitor.value,
+    status: "checking"
+  };
+
+  try {
+    const result = (await invoke("check_openclaw_gateway")) as Partial<GatewayMonitorState>;
+    gatewayMonitor.value = {
+      status:
+        result.status === "online" ||
+        result.status === "offline" ||
+        result.status === "unconfigured" ||
+        result.status === "unsupported" ||
+        result.status === "checking"
+          ? result.status
+          : "offline",
+      checkedUrl: typeof result.checkedUrl === "string" ? result.checkedUrl : null,
+      detail: typeof result.detail === "string" ? result.detail : null,
+      latencyMs: typeof result.latencyMs === "number" ? result.latencyMs : null
+    };
+  } catch (error) {
+    gatewayMonitor.value = {
+      status: "offline",
+      checkedUrl: null,
+      detail: error instanceof Error ? error.message : "网关状态检查失败。",
+      latencyMs: null
+    };
+  }
+}
+
 async function setWindowIgnoreCursorEvents(nextValue: boolean) {
   if (ignoreCursorEvents === nextValue) {
     return;
@@ -1063,7 +1217,7 @@ async function setWindowIgnoreCursorEvents(nextValue: boolean) {
     return;
   }
 
-  await currentWindow.setIgnoreCursorEvents(nextValue);
+  await currentWindow.setIgnoreCursorEvents(nextValue, nextValue ? { forward: true } : undefined);
   ignoreCursorEvents = nextValue;
 }
 
@@ -1095,6 +1249,12 @@ async function closeDesktopPet() {
 
 function handleEscape(event: KeyboardEvent) {
   if (event.key !== "Escape" || !isWindowActive.value) {
+    return;
+  }
+
+  if (sessionOverlayLog.value) {
+    sessionOverlayLogId.value = null;
+    event.preventDefault();
     return;
   }
 
@@ -1151,6 +1311,10 @@ function handleContextMenu(event: MouseEvent) {
 }
 
 function handleWindowPointerDown(event: PointerEvent) {
+  if (sessionOverlayLog.value && event.target instanceof HTMLElement && event.target.closest(".session-log-overlay")) {
+    return;
+  }
+
   if (
     !(event.target instanceof HTMLElement) ||
     (!event.target.closest(".desktop-context-menu") &&
@@ -1241,31 +1405,6 @@ function handlePanelResizeStart(event: PointerEvent) {
   consolePanelRef.value?.setPointerCapture(event.pointerId);
 }
 
-function createRequestPayload(messages: OpenClawMessage[], platform: PlatformConfig) {
-  if (platform.protocol === "anthropic") {
-    const system = messages
-      .filter((message) => message.role === "system")
-      .map((message) => message.content)
-      .join("\n\n");
-
-    return {
-      ...(platform.model.trim() ? { model: platform.model.trim() } : {}),
-      max_tokens: 1024,
-      ...(system ? { system } : {}),
-      messages: messages
-        .filter((message) => message.role !== "system")
-        .map((message) => ({
-          role: message.role === "assistant" ? "assistant" : "user",
-          content: message.content
-        }))
-    };
-  }
-
-  return {
-    messages
-  };
-}
-
 async function submitChat() {
   const text = chatInput.value.trim();
   if (!text || isSending.value) {
@@ -1288,7 +1427,14 @@ async function submitChat() {
   ];
   const effectivePlatform = platform?.enabled ? platform : null;
   const endpoint = "openclaw://default";
-  const requestBody = safeJson({ messages });
+  const protocol = "openai";
+  const payload = { messages };
+  const requestBody = safeJson(payload);
+  const requestHeaders = buildRequestHeaders(protocol);
+  const baseUrl = "openclaw://default";
+  const path = "";
+  const platformId = effectivePlatform?.id ?? "openclaw-default";
+  const platformName = effectivePlatform?.name ?? "OpenClaw 默认通道";
   const startedAt = performance.now();
 
   chatMessages.value.push({
@@ -1305,12 +1451,17 @@ async function submitChat() {
   });
   chatInput.value = "";
   isSending.value = true;
-  statusText.value = "消息已经发给 OpenClaw 默认通道，正在等待回复。";
+  statusText.value = `消息已经发给 ${platformName}，正在等待回复。`;
   startBubbleAnimation();
   scrollMessagesToBottom();
 
   try {
     const response = await sendOpenClawChat(messages);
+    const completedAt = performance.now();
+    const duration = Math.round(completedAt - startedAt);
+    const promptTokens = response.usage?.promptTokens ?? estimateTokenCount(requestBody);
+    const completionTokens = response.usage?.completionTokens ?? estimateTokenCount(response.text);
+    const totalTokens = response.usage?.totalTokens ?? promptTokens + completionTokens;
     const pendingMessage = chatMessages.value.find((message) => message.id === pendingId);
     if (pendingMessage) {
       pendingMessage.text = response.text;
@@ -1319,21 +1470,36 @@ async function submitChat() {
 
     requestLogs.value = appendRequestLog({
       sessionId: currentSessionId.value,
-      platformId: "openclaw-default",
-      platformName: "OpenClaw 默认通道",
-      protocol: "openai",
+      platformId,
+      platformName,
+      protocol,
       method: "POST",
       endpoint,
+      baseUrl,
+      path,
+      requestHeaders,
       requestBody,
       responseStatus: response.status ?? 200,
       responseBody: response.raw ?? response.text,
-      duration: Math.round(performance.now() - startedAt)
+      streamSummary: response.text,
+      duration,
+      firstTokenTime: duration,
+      tokensPerSecond:
+        completionTokens && completedAt - startedAt > 0
+          ? (completionTokens / (completedAt - startedAt)) * 1000
+          : undefined,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cacheReadInputTokens: response.usage?.cacheReadInputTokens
     });
 
     statusText.value = "OpenClaw 已回复，你可以继续追问。";
   } catch (error) {
+    const duration = Math.round(performance.now() - startedAt);
     const pendingMessage = chatMessages.value.find((message) => message.id === pendingId);
     const errorText = error instanceof Error ? error.message : "OpenClaw 调用失败，请稍后再试。";
+    const promptTokens = estimateTokenCount(requestBody);
     if (pendingMessage) {
       pendingMessage.text = errorText;
       pendingMessage.status = "error";
@@ -1341,16 +1507,22 @@ async function submitChat() {
 
     requestLogs.value = appendRequestLog({
       sessionId: currentSessionId.value,
-      platformId: "openclaw-default",
-      platformName: "OpenClaw 默认通道",
-      protocol: "openai",
+      platformId,
+      platformName,
+      protocol,
       method: "POST",
       endpoint,
+      baseUrl,
+      path,
+      requestHeaders,
       requestBody,
       responseStatus: 0,
       responseBody: "",
-      duration: Math.round(performance.now() - startedAt),
-      error: errorText
+      duration,
+      error: errorText,
+      promptTokens,
+      completionTokens: 0,
+      totalTokens: promptTokens
     });
 
     statusText.value = "这次没有连上目标平台，我已经把失败原因记到日志里了。";
@@ -1376,6 +1548,15 @@ async function handleQuitClick() {
   await closeDesktopPet();
 }
 
+function handleOpenSessionLog(log: RequestLog) {
+  selectedSessionLogId.value = log.id;
+  sessionOverlayLogId.value = log.id;
+}
+
+function closeSessionLogOverlay() {
+  sessionOverlayLogId.value = null;
+}
+
 function handleUsePreset(preset: Omit<PlatformDraft, "id">) {
   platformForm.value = createPlatformDraft({
     ...preset,
@@ -1387,19 +1568,19 @@ function handleUsePreset(preset: Omit<PlatformDraft, "id">) {
   openConsole("platforms");
 }
 
-function handlePresetSelect(kind: "featured" | "more") {
-  const source = kind === "featured" ? featuredPlatformPresets.value : morePlatformPresets.value;
-  const selectedName = kind === "featured" ? selectedFeaturedPreset.value : selectedMorePreset.value;
+function handlePresetSelect(kind: "global" | "china") {
+  const source = kind === "global" ? globalPlatformPresets.value : chinaPlatformPresets.value;
+  const selectedName = kind === "global" ? selectedGlobalPreset.value : selectedChinaPreset.value;
   const preset = source.find((item) => item.name === selectedName);
   if (!preset) {
     return;
   }
 
   handleUsePreset(preset);
-  if (kind === "featured") {
-    selectedFeaturedPreset.value = "";
+  if (kind === "global") {
+    selectedGlobalPreset.value = "";
   } else {
-    selectedMorePreset.value = "";
+    selectedChinaPreset.value = "";
   }
 }
 
@@ -1472,7 +1653,7 @@ function handleDeletePlatform(platformId: string) {
   }
 
   platforms.value = deletePlatform(platforms.value, platformId);
-  activePlatformId.value = loadActivePlatformId() ?? platforms.value.find((item) => item.enabled)?.id ?? platforms.value[0]?.id ?? null;
+  activePlatformId.value = loadActivePlatformId();
   statusText.value = `${target.name} 已删除。`;
 }
 
@@ -1490,9 +1671,8 @@ function handleTogglePlatform(platformId: string, enabled: boolean) {
   }
 
   if (!enabled && activePlatformId.value === platformId) {
-    const fallback = platforms.value.find((item) => item.enabled && item.id !== platformId) ?? null;
-    activePlatformId.value = fallback?.id ?? null;
-    setActivePlatform(fallback?.id ?? null);
+    activePlatformId.value = null;
+    setActivePlatform(null);
   }
 
   statusText.value = enabled ? `${current.name} 已启用。` : `${current.name} 已停用。`;
@@ -1654,12 +1834,18 @@ function handleWindowPanelPointerMove(event: PointerEvent) {
     const prefersWide = true;
     const nextWidth = panelResizeStart.width + event.clientX - panelResizeStart.x;
     const nextHeight = panelResizeStart.height + event.clientY - panelResizeStart.y;
+    const availableWidth = Math.max(320, bounds.width - 32);
+    const availableHeight = Math.max(320, bounds.height - 32);
+    const minWidth = Math.min(getPanelMinWidth(prefersWide), availableWidth);
+    const minHeight = Math.min(420, availableHeight);
+    const width = Math.min(Math.max(minWidth, nextWidth), availableWidth);
+    const height = Math.min(Math.max(minHeight, nextHeight), availableHeight);
     panelPlacement.value = {
       ...panelPlacement.value,
-      width: Math.min(Math.max(getPanelMinWidth(prefersWide), nextWidth), bounds.width - 32),
-      height: Math.min(Math.max(420, nextHeight), bounds.height - 32),
-      x: Math.min(Math.max(16, panelPlacement.value.x), Math.max(16, bounds.width - Math.min(Math.max(getPanelMinWidth(prefersWide), nextWidth), bounds.width - 32) - 16)),
-      y: Math.min(Math.max(16, panelPlacement.value.y), Math.max(16, bounds.height - Math.min(Math.max(420, nextHeight), bounds.height - 32) - 16))
+      width,
+      height,
+      x: Math.min(Math.max(16, panelPlacement.value.x), Math.max(16, bounds.width - width - 16)),
+      y: Math.min(Math.max(16, panelPlacement.value.y), Math.max(16, bounds.height - height - 16))
     };
   }
 }
@@ -1690,10 +1876,184 @@ function formatDuration(value: number) {
   return `${Math.max(0, Math.round(value))} ms`;
 }
 
+function formatLatencyStat(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "-";
+  }
+
+  if (value < 1000) {
+    return `${Math.round(value)}ms`;
+  }
+
+  return `${(value / 1000).toFixed(2)}s`;
+}
+
+function formatSpeed(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "-";
+  }
+
+  return `${value.toFixed(1)} tok/s`;
+}
+
+function getEffectivePromptTokens(log: RequestLog) {
+  return typeof log.promptTokens === "number" ? log.promptTokens : estimateTokenCount(log.requestBody);
+}
+
+function getEffectiveCompletionTokens(log: RequestLog) {
+  return typeof log.completionTokens === "number"
+    ? log.completionTokens
+    : estimateTokenCount(log.streamSummary || log.responseBody);
+}
+
+function getEffectiveTotalTokens(log: RequestLog) {
+  if (typeof log.totalTokens === "number") {
+    return log.totalTokens;
+  }
+
+  return getEffectivePromptTokens(log) + getEffectiveCompletionTokens(log);
+}
+
+function formatTokenPair(log: RequestLog) {
+  return `${getEffectivePromptTokens(log)}/${getEffectiveCompletionTokens(log)}`;
+}
+
+function formatCacheTokens(log: RequestLog) {
+  return typeof log.cacheReadInputTokens === "number" ? `${log.cacheReadInputTokens}` : "-";
+}
+
+function estimateTokenCount(value?: string) {
+  if (!value?.trim()) {
+    return 0;
+  }
+
+  return Math.max(1, Math.ceil(value.length * 0.25));
+}
+
+function getLogRequestUrl(log: RequestLog) {
+  if (log.baseUrl || log.path) {
+    return `${log.baseUrl ?? ""}${log.path ?? ""}` || log.endpoint;
+  }
+
+  return log.endpoint;
+}
+
+function getDefaultPreviewSection(log: RequestLog): PreviewSection {
+  if (log.streamSummary?.trim()) {
+    return "stream";
+  }
+  if (log.responseBody?.trim()) {
+    return "response";
+  }
+  if (log.requestBody?.trim()) {
+    return "request";
+  }
+  return "raw";
+}
+
+function formatJsonView(value?: string): JsonViewResult {
+  if (!value?.trim()) {
+    return { text: "", language: "text" };
+  }
+
+  try {
+    return {
+      text: JSON.stringify(JSON.parse(value), null, 2),
+      language: "json"
+    };
+  } catch {
+    return { text: value, language: "text" };
+  }
+}
+
+function buildPreviewSections(log: RequestLog) {
+  const sections: Array<{ id: PreviewSection; label: string; view: JsonViewResult }> = [];
+  if (log.requestBody?.trim()) {
+    sections.push({ id: "request", label: "请求体", view: formatJsonView(log.requestBody) });
+  }
+  if (log.responseBody?.trim()) {
+    sections.push({ id: "response", label: "响应体", view: formatJsonView(log.responseBody) });
+  }
+  if (log.streamSummary?.trim()) {
+    sections.push({ id: "stream", label: "流式汇总", view: formatJsonView(log.streamSummary) });
+  }
+
+  const rawText = [log.error, log.responseBody].filter(Boolean).join("\n\n").trim();
+  if (rawText) {
+    sections.push({ id: "raw", label: "原始响应", view: formatJsonView(rawText) });
+  }
+
+  if (!sections.length) {
+    sections.push({ id: "raw", label: "原始响应", view: { text: "暂无可预览内容", language: "text" } });
+  }
+
+  return sections;
+}
+
+function getActivePreviewSection(log: RequestLog, section: PreviewSection) {
+  const sections = buildPreviewSections(log);
+  return sections.find((item) => item.id === section) ?? sections[0];
+}
+
+function maskSensitiveHeaders(headers?: Record<string, string>) {
+  if (!headers) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => {
+      if (/authorization|x-api-key|api-key/i.test(key)) {
+        return [key, value.length > 10 ? `${value.slice(0, 6)}******` : "******"];
+      }
+
+      return [key, value];
+    })
+  );
+}
+
+function buildRequestHeaders(protocol: PlatformProtocol, apiKey?: string) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+
+  if (protocol === "anthropic") {
+    headers["anthropic-version"] = "2023-06-01";
+    if (apiKey?.trim()) {
+      headers["x-api-key"] = apiKey.trim();
+    }
+    return headers;
+  }
+
+  if (apiKey?.trim()) {
+    headers.Authorization = `Bearer ${apiKey.trim()}`;
+  }
+
+  return headers;
+}
+
 function summarizeLogText(log: RequestLog) {
   const source = log.error || log.responseBody || log.requestBody;
   const compact = source.replace(/\s+/g, " ").trim();
   return compact.length > 120 ? `${compact.slice(0, 120)}...` : compact || "暂无摘要";
+}
+
+function extractLogPrimaryOutput(log: RequestLog) {
+  const source = log.streamSummary?.trim() || log.responseBody?.trim() || log.error?.trim() || "";
+  if (!source) {
+    return "";
+  }
+
+  const compact = source.replace(/\s+/g, " ").trim();
+  return compact.length > 400 ? `${compact.slice(0, 400)}...` : compact;
+}
+
+function buildSessionOutput(logs: RequestLog[]) {
+  const output = logs
+    .map((log) => extractLogPrimaryOutput(log))
+    .filter(Boolean)
+    .join("\n\n");
+
+  return output || "当前会话没有提取到完整输出内容。";
 }
 
 function maskApiKey(value: string) {
@@ -1792,10 +2152,14 @@ watch(
     }
 
     const prefersWide = true;
+    const availableWidth = Math.max(320, bounds.width - 32);
+    const availableHeight = Math.max(320, bounds.height - 32);
+    const minWidth = Math.min(getPanelMinWidth(prefersWide), availableWidth);
+    const minHeight = Math.min(420, availableHeight);
     panelPlacement.value = {
       ...panelPlacement.value,
-      width: Math.min(Math.max(getPanelMinWidth(prefersWide), panelPlacement.value.width), bounds.width - 32),
-      height: Math.min(Math.max(420, panelPlacement.value.height || 0), bounds.height - 32)
+      width: Math.min(Math.max(minWidth, panelPlacement.value.width), availableWidth),
+      height: Math.min(Math.max(minHeight, panelPlacement.value.height || 0), availableHeight)
     };
   }
 );
@@ -1817,11 +2181,49 @@ watch(
 );
 
 watch(
+  selectedTimelineLog,
+  (log) => {
+    if (!log) {
+      return;
+    }
+
+    timelinePreviewSection.value = getDefaultPreviewSection(log);
+  },
+  { immediate: true }
+);
+
+watch(
+  selectedSession,
+  (session) => {
+    if (!session) {
+      sessionOverlayLogId.value = null;
+      return;
+    }
+
+    selectedSessionLogId.value = session.logs[0]?.id ?? null;
+    sessionOverlayLogId.value = null;
+  },
+  { immediate: true }
+);
+
+watch(
+  selectedSessionLog,
+  (log) => {
+    if (!log) {
+      return;
+    }
+
+    sessionPreviewSection.value = getDefaultPreviewSection(log);
+  },
+  { immediate: true }
+);
+
+watch(
   activePlatform,
   (platform) => {
-    if (platform && !activePlatformId.value) {
-      activePlatformId.value = platform.id;
-      setActivePlatform(platform.id);
+    if (activePlatformId.value && !platform) {
+      activePlatformId.value = null;
+      setActivePlatform(null);
     }
   },
   { immediate: true }
@@ -1832,10 +2234,16 @@ onMounted(() => {
   currentSessionId.value = loadStoredSessionId();
   proxyPort.value = loadProxyPort();
   platforms.value = loadPlatforms();
-  requestLogs.value = loadRequestLogs();
-  activePlatformId.value =
-    loadActivePlatformId() ?? platforms.value.find((platform) => platform.enabled)?.id ?? platforms.value[0]?.id ?? null;
+  requestLogs.value = loadRequestLogs(platforms.value);
+  const storedActivePlatformId = loadActivePlatformId();
+  const storedActivePlatform =
+    platforms.value.find((platform) => platform.id === storedActivePlatformId) ?? null;
+  const nextActivePlatformId =
+    storedActivePlatformId && !isImplicitSeededOpenAiPlatform(storedActivePlatform) ? storedActivePlatformId : null;
+  activePlatformId.value = nextActivePlatformId;
+  setActivePlatform(nextActivePlatformId);
   void syncLocalProxyServer();
+  void refreshGatewayMonitor();
   centerPet();
   animationStartedAt = performance.now();
   rafId = window.requestAnimationFrame(tick);
@@ -1844,6 +2252,9 @@ onMounted(() => {
   cursorPassThroughTimer = window.setInterval(() => {
     void syncCursorPassThrough();
   }, 120);
+  gatewayMonitorTimer = window.setInterval(() => {
+    void refreshGatewayMonitor();
+  }, 30000);
   windowPointerMoveListener = (event: PointerEvent) => {
     handlePointerMove(event);
   };
@@ -1874,6 +2285,7 @@ onBeforeUnmount(() => {
   window.cancelAnimationFrame(bubbleAnimationFrame);
   window.clearTimeout(idleTimer);
   window.clearInterval(cursorPassThroughTimer);
+  window.clearInterval(gatewayMonitorTimer);
   if (windowPointerMoveListener) {
     window.removeEventListener("pointermove", windowPointerMoveListener);
   }
@@ -1921,13 +2333,26 @@ onBeforeUnmount(() => {
       class="desktop-console-panel desktop-chat-window"
       :style="chatPanelStyle"
     >
-      <header class="desktop-console-panel__header desktop-console-panel__dragbar" @pointerdown="handleChatDragStart">
-        <div>
+      <header
+        class="desktop-console-panel__header desktop-console-panel__dragbar desktop-chat-window__header"
+        @pointerdown="handleChatDragStart"
+      >
+        <div class="desktop-chat-window__title">
           <p class="desktop-console-panel__eyebrow">OpenClaw</p>
-          <strong>对话窗口</strong>
+          <strong>对话</strong>
         </div>
         <div class="desktop-console-panel__actions">
-          <button class="desktop-console-panel__action" type="button" @click="toggleChatPanel(false)">收起</button>
+          <button
+            class="desktop-chat-window__icon-button desktop-chat-window__icon-button--ghost"
+            type="button"
+            aria-label="收起对话窗口"
+            title="收起"
+            @click="toggleChatPanel(false)"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M5 10h10" />
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -1941,7 +2366,6 @@ onBeforeUnmount(() => {
               :class="[`chat-bubble--${message.role}`, `chat-bubble--${message.status}`]"
               :style="getBubbleStyle(index)"
             >
-              <span class="chat-bubble__role">{{ message.role === "user" ? "你" : "OpenClaw" }}</span>
               <p>{{ message.text }}</p>
             </article>
           </div>
@@ -1955,12 +2379,16 @@ onBeforeUnmount(() => {
               @keydown="handleComposerKeydown"
             />
             <button
-              class="desktop-console-panel__action"
+              class="desktop-chat-window__icon-button"
               type="button"
+              aria-label="发送消息"
+              title="发送"
               :disabled="isSending || !chatInput.trim()"
               @click="submitChat"
             >
-              {{ isSending ? "发送中..." : "发送" }}
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M4 10.5 15.5 5l-3 10-2.5-3-3 2z" />
+              </svg>
             </button>
           </footer>
         </section>
@@ -1981,7 +2409,7 @@ onBeforeUnmount(() => {
           <strong>运营控制台</strong>
           <p class="desktop-console-panel__intro">
             当前默认平台
-            <span class="desktop-console-panel__platform">{{ activePlatform?.name ?? "未选择" }}</span>
+            <span class="desktop-console-panel__platform">{{ activePlatform?.name ?? openClawDefaultPlatformName }}</span>
             ，这里只负责平台管理和调用分析。
           </p>
         </div>
@@ -2026,7 +2454,7 @@ onBeforeUnmount(() => {
           <header class="section-block__header">
             <div>
               <h3>平台管理</h3>
-              <p>预置主流 AI 平台，支持快速接入、编辑配置和切换默认目标。</p>
+              <p>统一维护已接入的平台配置，并切换聊天窗口默认使用的目标。</p>
             </div>
             <div class="toolbar-actions">
               <button class="platform-tips-trigger" type="button" @click="showPlatformTips = !showPlatformTips">
@@ -2038,60 +2466,8 @@ onBeforeUnmount(() => {
 
           <div v-if="showPlatformTips" class="platform-inline-note">
             <p>OpenAI 兼容协议通常使用 `/v1/chat/completions`；Anthropic 原生协议通常使用 `/v1/messages`。</p>
-            <p>建议先从预置卡片生成草稿，再按你的模型名、密钥和网关路径做细调。</p>
+            <p>点击“新增平台”后，可直接从国外平台或国内平台预设中填充草稿，再微调模型名、密钥和路径。</p>
           </div>
-
-          <section class="platform-preset-section">
-            <div class="platform-preset-section__header">
-              <div>
-                <h4>热门平台</h4>
-                <p>从下拉列表选择最常用的平台并快速生成草稿。</p>
-              </div>
-            </div>
-
-            <div class="platform-select-row">
-              <select v-model="selectedFeaturedPreset" class="platform-select">
-                <option value="">选择热门平台</option>
-                <option v-for="preset in featuredPlatformPresets" :key="preset.name" :value="preset.name">
-                  {{ preset.name }} · {{ preset.protocol.toUpperCase() }}
-                </option>
-              </select>
-              <button
-                class="desktop-console-panel__action"
-                type="button"
-                :disabled="!selectedFeaturedPreset"
-                @click="handlePresetSelect('featured')"
-              >
-                添加
-              </button>
-            </div>
-          </section>
-
-          <section class="platform-preset-section">
-            <div class="platform-preset-section__header">
-              <div>
-                <h4>更多可选平台</h4>
-                <p>补齐常见国内外模型供应商，按需从列表中添加。</p>
-              </div>
-            </div>
-
-            <div class="platform-select-row">
-              <select v-model="selectedMorePreset" class="platform-select">
-                <option value="">选择更多平台</option>
-                <option v-for="preset in morePlatformPresets" :key="preset.name" :value="preset.name">
-                  {{ preset.name }} · {{ preset.protocol.toUpperCase() }}
-                </option>
-              </select>
-              <button
-                class="desktop-console-panel__action"
-                type="button"
-                :disabled="!selectedMorePreset"
-                @click="handlePresetSelect('more')"
-              >
-                添加
-              </button>
-            </div>
-          </section>
 
           <section class="platform-preset-section">
             <div class="platform-preset-section__header">
@@ -2139,21 +2515,6 @@ onBeforeUnmount(() => {
               </article>
             </div>
           </section>
-
-        </section>
-
-        <section class="section-block platform-editor-block">
-          <header class="section-block__header">
-            <div>
-              <h3>配置提示</h3>
-              <p>平台卡片已缩小展示；点击“新增平台”或“编辑”会弹出独立配置窗口。</p>
-            </div>
-          </header>
-
-          <div class="platform-help platform-help--compact">
-            <p>弹窗中的配置项已改成和 cc-look 一致的四项：平台名称、协议类型、API Base URL、路径前缀。</p>
-            <p>本地代理会优先使用你配置的路径前缀，例如 `/openai`、`/deepseek`。</p>
-          </div>
         </section>
       </div>
 
@@ -2200,23 +2561,77 @@ onBeforeUnmount(() => {
           <header class="section-block__header">
             <div>
               <h3>请求详情</h3>
-              <p>选中左侧条目后，可直接查看请求体和响应体。</p>
+              <p>选中左侧条目后，可直接查看状态卡片、请求头和完整内容分段。</p>
             </div>
           </header>
 
           <template v-if="selectedTimelineLog">
-            <div class="detail-meta">
-              <span>{{ selectedTimelineLog.platformName }}</span>
-              <span>{{ selectedTimelineLog.endpoint }}</span>
-              <span>{{ selectedTimelineLog.responseStatus || "未返回状态" }}</span>
+            <div class="detail-stat-grid">
+              <article class="detail-stat-card detail-stat-card--primary">
+                <span>状态码</span>
+                <strong>{{ selectedTimelineLog.responseStatus || "未返回" }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>耗时</span>
+                <strong>{{ formatLatencyStat(selectedTimelineLog.duration) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>TTFT</span>
+                <strong>{{ formatLatencyStat(selectedTimelineLog.firstTokenTime) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>输出速度</span>
+                <strong>{{ formatSpeed(selectedTimelineLog.tokensPerSecond) }}</strong>
+              </article>
             </div>
-            <div class="detail-code">
-              <h4>Request</h4>
-              <pre>{{ selectedTimelineLog.requestBody }}</pre>
+
+            <div class="detail-summary-card">
+              <div class="detail-summary-grid">
+                <div>
+                  <span>平台</span>
+                  <strong>{{ selectedTimelineLog.platformName }}</strong>
+                </div>
+                <div>
+                  <span>时间</span>
+                  <strong>{{ formatTime(selectedTimelineLog.createdAt) }}</strong>
+                </div>
+                <div>
+                  <span>输入/输出 Token</span>
+                  <strong>{{ formatTokenPair(selectedTimelineLog) }}</strong>
+                </div>
+                <div>
+                  <span>缓存读取 Token</span>
+                  <strong>{{ formatCacheTokens(selectedTimelineLog) }}</strong>
+                </div>
+              </div>
+              <div class="detail-endpoint">{{ getLogRequestUrl(selectedTimelineLog) }}</div>
             </div>
+
+            <div v-if="selectedTimelineLog.requestHeaders && Object.keys(selectedTimelineLog.requestHeaders).length > 0" class="detail-code">
+              <div class="detail-code__header">
+                <h4>请求头</h4>
+              </div>
+              <pre>{{ JSON.stringify(maskSensitiveHeaders(selectedTimelineLog.requestHeaders), null, 2) }}</pre>
+            </div>
+
+            <div class="detail-tab-row">
+              <button
+                v-for="section in buildPreviewSections(selectedTimelineLog)"
+                :key="section.id"
+                class="detail-tab"
+                :class="{ active: getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).id === section.id }"
+                type="button"
+                @click="timelinePreviewSection = section.id"
+              >
+                {{ section.label }}
+              </button>
+            </div>
+
             <div class="detail-code">
-              <h4>Response</h4>
-              <pre>{{ selectedTimelineLog.error || selectedTimelineLog.responseBody || "暂无响应体" }}</pre>
+              <div class="detail-code__header">
+                <h4>{{ getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).label }}</h4>
+              </div>
+              <pre>{{ getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).view.text }}</pre>
             </div>
           </template>
           <div v-else class="empty-state">暂无详情</div>
@@ -2257,24 +2672,171 @@ onBeforeUnmount(() => {
         <aside class="section-block detail-panel">
           <header class="section-block__header">
             <div>
-              <h3>会话摘要</h3>
-              <p>这里展示当前会话里的第一条关键记录，方便快速定位。</p>
+              <h3>会话详情</h3>
+              <p>先看会话统计，再继续查看会话内某一次请求的完整信息。</p>
             </div>
           </header>
 
           <template v-if="selectedSession && selectedSessionLog">
-            <div class="detail-meta">
-              <span>开始 {{ formatTime(selectedSession.startedAt) }}</span>
-              <span>最近 {{ formatTime(selectedSession.lastAt) }}</span>
-              <span>{{ selectedSession.platformName }}</span>
+            <div class="detail-stat-grid">
+              <article class="detail-stat-card detail-stat-card--primary">
+                <span>请求数</span>
+                <strong>{{ selectedSession.requestCount }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>失败数</span>
+                <strong>{{ selectedSession.failureCount }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>总耗时</span>
+                <strong>{{ formatLatencyStat(selectedSession.totalDuration) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>总 Token</span>
+                <strong>{{ selectedSession.totalTokens }}</strong>
+              </article>
             </div>
-            <div class="detail-code">
-              <h4>会话摘要</h4>
-              <pre>{{ selectedSession.previewText }}</pre>
+
+            <div class="detail-summary-card">
+              <div class="detail-summary-grid">
+                <div>
+                  <span>平台</span>
+                  <strong>{{ selectedSession.platformName }}</strong>
+                </div>
+                <div>
+                  <span>开始时间</span>
+                  <strong>{{ formatTime(selectedSession.startedAt) }}</strong>
+                </div>
+                <div>
+                  <span>最近时间</span>
+                  <strong>{{ formatTime(selectedSession.lastAt) }}</strong>
+                </div>
+                <div>
+                  <span>输入/输出 Token</span>
+                  <strong>{{ selectedSession.promptTokens }}/{{ selectedSession.completionTokens }}</strong>
+                </div>
+              </div>
+              <div class="detail-endpoint detail-endpoint--soft">{{ selectedSession.previewText }}</div>
             </div>
+
+            <div class="detail-code session-output-card">
+              <div class="detail-code__header">
+                <h4>会话输出</h4>
+              </div>
+              <pre>{{ selectedSession.fullOutput }}</pre>
+            </div>
+
+            <div v-if="selectedSession.latestError" class="detail-code detail-code--danger">
+              <div class="detail-code__header">
+                <h4>最近一次失败</h4>
+              </div>
+              <pre>{{ selectedSession.latestError }}</pre>
+            </div>
+
+            <div class="session-timeline-section">
+              <div class="section-block__header section-block__header--compact">
+                <div>
+                  <h3>会话时间线</h3>
+                  <p>按时间回看本次会话里的每一次请求，点击任意条目查看它的完整详情。</p>
+                </div>
+              </div>
+
+              <div class="mini-log-list">
+              <button
+                v-for="log in selectedSession.logs"
+                :key="log.id"
+                class="mini-log-card"
+                :class="{ active: selectedSessionLog?.id === log.id }"
+                type="button"
+                @click="handleOpenSessionLog(log)"
+              >
+                <div>
+                  <strong>{{ log.method }} {{ log.path || log.endpoint }}</strong>
+                  <span>{{ formatTime(log.createdAt) }}</span>
+                </div>
+                <p>{{ summarizeLogText(log) }}</p>
+                <small :data-status="isFailedLog(log) ? 'error' : 'success'">
+                  {{ log.responseStatus || "未返回" }} · {{ formatLatencyStat(log.duration) }} ·
+                  {{ sessionOverlayLog?.id === log.id ? "详情已打开" : "查看详情" }}
+                </small>
+              </button>
+            </div>
+            </div>
+
+            <div class="section-block__header section-block__header--compact">
+              <div>
+                <h3>当前请求详情</h3>
+                <p>正在查看 {{ selectedSessionLog.method }} {{ selectedSessionLog.path || selectedSessionLog.endpoint }}</p>
+              </div>
+            </div>
+
+            <div class="detail-stat-grid">
+              <article class="detail-stat-card detail-stat-card--primary">
+                <span>状态码</span>
+                <strong>{{ selectedSessionLog.responseStatus || "未返回" }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>耗时</span>
+                <strong>{{ formatLatencyStat(selectedSessionLog.duration) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>TTFT</span>
+                <strong>{{ formatLatencyStat(selectedSessionLog.firstTokenTime) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>输出速度</span>
+                <strong>{{ formatSpeed(selectedSessionLog.tokensPerSecond) }}</strong>
+              </article>
+            </div>
+
+            <div class="detail-summary-card">
+              <div class="detail-summary-grid">
+                <div>
+                  <span>平台</span>
+                  <strong>{{ selectedSessionLog.platformName }}</strong>
+                </div>
+                <div>
+                  <span>时间</span>
+                  <strong>{{ formatTime(selectedSessionLog.createdAt) }}</strong>
+                </div>
+                <div>
+                  <span>输入/输出 Token</span>
+                  <strong>{{ formatTokenPair(selectedSessionLog) }}</strong>
+                </div>
+                <div>
+                  <span>缓存读取 Token</span>
+                  <strong>{{ formatCacheTokens(selectedSessionLog) }}</strong>
+                </div>
+              </div>
+              <div class="detail-endpoint">{{ getLogRequestUrl(selectedSessionLog) }}</div>
+            </div>
+
+            <div v-if="selectedSessionLog.requestHeaders && Object.keys(selectedSessionLog.requestHeaders).length > 0" class="detail-code">
+              <div class="detail-code__header">
+                <h4>请求头</h4>
+              </div>
+              <pre>{{ JSON.stringify(maskSensitiveHeaders(selectedSessionLog.requestHeaders), null, 2) }}</pre>
+            </div>
+
+            <div class="detail-tab-row">
+              <button
+                v-for="section in buildPreviewSections(selectedSessionLog)"
+                :key="section.id"
+                class="detail-tab"
+                :class="{ active: getActivePreviewSection(selectedSessionLog, sessionPreviewSection).id === section.id }"
+                type="button"
+                @click="sessionPreviewSection = section.id"
+              >
+                {{ section.label }}
+              </button>
+            </div>
+
             <div class="detail-code">
-              <h4>关键记录</h4>
-              <pre>{{ selectedSessionLog.error || selectedSessionLog.responseBody || selectedSessionLog.requestBody }}</pre>
+              <div class="detail-code__header">
+                <h4>{{ getActivePreviewSection(selectedSessionLog, sessionPreviewSection).label }}</h4>
+                <span>{{ getLogRequestUrl(selectedSessionLog) }}</span>
+              </div>
+              <pre>{{ getActivePreviewSection(selectedSessionLog, sessionPreviewSection).view.text }}</pre>
             </div>
           </template>
           <div v-else class="empty-state">暂无会话详情</div>
@@ -2339,17 +2901,154 @@ onBeforeUnmount(() => {
       <div class="desktop-console-panel__resize-handle" @pointerdown="handlePanelResizeStart" />
     </section>
 
+    <div v-if="sessionOverlayLog" class="platform-modal-backdrop" @click.self="closeSessionLogOverlay">
+      <section class="platform-modal session-log-overlay">
+        <header class="platform-modal__header">
+          <div>
+            <strong>会话请求详情</strong>
+            <p>{{ sessionOverlayLog.platformName }} · {{ sessionOverlayLog.method }} {{ sessionOverlayLog.path || sessionOverlayLog.endpoint }}</p>
+          </div>
+          <button class="platform-modal__close" type="button" @click="closeSessionLogOverlay">×</button>
+        </header>
+
+        <div class="platform-modal__form">
+          <div class="detail-stat-grid">
+            <article class="detail-stat-card detail-stat-card--primary">
+              <span>状态码</span>
+              <strong>{{ sessionOverlayLog.responseStatus || "未返回" }}</strong>
+            </article>
+            <article class="detail-stat-card">
+              <span>耗时</span>
+              <strong>{{ formatLatencyStat(sessionOverlayLog.duration) }}</strong>
+            </article>
+            <article class="detail-stat-card">
+              <span>TTFT</span>
+              <strong>{{ formatLatencyStat(sessionOverlayLog.firstTokenTime) }}</strong>
+            </article>
+            <article class="detail-stat-card">
+              <span>输出速度</span>
+              <strong>{{ formatSpeed(sessionOverlayLog.tokensPerSecond) }}</strong>
+            </article>
+          </div>
+
+          <div class="detail-summary-card">
+            <div class="detail-summary-grid">
+              <div>
+                <span>平台</span>
+                <strong>{{ sessionOverlayLog.platformName }}</strong>
+              </div>
+              <div>
+                <span>时间</span>
+                <strong>{{ formatTime(sessionOverlayLog.createdAt) }}</strong>
+              </div>
+              <div>
+                <span>输入/输出 Token</span>
+                <strong>{{ formatTokenPair(sessionOverlayLog) }}</strong>
+              </div>
+              <div>
+                <span>缓存读取 Token</span>
+                <strong>{{ formatCacheTokens(sessionOverlayLog) }}</strong>
+              </div>
+            </div>
+            <div class="detail-endpoint">{{ getLogRequestUrl(sessionOverlayLog) }}</div>
+          </div>
+
+          <div v-if="sessionOverlayLog.requestHeaders && Object.keys(sessionOverlayLog.requestHeaders).length > 0" class="detail-code">
+            <div class="detail-code__header">
+              <h4>请求头</h4>
+            </div>
+            <pre>{{ JSON.stringify(maskSensitiveHeaders(sessionOverlayLog.requestHeaders), null, 2) }}</pre>
+          </div>
+
+          <div class="detail-tab-row">
+            <button
+              v-for="section in buildPreviewSections(sessionOverlayLog)"
+              :key="section.id"
+              class="detail-tab"
+              :class="{ active: getActivePreviewSection(sessionOverlayLog, sessionPreviewSection).id === section.id }"
+              type="button"
+              @click="sessionPreviewSection = section.id"
+            >
+              {{ section.label }}
+            </button>
+          </div>
+
+          <div class="detail-code">
+            <div class="detail-code__header">
+              <h4>{{ getActivePreviewSection(sessionOverlayLog, sessionPreviewSection).label }}</h4>
+              <span>{{ getLogRequestUrl(sessionOverlayLog) }}</span>
+            </div>
+            <pre>{{ getActivePreviewSection(sessionOverlayLog, sessionPreviewSection).view.text }}</pre>
+          </div>
+        </div>
+      </section>
+    </div>
+
     <div v-if="isPlatformModalOpen" class="platform-modal-backdrop" @click.self="handleCancelPlatformEdit">
       <section class="platform-modal">
         <header class="platform-modal__header">
           <div>
-            <strong>编辑平台</strong>
-            <p>填写基础协议和 URL 即可接入本地代理。</p>
+            <strong>{{ editingPlatformId ? "编辑平台" : "新增平台" }}</strong>
+            <p>可先从预设平台快速填充，再补全基础协议和 URL。</p>
           </div>
           <button class="platform-modal__close" type="button" @click="handleCancelPlatformEdit">×</button>
         </header>
 
         <form class="platform-modal__form" @submit.prevent="handleSavePlatform">
+          <section v-if="!editingPlatformId" class="platform-modal__preset-groups">
+            <section class="platform-preset-section">
+              <div class="platform-preset-section__header">
+                <div>
+                  <h4>国外平台</h4>
+                  <p>选择常见国际平台，快速生成接入草稿。</p>
+                </div>
+              </div>
+
+              <div class="platform-select-row">
+                <select v-model="selectedGlobalPreset" class="platform-select">
+                  <option value="">选择国外平台</option>
+                  <option v-for="preset in globalPlatformPresets" :key="preset.name" :value="preset.name">
+                    {{ preset.name }} · {{ preset.protocol.toUpperCase() }}
+                  </option>
+                </select>
+                <button
+                  class="desktop-console-panel__action"
+                  type="button"
+                  :disabled="!selectedGlobalPreset"
+                  @click="handlePresetSelect('global')"
+                >
+                  填充
+                </button>
+              </div>
+            </section>
+
+            <section class="platform-preset-section">
+              <div class="platform-preset-section__header">
+                <div>
+                  <h4>国内平台</h4>
+                  <p>选择国内常用模型服务商，按需填充默认配置。</p>
+                </div>
+              </div>
+
+              <div class="platform-select-row">
+                <select v-model="selectedChinaPreset" class="platform-select">
+                  <option value="">选择国内平台</option>
+                  <option v-for="preset in chinaPlatformPresets" :key="preset.name" :value="preset.name">
+                    {{ preset.name }} · {{ preset.protocol.toUpperCase() }}
+                  </option>
+                </select>
+                <button
+                  class="desktop-console-panel__action"
+                  type="button"
+                  :disabled="!selectedChinaPreset"
+                  @click="handlePresetSelect('china')"
+                >
+                  填充
+                </button>
+              </div>
+            </section>
+          </section>
+
           <div class="platform-modal__grid">
             <label>
               <span>平台名称</span>

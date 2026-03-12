@@ -9,6 +9,12 @@ export type OpenClawResponse = {
   text: string;
   status?: number;
   raw?: string;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    cacheReadInputTokens?: number;
+  };
 };
 
 export type OpenClawRequestOptions = {
@@ -24,6 +30,11 @@ type OpenAIChatCompletionResponse = {
       content?: string | Array<{ type?: string; text?: string }>;
     };
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 };
 
 type AnthropicMessageResponse = {
@@ -31,7 +42,59 @@ type AnthropicMessageResponse = {
     type?: string;
     text?: string;
   }>;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
 };
+
+function extractUsage(result: unknown) {
+  if (!result || typeof result !== "object" || !("usage" in result) || !result.usage || typeof result.usage !== "object") {
+    return undefined;
+  }
+
+  const usage = result.usage as Record<string, unknown>;
+  const promptTokens =
+    typeof usage.prompt_tokens === "number"
+      ? usage.prompt_tokens
+      : typeof usage.input_tokens === "number"
+        ? usage.input_tokens
+        : undefined;
+  const completionTokens =
+    typeof usage.completion_tokens === "number"
+      ? usage.completion_tokens
+      : typeof usage.output_tokens === "number"
+        ? usage.output_tokens
+        : undefined;
+  const totalTokens =
+    typeof usage.total_tokens === "number"
+      ? usage.total_tokens
+      : typeof promptTokens === "number" || typeof completionTokens === "number"
+        ? (promptTokens ?? 0) + (completionTokens ?? 0)
+        : undefined;
+  const cacheReadInputTokens =
+    typeof usage.cache_read_input_tokens === "number"
+      ? usage.cache_read_input_tokens
+      : typeof usage.cache_read_tokens === "number"
+        ? usage.cache_read_tokens
+        : undefined;
+
+  if (
+    typeof promptTokens !== "number" &&
+    typeof completionTokens !== "number" &&
+    typeof totalTokens !== "number" &&
+    typeof cacheReadInputTokens !== "number"
+  ) {
+    return undefined;
+  }
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    cacheReadInputTokens
+  };
+}
 
 type OpenClawWindowBridge = {
   chat?: (payload: { messages: OpenClawMessage[] }) => Promise<OpenClawResponse | string>;
@@ -73,8 +136,10 @@ function getRuntimeBridge() {
 }
 
 function normalizeResponse(result: unknown): OpenClawResponse {
+  const usage = extractUsage(result);
+
   if (typeof result === "string") {
-    return { text: result };
+    return { text: result, usage };
   }
 
   if (result && typeof result === "object") {
@@ -83,7 +148,7 @@ function normalizeResponse(result: unknown): OpenClawResponse {
       const content = firstChoice?.message?.content;
 
       if (typeof content === "string") {
-        return { text: content, raw: JSON.stringify(result, null, 2) };
+        return { text: content, raw: JSON.stringify(result, null, 2), usage };
       }
 
       if (Array.isArray(content)) {
@@ -93,7 +158,7 @@ function normalizeResponse(result: unknown): OpenClawResponse {
           .join("\n");
 
         if (text) {
-          return { text, raw: JSON.stringify(result, null, 2) };
+          return { text, raw: JSON.stringify(result, null, 2), usage };
         }
       }
     }
@@ -105,22 +170,23 @@ function normalizeResponse(result: unknown): OpenClawResponse {
         .join("\n");
 
       if (text) {
-        return { text, raw: JSON.stringify(result, null, 2) };
+        return { text, raw: JSON.stringify(result, null, 2), usage };
       }
     }
 
     if ("text" in result && typeof result.text === "string") {
-      return { text: result.text, raw: JSON.stringify(result, null, 2) };
+      return { text: result.text, raw: JSON.stringify(result, null, 2), usage };
     }
 
     if ("content" in result && typeof result.content === "string") {
-      return { text: result.content, raw: JSON.stringify(result, null, 2) };
+      return { text: result.content, raw: JSON.stringify(result, null, 2), usage };
     }
   }
 
   return {
     text: "OpenClaw 返回了无法识别的内容格式。",
-    raw: typeof result === "string" ? result : JSON.stringify(result ?? null, null, 2)
+    raw: typeof result === "string" ? result : JSON.stringify(result ?? null, null, 2),
+    usage
   };
 }
 

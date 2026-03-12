@@ -16,6 +16,7 @@ export type PlatformConfig = {
 
 export type PlatformPreset = {
   name: string;
+  region: "global" | "china";
   protocol: PlatformProtocol;
   baseUrl: string;
   pathPrefix: string;
@@ -36,11 +37,21 @@ export type RequestLog = {
   protocol: PlatformProtocol;
   method: string;
   endpoint: string;
+  baseUrl?: string;
+  path?: string;
+  requestHeaders?: Record<string, string>;
   requestBody: string;
   responseStatus: number;
   responseBody: string;
+  streamSummary?: string;
   duration: number;
+  firstTokenTime?: number;
+  tokensPerSecond?: number;
   error?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  cacheReadInputTokens?: number;
   createdAt: number;
 };
 
@@ -52,6 +63,7 @@ const maxLogCount = 180;
 const defaultPlatformPresets: PlatformPreset[] = [
   {
     name: "OpenAI",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://api.openai.com",
     pathPrefix: "/openai",
@@ -65,6 +77,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "Claude",
+    region: "global",
     protocol: "anthropic",
     baseUrl: "https://api.anthropic.com",
     pathPrefix: "/claude",
@@ -78,6 +91,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "Gemini",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     pathPrefix: "/gemini",
@@ -91,6 +105,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "DeepSeek",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://api.deepseek.com",
     pathPrefix: "/deepseek",
@@ -104,6 +119,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "OpenRouter",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://openrouter.ai/api",
     pathPrefix: "/openrouter",
@@ -117,6 +133,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "Groq",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://api.groq.com/openai",
     pathPrefix: "/groq",
@@ -130,6 +147,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "Mistral",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://api.mistral.ai",
     pathPrefix: "/mistral",
@@ -143,6 +161,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "xAI",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://api.x.ai",
     pathPrefix: "/xai",
@@ -156,6 +175,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "Perplexity",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://api.perplexity.ai",
     pathPrefix: "/perplexity",
@@ -169,6 +189,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "Fireworks",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://api.fireworks.ai/inference",
     pathPrefix: "/fireworks",
@@ -181,6 +202,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "Together AI",
+    region: "global",
     protocol: "openai",
     baseUrl: "https://api.together.xyz",
     pathPrefix: "/together",
@@ -193,6 +215,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "Kimi",
+    region: "china",
     protocol: "openai",
     baseUrl: "https://api.moonshot.ai",
     pathPrefix: "/kimi",
@@ -206,6 +229,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "智谱",
+    region: "china",
     protocol: "openai",
     baseUrl: "https://open.bigmodel.cn/api/paas",
     pathPrefix: "/zhipu",
@@ -218,6 +242,7 @@ const defaultPlatformPresets: PlatformPreset[] = [
   },
   {
     name: "阿里云百炼",
+    region: "china",
     protocol: "openai",
     baseUrl: "https://coding.dashscope.aliyuncs.com/coding",
     pathPrefix: "/coding",
@@ -320,11 +345,28 @@ function sanitizeLog(value: Partial<RequestLog> | null | undefined): RequestLog 
     protocol: value.protocol,
     method: value.method,
     endpoint: value.endpoint,
+    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : undefined,
+    path: typeof value.path === "string" ? value.path : undefined,
+    requestHeaders:
+      value.requestHeaders && typeof value.requestHeaders === "object"
+        ? Object.fromEntries(
+            Object.entries(value.requestHeaders)
+              .filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string")
+              .map(([key, headerValue]) => [key, headerValue])
+          )
+        : undefined,
     requestBody: value.requestBody,
     responseStatus: value.responseStatus,
     responseBody: value.responseBody,
+    streamSummary: typeof value.streamSummary === "string" ? value.streamSummary : undefined,
     duration: value.duration,
+    firstTokenTime: typeof value.firstTokenTime === "number" ? value.firstTokenTime : undefined,
+    tokensPerSecond: typeof value.tokensPerSecond === "number" ? value.tokensPerSecond : undefined,
     error: typeof value.error === "string" ? value.error : undefined,
+    promptTokens: typeof value.promptTokens === "number" ? value.promptTokens : undefined,
+    completionTokens: typeof value.completionTokens === "number" ? value.completionTokens : undefined,
+    totalTokens: typeof value.totalTokens === "number" ? value.totalTokens : undefined,
+    cacheReadInputTokens: typeof value.cacheReadInputTokens === "number" ? value.cacheReadInputTokens : undefined,
     createdAt: value.createdAt
   };
 }
@@ -401,6 +443,60 @@ function saveLogs(logs: RequestLog[]) {
   storage.setItem(requestLogsStorageKey, JSON.stringify(logs.slice(0, maxLogCount)));
 }
 
+function isDefaultOpenClawLog(log: Pick<RequestLog, "platformId" | "platformName">) {
+  return log.platformId === "openclaw-default" || log.platformName === "OpenClaw 默认通道";
+}
+
+function resolvePlatformForLog(log: RequestLog, platforms: PlatformConfig[]) {
+  const exactMatch = platforms.find((platform) => platform.id === log.platformId);
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const normalizedBaseUrl = typeof log.baseUrl === "string" ? normalizeBaseUrl(log.baseUrl) : "";
+  const normalizedPath = typeof log.path === "string" ? normalizeApiPath(log.path) : "";
+
+  return (
+    platforms.find(
+      (platform) =>
+        platform.protocol === log.protocol &&
+        normalizeBaseUrl(platform.baseUrl) === normalizedBaseUrl &&
+        normalizeApiPath(platform.apiPath) === normalizedPath
+    ) ?? null
+  );
+}
+
+function migrateLogPlatformMetadata(logs: RequestLog[], platforms: PlatformConfig[]) {
+  if (!platforms.length) {
+    return { logs, changed: false };
+  }
+
+  let changed = false;
+  const nextLogs = logs.map((log) => {
+    const matchedPlatform = resolvePlatformForLog(log, platforms);
+    if (!matchedPlatform) {
+      return log;
+    }
+
+    const shouldUpdateId = log.platformId !== matchedPlatform.id;
+    const shouldUpdateName = log.platformName !== matchedPlatform.name;
+    const shouldMigrateDefaultLabel = isDefaultOpenClawLog(log);
+
+    if (!shouldUpdateId && !shouldUpdateName && !shouldMigrateDefaultLabel) {
+      return log;
+    }
+
+    changed = true;
+    return {
+      ...log,
+      platformId: matchedPlatform.id,
+      platformName: matchedPlatform.name
+    };
+  });
+
+  return { logs: nextLogs, changed };
+}
+
 export function getPlatformPresets() {
   return defaultPlatformPresets.map((preset) => ({ ...preset }));
 }
@@ -441,17 +537,24 @@ export function loadActivePlatformId() {
   return typeof value === "string" && value ? value : null;
 }
 
-export function loadRequestLogs() {
+export function loadRequestLogs(platforms: PlatformConfig[] = []) {
   const storage = getStorage();
   if (!storage) {
     return [];
   }
 
   const parsed = safeParse<unknown[]>(storage.getItem(requestLogsStorageKey), []);
-  return parsed
+  const logs = parsed
     .map((item) => sanitizeLog(item as Partial<RequestLog>))
     .filter((item): item is RequestLog => item !== null)
     .sort((left, right) => right.createdAt - left.createdAt);
+
+  const migrated = migrateLogPlatformMetadata(logs, platforms);
+  if (migrated.changed) {
+    saveLogs(migrated.logs);
+  }
+
+  return migrated.logs;
 }
 
 export function seedDefaultPlatforms() {
@@ -510,8 +613,7 @@ export function deletePlatform(platforms: PlatformConfig[], platformId: string) 
 
   const activePlatformId = loadActivePlatformId();
   if (activePlatformId === platformId) {
-    const fallback = nextPlatforms.find((item) => item.enabled) ?? nextPlatforms[0] ?? null;
-    saveActivePlatformId(fallback?.id ?? null);
+    saveActivePlatformId(null);
   }
 
   return nextPlatforms;

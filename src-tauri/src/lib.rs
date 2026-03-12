@@ -20,30 +20,59 @@ struct OpenClawRequest {
     messages: Vec<OpenClawMessage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct OpenClawHttpResponse {
     text: Option<String>,
     content: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct OpenAiMessage {
     content: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct OpenAiChoice {
     message: Option<OpenAiMessage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct OpenAiUsage {
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    total_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct OpenAiChatResponse {
     choices: Option<Vec<OpenAiChoice>>,
+    usage: Option<OpenAiUsage>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct AnthropicUsage {
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
 struct OpenClawResponse {
     text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    raw: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayHealthResponse {
+    status: String,
+    checked_url: Option<String>,
+    detail: Option<String>,
+    latency_ms: Option<u128>,
 }
 
 #[derive(Debug, Serialize)]
@@ -68,16 +97,17 @@ struct AnthropicRequest {
     messages: Vec<AnthropicMessage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct AnthropicContentBlock {
     #[serde(rename = "type")]
     block_type: Option<String>,
     text: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct AnthropicResponse {
     content: Option<Vec<AnthropicContentBlock>>,
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -596,43 +626,63 @@ async fn openclaw_chat(
         return Err(format!("OpenClaw 返回错误状态 {status}: {body}"));
     }
 
-    let text = if request_protocol == "anthropic" {
+    let (text, raw, usage) = if request_protocol == "anthropic" {
         let payload = response
             .json::<AnthropicResponse>()
             .await
             .map_err(|error| format!("解析 Anthropic 响应失败: {error}"))?;
 
-        payload
+        let text = payload
             .content
+            .clone()
             .unwrap_or_default()
             .into_iter()
             .filter(|item| item.block_type.as_deref() == Some("text"))
             .filter_map(|item| item.text)
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        let raw = serde_json::to_string_pretty(&payload).ok();
+        let usage = payload
+            .usage
+            .as_ref()
+            .and_then(|value| serde_json::to_value(value).ok());
+
+        (text, raw, usage)
     } else if is_openai_compatible {
         let payload = response
             .json::<OpenAiChatResponse>()
             .await
             .map_err(|error| format!("解析 OpenClaw Gateway 响应失败: {error}"))?;
 
-        payload
+        let text = payload
             .choices
+            .clone()
             .and_then(|choices| choices.into_iter().next())
             .and_then(|choice| choice.message)
             .and_then(|message| message.content)
             .and_then(|content| extract_openai_content(&content))
-            .unwrap_or_else(|| "OpenClaw Gateway 返回了空内容。".to_string())
+            .unwrap_or_else(|| "OpenClaw Gateway 返回了空内容。".to_string());
+        let raw = serde_json::to_string_pretty(&payload).ok();
+        let usage = payload
+            .usage
+            .as_ref()
+            .and_then(|value| serde_json::to_value(value).ok());
+
+        (text, raw, usage)
     } else {
         let payload = response
             .json::<OpenClawHttpResponse>()
             .await
             .map_err(|error| format!("解析 OpenClaw 响应失败: {error}"))?;
 
-        payload
+        let text = payload
             .text
-            .or(payload.content)
-            .unwrap_or_else(|| "OpenClaw 返回了空内容。".to_string())
+            .clone()
+            .or(payload.content.clone())
+            .unwrap_or_else(|| "OpenClaw 返回了空内容。".to_string());
+        let raw = serde_json::to_string_pretty(&payload).ok();
+
+        (text, raw, None)
     };
 
     Ok(OpenClawResponse {
@@ -641,6 +691,74 @@ async fn openclaw_chat(
         } else {
             text
         },
+        raw,
+        usage,
+    })
+}
+
+#[tauri::command]
+async fn check_openclaw_gateway(endpoint: Option<String>) -> Result<GatewayHealthResponse, String> {
+    let endpoint = endpoint
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::env::var("OPENCLAW_API_URL").ok());
+
+    let Some(endpoint) = endpoint else {
+        return Ok(GatewayHealthResponse {
+            status: "unconfigured".to_string(),
+            checked_url: None,
+            detail: Some("未设置 OPENCLAW_API_URL。".to_string()),
+            latency_ms: None,
+        });
+    };
+
+    let endpoint = endpoint.trim().to_string();
+    let mut candidates = Vec::new();
+
+    if let Ok(mut url) = reqwest::Url::parse(&endpoint) {
+        url.set_path("/health");
+        url.set_query(None);
+        url.set_fragment(None);
+        candidates.push(url.to_string());
+    }
+    candidates.push(endpoint.clone());
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|error| format!("创建网关检查客户端失败: {error}"))?;
+
+    let mut last_error = None;
+
+    for candidate in candidates {
+        let started_at = std::time::Instant::now();
+        match client.get(&candidate).send().await {
+            Ok(response) => {
+                let latency_ms = started_at.elapsed().as_millis();
+                let status = response.status();
+                let detail = if status.is_success() {
+                    Some(format!("HTTP {status}"))
+                } else {
+                    Some(format!("HTTP {status}，服务可达"))
+                };
+
+                return Ok(GatewayHealthResponse {
+                    status: "online".to_string(),
+                    checked_url: Some(candidate),
+                    detail,
+                    latency_ms: Some(latency_ms),
+                });
+            }
+            Err(error) => {
+                last_error = Some(format!("{candidate}: {error}"));
+            }
+        }
+    }
+
+    Ok(GatewayHealthResponse {
+        status: "offline".to_string(),
+        checked_url: Some(endpoint),
+        detail: last_error,
+        latency_ms: None,
     })
 }
 
@@ -649,7 +767,7 @@ pub fn run() {
     load_openclaw_env();
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![quit_app, openclaw_chat, sync_local_proxy])
+        .invoke_handler(tauri::generate_handler![quit_app, openclaw_chat, sync_local_proxy, check_openclaw_gateway])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_always_on_top(true);
