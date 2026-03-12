@@ -1,0 +1,6 @@
+common_crop_box: (88, 48) - (935, 975)
+
+pet_frame_01.png <- Gemini_Generated_Image_d19ihkd19ihkd19i.png
+pet_frame_02.png <- Gemini_Generated_Image_d2ydvyd2ydvyd2yd.png
+pet_frame_03.png <- Gemini_Generated_Image_mhbm1lmhbm1lmhbm.png
+pet_frame_04.png <- Gemini_Generated_Image_oj3x31oj3x31oj3x.png

@@ -1,0 +1,28 @@
+{
+  "name": "keai-desktop-pet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ./node_modules/vite/bin/vite.js",
+    "build": "node ./node_modules/vue-tsc/bin/vue-tsc.js --noEmit && node ./node_modules/vite/bin/vite.js build && node ./node_modules/vite/bin/vite.js build --config vite.lib.config.ts",
+    "preview": "node ./node_modules/vite/bin/vite.js preview",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "gsap": "^3.12.7",
+    "pinia": "^3.0.1",
+    "pixi.js": "^8.9.1",
+    "remotion": "^4.0.434",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "^22.13.10",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.1",
+    "vue-tsc": "^2.2.8"
+  }
+}

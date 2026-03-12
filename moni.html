@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>小鹏 Nomi 趣玩表情</title>
+  <style>
+    :root {
+      --eye-offset-x: 0px;
+      --eye-offset-y: 0px;
+      --face-offset-x: 0px;
+      --face-offset-y: 0px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at top, #fefefe, #e7f0ff);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      overflow: hidden;
+      cursor: none; /* 增加一点未来感，可删 */
+    }
+
+    .cursor-dot {
+      position: fixed;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #222;
+      pointer-events: none;
+      mix-blend-mode: multiply;
+      transform: translate(-50%, -50%);
+      z-index: 10;
+    }
+
+    .nomi-wrapper {
+      position: relative;
+      width: 320px;
+      height: 320px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      perspective: 800px;
+    }
+
+    .nomi {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 20%, #ffffff 0, #fff7d3 18%, #ffcc7a 40%, #ffb451 70%, #f39a3c 100%);
+      box-shadow:
+        0 25px 60px rgba(0, 0, 0, 0.25),
+        inset 0 0 25px rgba(255, 255, 255, 0.8);
+      overflow: hidden;
+      transform-style: preserve-3d;
+      transition: transform 0.25s ease-out;
+    }
+
+    /* 外壳高光 */
+    .nomi::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background:
+        radial-gradient(circle at 18% 20%, rgba(255, 255, 255, 0.95) 0, rgba(255, 255, 255, 0.2) 28%, transparent 40%),
+        radial-gradient(circle at 75% 90%, rgba(255, 255, 255, 0.7) 0, transparent 45%);
+      mix-blend-mode: screen;
+      pointer-events: none;
+    }
+
+    .face {
+      position: absolute;
+      inset: 26% 16% 24%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      transform: translate(var(--face-offset-x), var(--face-offset-y));
+      transition: transform 0.15s ease-out;
+    }
+
+    .eyes {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 6%;
+    }
+
+    .eye {
+      position: relative;
+      width: 60px;
+      height: 40px;
+      border-radius: 999px;
+      background: #111;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .eye::before {
+      content: "";
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 25%, #fff 0, #eee 40%, #ccc 100%);
+      transform: translate(var(--eye-offset-x), var(--eye-offset-y));
+      transition: transform 0.08s ease-out;
+    }
+
+    /* 眼睛高光 */
+    .eye::after {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.7);
+      top: 18%;
+      left: 24%;
+      filter: blur(1px);
+    }
+
+    .cheeks {
+      position: absolute;
+      top: 54%;
+      left: 10%;
+      right: 10%;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+
+    .cheek {
+      width: 38px;
+      height: 28px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #ffd4d4 0, #ff9fb7 40%, transparent 80%);
+      opacity: 0.85;
+      transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+    }
+
+    .mouth {
+      position: relative;
+      width: 60%;
+      height: 60px;
+      margin-top: 8px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+
+    .mouth-line {
+      width: 70%;
+      height: 180%;
+      border-bottom-left-radius: 60% 100%;
+      border-bottom-right-radius: 60% 100%;
+      border: 5px solid transparent;
+      border-bottom-color: #a25400;
+      transform-origin: center top;
+      transform: translateY(-35%) scaleY(0.9);
+      transition: transform 0.2s ease-out, border-radius 0.2s ease-out;
+    }
+
+    .mouth-fill {
+      position: absolute;
+      inset: 48% 20% 0;
+      border-bottom-left-radius: 60% 100%;
+      border-bottom-right-radius: 60% 100%;
+      background: radial-gradient(circle at 50% 10%, #ffb29b 0, #ff6b6b 40%, #b63a3a 100%);
+      overflow: hidden;
+      opacity: 0;
+      transform-origin: center top;
+      transition: opacity 0.2s ease-out, transform 0.2s ease-out;
+    }
+
+    .mouth-fill::after {
+      content: "";
+      position: absolute;
+      width: 60%;
+      height: 45%;
+      background: radial-gradient(circle at 50% 0, #ffcfde 0, #ff9abf 60%, transparent 100%);
+      border-radius: 50%;
+      left: 20%;
+      bottom: -10%;
+      opacity: 0.9;
+    }
+
+    /* -------- 表情状态 -------- */
+    .nomi.happy .mouth-line {
+      transform: translateY(-35%) scaleY(0.9);
+      border-bottom-left-radius: 60% 100%;
+      border-bottom-right-radius: 60% 100%;
+    }
+
+    .nomi.happy .mouth-fill {
+      opacity: 0;
+      transform: scaleY(0.7);
+    }
+
+    .nomi.super-happy .mouth-line {
+      transform: translateY(-40%) scaleY(1.1);
+    }
+
+    .nomi.super-happy .mouth-fill {
+      opacity: 1;
+      transform: scaleY(1);
+    }
+
+    .nomi.surprised .mouth-line {
+      border-radius: 999px;
+      width: 26%;
+      height: 26px;
+      border-width: 5px;
+      transform: translateY(-4px);
+    }
+
+    .nomi.surprised .mouth-fill {
+      opacity: 0;
+    }
+
+    .nomi.sad .mouth-line {
+      transform: translateY(0) scaleY(-0.8);
+      border-bottom-left-radius: 70% 100%;
+      border-bottom-right-radius: 70% 100%;
+    }
+
+    .nomi.sad .cheek {
+      opacity: 0.5;
+      transform: translateY(6px);
+    }
+
+    .nomi.wink .eye.left::before {
+      width: 40px;
+      height: 4px;
+      border-radius: 999px;
+      background: linear-gradient(to right, #000 0, #222 50%, #000 100%);
+      transform: translate(0, 6px);
+    }
+
+    .nomi.wink .eye.left::after {
+      display: none;
+    }
+
+    .nomi.wink .mouth-line {
+      transform: translateY(-30%) rotate(-4deg) scale(0.9, 0.8);
+    }
+
+    .nomi.mischief .cheek {
+      transform: translateY(-2px) scale(1.1);
+    }
+
+    .nomi.mischief .mouth-line {
+      transform: translateY(-25%) rotate(4deg) scale(0.9, 0.7);
+    }
+
+    /* 元气星星眼（对应第二张图） */
+    .nomi.star-eyes .eye::before {
+      width: 32px;
+      height: 32px;
+      background:
+        radial-gradient(circle at 30% 25%, #fff 0, #fff 20%, #ffe7a8 40%, #ffcf4a 60%, #ff9b0a 100%);
+      box-shadow:
+        0 0 0 3px #000,
+        0 0 12px rgba(255, 215, 0, 0.9);
+      transform: translate(0, 0);
+    }
+
+    .nomi.star-eyes .eye::after {
+      opacity: 0;
+    }
+
+    .nomi.star-eyes .cheek {
+      transform: translateY(-4px) scale(1.15);
+      opacity: 1;
+    }
+
+    .nomi.star-eyes .mouth-line {
+      transform: translateY(-40%) scale(1.05);
+    }
+
+    .nomi.star-eyes .mouth-fill {
+      opacity: 1;
+      transform: scaleY(1.05);
+    }
+
+    /* 喜欢到冒爱心（结合第二张图的爱心） */
+    .nomi.in-love .cheek {
+      position: relative;
+      background: radial-gradient(circle at 30% 30%, #ffb7d5 0, #ff6b9a 35%, transparent 80%);
+      transform: translateY(-2px) scale(1.1);
+    }
+
+    .nomi.in-love .cheek::before,
+    .nomi.in-love .cheek::after {
+      content: "";
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      background: #ff6b9a;
+      border-radius: 8px 8px 0 8px;
+      transform-origin: center bottom;
+      top: -4px;
+      left: 50%;
+      transform: translateX(-50%) rotate(-45deg);
+      box-shadow: 0 0 10px rgba(255, 107, 154, 0.6);
+    }
+
+    .nomi.in-love .cheek::after {
+      left: 52%;
+    }
+
+    .nomi.in-love .eye::before {
+      width: 22px;
+      height: 22px;
+      background: radial-gradient(circle at 50% 30%, #fff 0, #ffe1eb 50%, #ff9bc1 100%);
+    }
+
+    .nomi.in-love .mouth-line {
+      transform: translateY(-30%) scale(0.95, 0.8);
+    }
+
+    .nomi.in-love .mouth-fill {
+      opacity: 1;
+      transform: scaleY(0.9);
+    }
+
+    /* 打 call 应援（对应第三张图，嘴巴更夸张） */
+    .nomi.cheer .mouth-line {
+      transform: translateY(-10%) scaleY(1.3);
+      width: 68%;
+    }
+
+    .nomi.cheer .mouth-fill {
+      opacity: 1;
+      transform: scaleY(1.15);
+    }
+
+    .nomi.cheer .cheek {
+      transform: translateY(-6px) scale(1.15);
+      opacity: 1;
+    }
+
+    .nomi.cheer .eye::before {
+      transform: translate(0, 4px);
+    }
+
+    /* 提示文本 */
+    .hint {
+      position: absolute;
+      bottom: -60px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 14px;
+      color: rgba(0, 0, 0, 0.6);
+      text-align: center;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .hint span {
+      font-weight: 600;
+      color: #ff7e2f;
+    }
+
+    @media (max-width: 480px) {
+      .nomi-wrapper {
+        width: 240px;
+        height: 240px;
+      }
+      .hint {
+        font-size: 12px;
+        bottom: -48px;
+      }
+      body {
+        cursor: default;
+      }
+      .cursor-dot {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="cursor-dot" id="cursorDot"></div>
+
+  <div class="nomi-wrapper">
+    <div class="nomi happy" id="nomi">
+      <div class="face">
+        <div class="eyes">
+          <div class="eye left"></div>
+          <div class="eye right"></div>
+        </div>
+        <div class="mouth">
+          <div class="mouth-line"></div>
+          <div class="mouth-fill"></div>
+        </div>
+      </div>
+      <div class="cheeks">
+        <div class="cheek left"></div>
+        <div class="cheek right"></div>
+      </div>
+    </div>
+    <div class="hint">
+      鼠标在屏幕里乱晃，<span>点击</span> 或按 <span>空格</span> 换表情 😄
+    </div>
+  </div>
+
+  <script>
+    const nomi = document.getElementById("nomi");
+    const cursorDot = document.getElementById("cursorDot");
+
+    const expressions = [
+      "happy",
+      "super-happy",
+      "surprised",
+      "wink",
+      "mischief",
+      "sad",
+      "star-eyes",
+      "in-love",
+      "cheer",
+    ];
+    let currentIndex = 0;
+
+    function setExpression(index) {
+      expressions.forEach(exp => nomi.classList.remove(exp));
+      nomi.classList.add(expressions[index]);
+    }
+
+    function nextExpression() {
+      currentIndex = (currentIndex + 1) % expressions.length;
+      setExpression(currentIndex);
+    }
+
+    setExpression(currentIndex);
+
+    function handlePointerMove(e) {
+      const x = e.clientX;
+      const y = e.clientY;
+
+      cursorDot.style.left = x + "px";
+      cursorDot.style.top = y + "px";
+
+      const rect = nomi.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+
+      const dx = x - cx;
+      const dy = y - cy;
+
+      const nx = Math.max(-1, Math.min(1, dx / (rect.width * 0.6)));
+      const ny = Math.max(-1, Math.min(1, dy / (rect.height * 0.6)));
+
+      const eyeRange = 7;
+      const faceRange = 6;
+
+      const eyeX = nx * eyeRange;
+      const eyeY = ny * eyeRange;
+      const faceX = nx * faceRange * -1;
+      const faceY = ny * faceRange * -0.2;
+
+      document.documentElement.style.setProperty("--eye-offset-x", eyeX.toFixed(1) + "px");
+      document.documentElement.style.setProperty("--eye-offset-y", eyeY.toFixed(1) + "px");
+      document.documentElement.style.setProperty("--face-offset-x", faceX.toFixed(1) + "px");
+      document.documentElement.style.setProperty("--face-offset-y", faceY.toFixed(1) + "px");
+
+      const tiltX = ny * -12;
+      const tiltY = nx * 10;
+      nomi.style.transform = `rotateX(${tiltX}deg) rotateY(${tiltY}deg)`;
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+
+    nomi.addEventListener("click", () => {
+      nextExpression();
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        nextExpression();
+      }
+    });
+
+    setExpression(0);
+  </script>
+</body>
+</html>
