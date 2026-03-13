@@ -55,9 +55,68 @@ export type RequestLog = {
   createdAt: number;
 };
 
+export type StaffStatus = "active" | "busy" | "offline";
+
+export type StaffMember = {
+  id: string;
+  name: string;
+  role: string;
+  workspace: string;
+  status: StaffStatus;
+  focus: string;
+  tags: string[];
+  memoryCount: number;
+  taskCount: number;
+  updatedAt: number;
+};
+
+export type MemoryStatus = "active" | "archived";
+
+export type MemoryRecord = {
+  id: string;
+  title: string;
+  owner: string;
+  scope: string;
+  summary: string;
+  relatedDocCount: number;
+  status: MemoryStatus;
+  updatedAt: number;
+};
+
+export type DocumentStatus = "draft" | "published";
+
+export type DocumentRecord = {
+  id: string;
+  title: string;
+  category: string;
+  owner: string;
+  source: string;
+  summary: string;
+  status: DocumentStatus;
+  updatedAt: number;
+};
+
+export type TaskStatus = "todo" | "in_progress" | "blocked" | "done";
+
+export type TaskRecord = {
+  id: string;
+  title: string;
+  project: string;
+  owner: string;
+  priority: "p0" | "p1" | "p2";
+  status: TaskStatus;
+  dueAt: number;
+  summary: string;
+  updatedAt: number;
+};
+
 const platformsStorageKey = "keai.desktop-pet.platforms";
 const activePlatformStorageKey = "keai.desktop-pet.active-platform";
 const requestLogsStorageKey = "keai.desktop-pet.request-logs";
+const staffStorageKey = "keai.desktop-pet.staff";
+const memoryStorageKey = "keai.desktop-pet.memory";
+const documentsStorageKey = "keai.desktop-pet.documents";
+const tasksStorageKey = "keai.desktop-pet.tasks";
 const maxLogCount = 180;
 
 const defaultPlatformPresets: PlatformPreset[] = [
@@ -371,6 +430,142 @@ function sanitizeLog(value: Partial<RequestLog> | null | undefined): RequestLog 
   };
 }
 
+function sanitizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
+}
+
+function sanitizeStaff(value: Partial<StaffMember> | null | undefined): StaffMember | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  if (
+    typeof value.id !== "string" ||
+    typeof value.name !== "string" ||
+    typeof value.role !== "string" ||
+    typeof value.workspace !== "string" ||
+    (value.status !== "active" && value.status !== "busy" && value.status !== "offline") ||
+    typeof value.focus !== "string" ||
+    typeof value.memoryCount !== "number" ||
+    typeof value.taskCount !== "number" ||
+    typeof value.updatedAt !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    name: value.name.trim() || "未命名员工",
+    role: value.role.trim() || "未分配角色",
+    workspace: value.workspace.trim() || "主工作区",
+    status: value.status,
+    focus: value.focus.trim() || "待补充当前职责",
+    tags: sanitizeStringArray(value.tags),
+    memoryCount: Math.max(0, Math.round(value.memoryCount)),
+    taskCount: Math.max(0, Math.round(value.taskCount)),
+    updatedAt: value.updatedAt
+  };
+}
+
+function sanitizeMemory(value: Partial<MemoryRecord> | null | undefined): MemoryRecord | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  if (
+    typeof value.id !== "string" ||
+    typeof value.title !== "string" ||
+    typeof value.owner !== "string" ||
+    typeof value.scope !== "string" ||
+    typeof value.summary !== "string" ||
+    typeof value.relatedDocCount !== "number" ||
+    (value.status !== "active" && value.status !== "archived") ||
+    typeof value.updatedAt !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    title: value.title.trim() || "未命名记忆",
+    owner: value.owner.trim() || "主控台",
+    scope: value.scope.trim() || "长期记忆",
+    summary: value.summary.trim() || "暂无摘要",
+    relatedDocCount: Math.max(0, Math.round(value.relatedDocCount)),
+    status: value.status,
+    updatedAt: value.updatedAt
+  };
+}
+
+function sanitizeDocument(value: Partial<DocumentRecord> | null | undefined): DocumentRecord | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  if (
+    typeof value.id !== "string" ||
+    typeof value.title !== "string" ||
+    typeof value.category !== "string" ||
+    typeof value.owner !== "string" ||
+    typeof value.source !== "string" ||
+    typeof value.summary !== "string" ||
+    (value.status !== "draft" && value.status !== "published") ||
+    typeof value.updatedAt !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    title: value.title.trim() || "未命名文档",
+    category: value.category.trim() || "运行文档",
+    owner: value.owner.trim() || "主控台",
+    source: value.source.trim() || "/docs",
+    summary: value.summary.trim() || "暂无摘要",
+    status: value.status,
+    updatedAt: value.updatedAt
+  };
+}
+
+function sanitizeTask(value: Partial<TaskRecord> | null | undefined): TaskRecord | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  if (
+    typeof value.id !== "string" ||
+    typeof value.title !== "string" ||
+    typeof value.project !== "string" ||
+    typeof value.owner !== "string" ||
+    (value.priority !== "p0" && value.priority !== "p1" && value.priority !== "p2") ||
+    (value.status !== "todo" &&
+      value.status !== "in_progress" &&
+      value.status !== "blocked" &&
+      value.status !== "done") ||
+    typeof value.dueAt !== "number" ||
+    typeof value.summary !== "string" ||
+    typeof value.updatedAt !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    title: value.title.trim() || "未命名任务",
+    project: value.project.trim() || "控制台升级",
+    owner: value.owner.trim() || "待分配",
+    priority: value.priority,
+    status: value.status,
+    dueAt: value.dueAt,
+    summary: value.summary.trim() || "暂无说明",
+    updatedAt: value.updatedAt
+  };
+}
+
 export function normalizeBaseUrl(value: string) {
   return value.trim().replace(/\/+$/, "");
 }
@@ -441,6 +636,42 @@ function saveLogs(logs: RequestLog[]) {
   }
 
   storage.setItem(requestLogsStorageKey, JSON.stringify(logs.slice(0, maxLogCount)));
+}
+
+function saveStaff(staff: StaffMember[]) {
+  const storage = getStorage();
+  if (!storage) {
+    return;
+  }
+
+  storage.setItem(staffStorageKey, JSON.stringify(staff));
+}
+
+function saveMemories(memories: MemoryRecord[]) {
+  const storage = getStorage();
+  if (!storage) {
+    return;
+  }
+
+  storage.setItem(memoryStorageKey, JSON.stringify(memories));
+}
+
+function saveDocuments(documents: DocumentRecord[]) {
+  const storage = getStorage();
+  if (!storage) {
+    return;
+  }
+
+  storage.setItem(documentsStorageKey, JSON.stringify(documents));
+}
+
+function saveTasks(tasks: TaskRecord[]) {
+  const storage = getStorage();
+  if (!storage) {
+    return;
+  }
+
+  storage.setItem(tasksStorageKey, JSON.stringify(tasks));
 }
 
 function isDefaultOpenClawLog(log: Pick<RequestLog, "platformId" | "platformName">) {
@@ -647,4 +878,348 @@ export function clearRequestLogs() {
 
 export function exportLogsAsJson(logs: RequestLog[]) {
   return JSON.stringify(logs, null, 2);
+}
+
+export function seedDefaultStaff() {
+  const now = Date.now();
+  return [
+    {
+      id: createId("staff"),
+      name: "Commander",
+      role: "平台负责人",
+      workspace: "control-center",
+      status: "active" as const,
+      focus: "负责平台策略、入口配置和版本推进",
+      tags: ["平台", "调度", "负责人"],
+      memoryCount: 8,
+      taskCount: 3,
+      updatedAt: now
+    },
+    {
+      id: createId("staff"),
+      name: "Archivist",
+      role: "记忆与文档管理员",
+      workspace: "memory/docs",
+      status: "busy" as const,
+      focus: "整理长期记忆、归档文档和维护知识索引",
+      tags: ["记忆", "文档", "归档"],
+      memoryCount: 21,
+      taskCount: 5,
+      updatedAt: now - 30 * 60 * 1000
+    },
+    {
+      id: createId("staff"),
+      name: "Operator",
+      role: "任务执行协调员",
+      workspace: "tasks",
+      status: "active" as const,
+      focus: "跟进执行状态、阻塞项和交付节奏",
+      tags: ["任务", "执行", "协作"],
+      memoryCount: 5,
+      taskCount: 7,
+      updatedAt: now - 12 * 60 * 1000
+    }
+  ];
+}
+
+export function seedDefaultMemories() {
+  const now = Date.now();
+  return [
+    {
+      id: createId("memory"),
+      title: "平台接入约定",
+      owner: "Commander",
+      scope: "长期记忆",
+      summary: "记录各模型平台的协议、路径前缀和默认模型命名约定。",
+      relatedDocCount: 4,
+      status: "active" as const,
+      updatedAt: now - 2 * 60 * 60 * 1000
+    },
+    {
+      id: createId("memory"),
+      title: "员工轮值备忘",
+      owner: "Archivist",
+      scope: "共享记忆",
+      summary: "沉淀员工职责分配、轮值安排和当前工作区归属。",
+      relatedDocCount: 2,
+      status: "active" as const,
+      updatedAt: now - 90 * 60 * 1000
+    },
+    {
+      id: createId("memory"),
+      title: "任务复盘摘录",
+      owner: "Operator",
+      scope: "当日记录",
+      summary: "记录最近一次任务推进中的阻塞原因与处理结果。",
+      relatedDocCount: 3,
+      status: "active" as const,
+      updatedAt: now - 20 * 60 * 1000
+    }
+  ];
+}
+
+export function seedDefaultDocuments() {
+  const now = Date.now();
+  return [
+    {
+      id: createId("doc"),
+      title: "平台管理接入说明",
+      category: "运行文档",
+      owner: "Commander",
+      source: "/docs/platforms.md",
+      summary: "维护新增模型平台时的地址、密钥和路由规范。",
+      status: "published" as const,
+      updatedAt: now - 4 * 60 * 60 * 1000
+    },
+    {
+      id: createId("doc"),
+      title: "员工协同手册",
+      category: "团队文档",
+      owner: "Archivist",
+      source: "/docs/staff-playbook.md",
+      summary: "描述员工角色、协同边界与交接方式。",
+      status: "published" as const,
+      updatedAt: now - 3 * 60 * 60 * 1000
+    },
+    {
+      id: createId("doc"),
+      title: "任务推进草案",
+      category: "任务文档",
+      owner: "Operator",
+      source: "/docs/task-runbook.md",
+      summary: "整理当前任务分解、风险和预期交付节点。",
+      status: "draft" as const,
+      updatedAt: now - 40 * 60 * 1000
+    }
+  ];
+}
+
+export function seedDefaultTasks() {
+  const now = Date.now();
+  return [
+    {
+      id: createId("task"),
+      title: "补齐平台管理入口",
+      project: "ClawPet Control Deck",
+      owner: "Commander",
+      priority: "p0" as const,
+      status: "in_progress" as const,
+      dueAt: now + 2 * 60 * 60 * 1000,
+      summary: "统一平台配置、默认入口和接入说明。",
+      updatedAt: now - 10 * 60 * 1000
+    },
+    {
+      id: createId("task"),
+      title: "建立员工管理面板",
+      project: "ClawPet Control Deck",
+      owner: "Archivist",
+      priority: "p1" as const,
+      status: "todo" as const,
+      dueAt: now + 8 * 60 * 60 * 1000,
+      summary: "可查看员工角色、职责焦点和当前状态。",
+      updatedAt: now - 50 * 60 * 1000
+    },
+    {
+      id: createId("task"),
+      title: "同步记忆与文档索引",
+      project: "ClawPet Control Deck",
+      owner: "Operator",
+      priority: "p1" as const,
+      status: "blocked" as const,
+      dueAt: now + 24 * 60 * 60 * 1000,
+      summary: "等待进一步接入真实文件源后完成联动。",
+      updatedAt: now - 80 * 60 * 1000
+    }
+  ];
+}
+
+export function loadStaff() {
+  const storage = getStorage();
+  if (!storage) {
+    return seedDefaultStaff();
+  }
+
+  const parsed = safeParse<unknown[]>(storage.getItem(staffStorageKey), []);
+  const staff = parsed
+    .map((item) => sanitizeStaff(item as Partial<StaffMember>))
+    .filter((item): item is StaffMember => item !== null)
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+
+  if (staff.length > 0) {
+    return staff;
+  }
+
+  const seeded = seedDefaultStaff();
+  saveStaff(seeded);
+  return seeded;
+}
+
+export function loadMemories() {
+  const storage = getStorage();
+  if (!storage) {
+    return seedDefaultMemories();
+  }
+
+  const parsed = safeParse<unknown[]>(storage.getItem(memoryStorageKey), []);
+  const memories = parsed
+    .map((item) => sanitizeMemory(item as Partial<MemoryRecord>))
+    .filter((item): item is MemoryRecord => item !== null)
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+
+  if (memories.length > 0) {
+    return memories;
+  }
+
+  const seeded = seedDefaultMemories();
+  saveMemories(seeded);
+  return seeded;
+}
+
+export function loadDocuments() {
+  const storage = getStorage();
+  if (!storage) {
+    return seedDefaultDocuments();
+  }
+
+  const parsed = safeParse<unknown[]>(storage.getItem(documentsStorageKey), []);
+  const documents = parsed
+    .map((item) => sanitizeDocument(item as Partial<DocumentRecord>))
+    .filter((item): item is DocumentRecord => item !== null)
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+
+  if (documents.length > 0) {
+    return documents;
+  }
+
+  const seeded = seedDefaultDocuments();
+  saveDocuments(seeded);
+  return seeded;
+}
+
+export function loadTasks() {
+  const storage = getStorage();
+  if (!storage) {
+    return seedDefaultTasks();
+  }
+
+  const parsed = safeParse<unknown[]>(storage.getItem(tasksStorageKey), []);
+  const tasks = parsed
+    .map((item) => sanitizeTask(item as Partial<TaskRecord>))
+    .filter((item): item is TaskRecord => item !== null)
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+
+  if (tasks.length > 0) {
+    return tasks;
+  }
+
+  const seeded = seedDefaultTasks();
+  saveTasks(seeded);
+  return seeded;
+}
+
+export function createStaffDraft() {
+  return {
+    id: createId("staff"),
+    name: "",
+    role: "",
+    workspace: "control-center",
+    status: "active" as StaffStatus,
+    focus: "",
+    tags: "",
+    memoryCount: 0,
+    taskCount: 0
+  };
+}
+
+export function createMemoryDraft() {
+  return {
+    id: createId("memory"),
+    title: "",
+    owner: "Commander",
+    scope: "长期记忆",
+    summary: "",
+    relatedDocCount: 0,
+    status: "active" as MemoryStatus
+  };
+}
+
+export function createDocumentDraft() {
+  return {
+    id: createId("doc"),
+    title: "",
+    category: "运行文档",
+    owner: "Commander",
+    source: "/docs/",
+    summary: "",
+    status: "draft" as DocumentStatus
+  };
+}
+
+export function createTaskDraft() {
+  return {
+    id: createId("task"),
+    title: "",
+    project: "ClawPet Control Deck",
+    owner: "Commander",
+    priority: "p1" as TaskRecord["priority"],
+    status: "todo" as TaskStatus,
+    dueAt: Date.now() + 4 * 60 * 60 * 1000,
+    summary: ""
+  };
+}
+
+export function upsertStaff(staff: StaffMember[], value: Omit<StaffMember, "updatedAt">) {
+  const nextItem: StaffMember = { ...value, tags: sanitizeStringArray(value.tags), updatedAt: Date.now() };
+  const current = staff.find((item) => item.id === value.id);
+  const next = current ? staff.map((item) => (item.id === value.id ? nextItem : item)) : [nextItem, ...staff];
+  saveStaff(next);
+  return next;
+}
+
+export function upsertMemory(memories: MemoryRecord[], value: Omit<MemoryRecord, "updatedAt">) {
+  const nextItem: MemoryRecord = { ...value, updatedAt: Date.now() };
+  const current = memories.find((item) => item.id === value.id);
+  const next = current ? memories.map((item) => (item.id === value.id ? nextItem : item)) : [nextItem, ...memories];
+  saveMemories(next);
+  return next;
+}
+
+export function upsertDocument(documents: DocumentRecord[], value: Omit<DocumentRecord, "updatedAt">) {
+  const nextItem: DocumentRecord = { ...value, updatedAt: Date.now() };
+  const current = documents.find((item) => item.id === value.id);
+  const next = current ? documents.map((item) => (item.id === value.id ? nextItem : item)) : [nextItem, ...documents];
+  saveDocuments(next);
+  return next;
+}
+
+export function upsertTask(tasks: TaskRecord[], value: Omit<TaskRecord, "updatedAt">) {
+  const nextItem: TaskRecord = { ...value, updatedAt: Date.now() };
+  const current = tasks.find((item) => item.id === value.id);
+  const next = current ? tasks.map((item) => (item.id === value.id ? nextItem : item)) : [nextItem, ...tasks];
+  saveTasks(next);
+  return next;
+}
+
+export function deleteStaff(staff: StaffMember[], id: string) {
+  const next = staff.filter((item) => item.id !== id);
+  saveStaff(next);
+  return next;
+}
+
+export function deleteMemory(memories: MemoryRecord[], id: string) {
+  const next = memories.filter((item) => item.id !== id);
+  saveMemories(next);
+  return next;
+}
+
+export function deleteDocument(documents: DocumentRecord[], id: string) {
+  const next = documents.filter((item) => item.id !== id);
+  saveDocuments(next);
+  return next;
+}
+
+export function deleteTask(tasks: TaskRecord[], id: string) {
+  const next = tasks.filter((item) => item.id !== id);
+  saveTasks(next);
+  return next;
 }

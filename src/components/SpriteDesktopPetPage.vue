@@ -66,7 +66,16 @@ type AnimationName =
   | "stomp_feet"
   | "stretch_yawn_and_rub_your_eyes"
   | "think";
-type ConsoleSection = "overview" | "platforms" | "timeline" | "sessions" | "failures";
+type ConsoleSection =
+  | "overview"
+  | "platforms"
+  | "staff"
+  | "memory"
+  | "docs"
+  | "tasks"
+  | "timeline"
+  | "sessions"
+  | "failures";
 
 type AnimationDefinition = {
   name: AnimationName;
@@ -94,6 +103,114 @@ type PlatformDraft = {
   apiKey: string;
   model: string;
   enabled: boolean;
+};
+
+type SourceFileSnapshotItem = {
+  id: string;
+  title: string;
+  summary: string;
+  content: string;
+  sourcePath: string;
+  relativePath: string;
+  facetKey: string;
+  facetLabel: string;
+  category: string;
+  updatedAtMs: number;
+};
+
+type SourceFileSnapshotResponse = {
+  sourcePath: string;
+  detail: string;
+  items: SourceFileSnapshotItem[];
+};
+
+type MemoryRecord = {
+  id: string;
+  title: string;
+  owner: string;
+  scope: string;
+  summary: string;
+  content: string;
+  sourcePath: string;
+  relativePath: string;
+  updatedAt: number;
+};
+
+type DocumentRecord = {
+  id: string;
+  title: string;
+  category: string;
+  owner: string;
+  source: string;
+  relativePath: string;
+  summary: string;
+  content: string;
+  updatedAt: number;
+};
+
+type MemoryDraft = {
+  id: string;
+  title: string;
+  owner: string;
+  scope: string;
+  summary: string;
+  content: string;
+  sourcePath: string;
+  relativePath: string;
+};
+
+type DocumentDraft = {
+  id: string;
+  title: string;
+  category: string;
+  owner: string;
+  source: string;
+  relativePath: string;
+  summary: string;
+  content: string;
+};
+
+type StaffMemberSnapshot = {
+  agentId: string;
+  displayName: string;
+  roleLabel: string;
+  model: string;
+  workspace: string;
+  toolsProfile: string;
+  statusLabel: string;
+  currentWorkLabel: string;
+  currentWork: string;
+  recentOutput: string;
+  scheduledLabel: string;
+};
+
+type StaffSnapshotResponse = {
+  missionStatement: string;
+  sourcePath: string;
+  detail: string;
+  members: StaffMemberSnapshot[];
+};
+
+type TaskSnapshotItem = {
+  id: string;
+  name: string;
+  agentId: string;
+  sessionTarget: string;
+  enabled: boolean;
+  deleteAfterRun: boolean;
+  statusKind: "scheduled" | "late" | "disabled" | string;
+  statusLabel: string;
+  summary: string;
+  nextRunAtMs: number | null;
+  createdAtMs: number | null;
+  updatedAtMs: number | null;
+  scheduleKind: string;
+};
+
+type TaskSnapshotResponse = {
+  sourcePath: string;
+  detail: string;
+  jobs: TaskSnapshotItem[];
 };
 
 type LocalProxyPlatformPayload = {
@@ -137,6 +254,32 @@ type GatewayMonitorState = {
   detail?: string | null;
   latencyMs?: number | null;
 };
+
+function createEmptyMemoryDraft(): MemoryDraft {
+  return {
+    id: "",
+    title: "",
+    owner: "",
+    scope: "",
+    summary: "",
+    content: "",
+    sourcePath: "",
+    relativePath: ""
+  };
+}
+
+function createEmptyDocumentDraft(): DocumentDraft {
+  return {
+    id: "",
+    title: "",
+    category: "",
+    owner: "",
+    source: "",
+    relativePath: "",
+    summary: "",
+    content: ""
+  };
+}
 
 type PreviewSection = "request" | "response" | "stream" | "raw";
 
@@ -268,6 +411,10 @@ const panelMotionValue = ref(0);
 const bubbleMotionValue = ref(1);
 const requestLogs = ref<RequestLog[]>([]);
 const platforms = ref<PlatformConfig[]>([]);
+const staffMembers = ref<StaffMemberSnapshot[]>([]);
+const memoryRecords = ref<MemoryRecord[]>([]);
+const documentRecords = ref<DocumentRecord[]>([]);
+const taskRecords = ref<TaskSnapshotItem[]>([]);
 const activePlatformId = ref<string | null>(null);
 const isEditingPlatform = ref(false);
 const editingPlatformId = ref<string | null>(null);
@@ -285,6 +432,23 @@ const sessionPreviewSection = ref<PreviewSection>("response");
 const sessionOverlayLogId = ref<string | null>(null);
 const currentSessionId = ref("");
 const proxyPort = ref(5005);
+const memoryDraft = ref<MemoryDraft>(createEmptyMemoryDraft());
+const documentDraft = ref<DocumentDraft>(createEmptyDocumentDraft());
+const selectedMemoryId = ref<string | null>(null);
+const selectedDocumentId = ref<string | null>(null);
+const memoryFilterText = ref("");
+const documentFilterText = ref("");
+const activeMemoryScope = ref("all");
+const activeDocumentCategory = ref("all");
+const staffSnapshotDetail = ref("正在读取员工配置...");
+const staffSnapshotSourcePath = ref("");
+const staffMissionStatement = ref("构建可持续自治的 AI 员工体系，持续完成高价值任务。");
+const taskSnapshotDetail = ref("正在读取任务调度...");
+const taskSnapshotSourcePath = ref("");
+const memorySnapshotDetail = ref("正在读取记忆文件...");
+const memorySnapshotSourcePath = ref("");
+const documentSnapshotDetail = ref("正在读取核心文档...");
+const documentSnapshotSourcePath = ref("");
 const gatewayMonitor = ref<GatewayMonitorState>({
   status: "checking",
   checkedUrl: null,
@@ -318,6 +482,10 @@ const openClawDefaultPlatformName = "OpenClaw 默认通道";
 const consoleSections: Array<{ id: ConsoleSection; label: string }> = [
   { id: "overview", label: "总览" },
   { id: "platforms", label: "平台管理" },
+  { id: "staff", label: "员工管理" },
+  { id: "memory", label: "记忆管理" },
+  { id: "docs", label: "文档管理" },
+  { id: "tasks", label: "任务管理" },
   { id: "timeline", label: "时间线" },
   { id: "sessions", label: "会话视图" },
   { id: "failures", label: "失败分析" }
@@ -457,26 +625,55 @@ const consolePanelStyle = computed(() => {
     panelPlacement.value.mode === "manual" && panelPlacement.value.height > 0
       ? Math.min(Math.max(minHeight, panelPlacement.value.height), availableHeight)
       : defaultHeight;
+  const margin = 16;
   const gap = 18;
-  const petLeft = petPosition.value.x;
-  const petRight = petPosition.value.x + viewportSize;
+  const petClearance = 18;
+  const petCenterX = petPosition.value.x + viewportSize / 2;
   const petCenterY = petPosition.value.y + viewportSize / 2;
-  const leftSpace = petLeft - gap - 16;
-  const rightSpace = viewportWidth - petRight - gap - 16;
-  const canPlaceLeft = leftSpace >= panelWidth;
-  const canPlaceRight = rightSpace >= panelWidth;
-  const centeredAutoLeft = Math.max(16, Math.round((viewportWidth - panelWidth) / 2));
-  const centeredAutoTop = Math.max(16, Math.round((viewportHeight - panelHeight) / 2));
-  const autoLeft = centeredAutoLeft;
-  const autoTop = centeredAutoTop;
+  const petSafeLeft = Math.max(0, petPosition.value.x - petClearance);
+  const petSafeTop = Math.max(0, petPosition.value.y - petClearance);
+  const petSafeRight = Math.min(viewportWidth, petPosition.value.x + viewportSize + petClearance);
+  const petSafeBottom = Math.min(viewportHeight, petPosition.value.y + viewportSize + petClearance);
+  const clampAutoPosition = (nextLeft: number, nextTop: number) => ({
+    left: Math.min(Math.max(margin, nextLeft), Math.max(margin, viewportWidth - panelWidth - margin)),
+    top: Math.min(Math.max(margin, nextTop), Math.max(margin, viewportHeight - panelHeight - margin))
+  });
+  const overlapsPet = (nextLeft: number, nextTop: number) =>
+    !(
+      nextLeft + panelWidth <= petSafeLeft ||
+      petSafeRight <= nextLeft ||
+      nextTop + panelHeight <= petSafeTop ||
+      petSafeBottom <= nextTop
+    );
+  const autoCandidates = [
+    clampAutoPosition(petPosition.value.x - panelWidth - gap, petCenterY - panelHeight / 2),
+    clampAutoPosition(petPosition.value.x + viewportSize + gap, petCenterY - panelHeight / 2),
+    clampAutoPosition(petCenterX - panelWidth / 2, petPosition.value.y - panelHeight - gap),
+    clampAutoPosition(petCenterX - panelWidth / 2, petPosition.value.y + viewportSize + gap),
+    clampAutoPosition(margin, margin),
+    clampAutoPosition(viewportWidth - panelWidth - margin, margin),
+    clampAutoPosition(margin, viewportHeight - panelHeight - margin),
+    clampAutoPosition(viewportWidth - panelWidth - margin, viewportHeight - panelHeight - margin)
+  ];
+  const bestAutoPosition =
+    autoCandidates.find((candidate) => !overlapsPet(candidate.left, candidate.top)) ??
+    autoCandidates.reduce((best, candidate) => {
+      const bestCenterX = best.left + panelWidth / 2;
+      const bestCenterY = best.top + panelHeight / 2;
+      const candidateCenterX = candidate.left + panelWidth / 2;
+      const candidateCenterY = candidate.top + panelHeight / 2;
+      const bestDistance = Math.hypot(bestCenterX - petCenterX, bestCenterY - petCenterY);
+      const candidateDistance = Math.hypot(candidateCenterX - petCenterX, candidateCenterY - petCenterY);
+      return candidateDistance > bestDistance ? candidate : best;
+    });
   const left =
     panelPlacement.value.mode === "manual"
       ? Math.min(Math.max(16, panelPlacement.value.x), Math.max(16, viewportWidth - panelWidth - 16))
-      : autoLeft;
+      : bestAutoPosition.left;
   const top =
     panelPlacement.value.mode === "manual"
       ? Math.min(Math.max(16, panelPlacement.value.y), Math.max(16, viewportHeight - panelHeight - 16))
-      : autoTop;
+      : bestAutoPosition.top;
   const progress = panelMotionValue.value;
   const originX = "center";
 
@@ -534,6 +731,198 @@ const metrics = computed(() => {
 });
 const timelineEntries = computed(() => requestLogs.value);
 const scheduledTaskCount = computed(() => 0);
+const memoryStatusSummary = computed(() => ({
+  main: memoryRecords.value.filter((item) => item.owner === "Main").length,
+  agents: memoryRecords.value.filter((item) => item.owner !== "Main").length
+}));
+const documentStatusSummary = computed(() => ({
+  main: documentRecords.value.filter((item) => item.owner === "Main").length,
+  agents: documentRecords.value.filter((item) => item.owner !== "Main").length
+}));
+const memoryScopeOptions = computed(() => [
+  { key: "all", label: "全部范围" },
+  ...Array.from(new Set(memoryRecords.value.map((item) => item.scope.trim()).filter(Boolean))).map((scope) => ({
+    key: scope,
+    label: scope
+  }))
+]);
+const documentCategoryOptions = computed(() => [
+  { key: "all", label: "全部分类" },
+  ...Array.from(new Set(documentRecords.value.map((item) => item.category.trim()).filter(Boolean))).map((category) => ({
+    key: category,
+    label: category
+  }))
+]);
+const filteredMemoryRecords = computed(() => {
+  const keyword = memoryFilterText.value.trim().toLowerCase();
+
+  return memoryRecords.value.filter((record) => {
+    const matchesScope = activeMemoryScope.value === "all" || record.scope === activeMemoryScope.value;
+    if (!matchesScope) {
+      return false;
+    }
+
+    if (!keyword) {
+      return true;
+    }
+
+    const haystack = [record.title, record.owner, record.scope, record.summary].join(" ").toLowerCase();
+    return haystack.includes(keyword);
+  });
+});
+const filteredDocumentRecords = computed(() => {
+  const keyword = documentFilterText.value.trim().toLowerCase();
+
+  return documentRecords.value.filter((record) => {
+    const matchesCategory = activeDocumentCategory.value === "all" || record.category === activeDocumentCategory.value;
+    if (!matchesCategory) {
+      return false;
+    }
+
+    if (!keyword) {
+      return true;
+    }
+
+    const haystack = [record.title, record.category, record.owner, record.source, record.summary].join(" ").toLowerCase();
+    return haystack.includes(keyword);
+  });
+});
+const selectedMemoryRecord = computed(
+  () => filteredMemoryRecords.value.find((record) => record.id === selectedMemoryId.value) ?? filteredMemoryRecords.value[0] ?? null
+);
+const selectedDocumentRecord = computed(
+  () =>
+    filteredDocumentRecords.value.find((record) => record.id === selectedDocumentId.value) ?? filteredDocumentRecords.value[0] ?? null
+);
+const memoryEditorModeLabel = computed(() =>
+  memoryDraft.value.sourcePath ? "保存记忆文件" : "选择记忆文件"
+);
+const documentEditorModeLabel = computed(() =>
+  documentDraft.value.source ? "保存文档文件" : "选择文档文件"
+);
+const taskStatusSummary = computed(() => ({
+  scheduled: taskRecords.value.filter((item) => item.statusKind === "scheduled").length,
+  late: taskRecords.value.filter((item) => item.statusKind === "late").length,
+  disabled: taskRecords.value.filter((item) => item.statusKind === "disabled").length
+}));
+const sortedTaskRecords = computed(() =>
+  [...taskRecords.value].sort((left, right) => {
+    const statusWeight = getTaskStatusWeight(left.statusKind) - getTaskStatusWeight(right.statusKind);
+    if (statusWeight !== 0) {
+      return statusWeight;
+    }
+
+    const leftRunAt = left.nextRunAtMs ?? Number.MAX_SAFE_INTEGER;
+    const rightRunAt = right.nextRunAtMs ?? Number.MAX_SAFE_INTEGER;
+    if (leftRunAt !== rightRunAt) {
+      return leftRunAt - rightRunAt;
+    }
+
+    return (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0);
+  })
+);
+const nextTaskDueRecord = computed(() => {
+  const pending = sortedTaskRecords.value.filter((item) => item.enabled && item.nextRunAtMs !== null);
+  return pending[0] ?? null;
+});
+const taskBoardMetrics = computed(() => {
+  const now = Date.now();
+  const pending = taskRecords.value.filter((item) => item.enabled);
+  const dueSoon = pending.filter((item) => item.nextRunAtMs !== null && item.nextRunAtMs <= now + 12 * 60 * 60 * 1000).length;
+  const overdue = pending.filter((item) => item.nextRunAtMs !== null && item.nextRunAtMs < now).length;
+  const unassigned = pending.filter((item) => item.agentId.trim() === "" || item.agentId === "未标注").length;
+
+  return {
+    total: taskRecords.value.length,
+    pending: pending.length,
+    dueSoon,
+    overdue,
+    unassigned
+  };
+});
+const taskScheduleCards = computed(() => {
+  const now = Date.now();
+  const todayEnd = new Date(now);
+  todayEnd.setHours(23, 59, 59, 999);
+  const todayEndTime = todayEnd.getTime();
+  const tomorrowEnd = new Date(todayEndTime);
+  tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
+
+  const today = sortedTaskRecords.value.filter((item) => item.enabled && item.nextRunAtMs !== null && item.nextRunAtMs <= todayEndTime);
+  const tomorrow = sortedTaskRecords.value.filter(
+    (item) => item.enabled && item.nextRunAtMs !== null && item.nextRunAtMs > todayEndTime && item.nextRunAtMs <= tomorrowEnd.getTime()
+  );
+  const disabled = sortedTaskRecords.value.filter((item) => item.statusKind === "disabled");
+
+  return [
+    {
+      id: "today",
+      title: "今日与下一批排程",
+      subtitle: today.length > 0 ? `${today.length} 条待执行` : "今天没有紧急排程",
+      tone: "today",
+      records: today
+    },
+    {
+      id: "tomorrow",
+      title: "下一批待推进",
+      subtitle: tomorrow.length > 0 ? `${tomorrow.length} 条排程` : "明日排程较轻",
+      tone: "upcoming",
+      records: tomorrow
+    },
+    {
+      id: "disabled",
+      title: "停用与暂停任务",
+      subtitle: disabled.length > 0 ? `${disabled.length} 条未启用` : "当前没有停用项",
+      tone: "blocked",
+      records: disabled
+    }
+  ];
+});
+const taskBoardGroups = computed(() => [
+  {
+    key: "late",
+    label: "待执行",
+    summary: "运行时间已到或已过，应该优先确认是否被执行。",
+    count: taskStatusSummary.value.late,
+    records: sortedTaskRecords.value.filter((item) => item.statusKind === "late")
+  },
+  {
+    key: "scheduled",
+    label: "调度器",
+    summary: "cron/jobs.json 中已启用的任务，将按下一次运行时间排序。",
+    count: taskStatusSummary.value.scheduled,
+    records: sortedTaskRecords.value.filter((item) => item.statusKind === "scheduled")
+  },
+  {
+    key: "disabled",
+    label: "已停用",
+    summary: "仍保留在 cron/jobs.json 中，但当前不会继续运行。",
+    count: taskStatusSummary.value.disabled,
+    records: sortedTaskRecords.value.filter((item) => item.statusKind === "disabled")
+  }
+]);
+const controlCenterCards = computed(() => [
+  {
+    label: "员工编制",
+    value: `${staffMembers.value.length}`,
+    description: staffSnapshotDetail.value
+  },
+  {
+    label: "记忆条目",
+    value: `${memoryRecords.value.length}`,
+    description: `Main ${memoryStatusSummary.value.main} 条，员工记忆 ${memoryStatusSummary.value.agents} 条。`
+  },
+  {
+    label: "文档资产",
+    value: `${documentRecords.value.length}`,
+    description: `Main 文档 ${documentStatusSummary.value.main} 份，员工文档 ${documentStatusSummary.value.agents} 份。`
+  },
+  {
+    label: "执行任务",
+    value: `${taskRecords.value.length}`,
+    description: `${taskStatusSummary.value.scheduled} 条已启用，${taskStatusSummary.value.late} 条待执行。`
+  }
+]);
 const sessionSummaries = computed<SessionSummary[]>(() => {
   const map = new Map<string, SessionSummary>();
 
@@ -686,6 +1075,16 @@ const overviewStatusCards = computed(() => [
     description: latestRequestLog.value
       ? `${latestRequestLog.value.platformName} · ${isFailedLog(latestRequestLog.value) ? "失败" : "成功"}`
       : "还没有请求日志，先发起一次对话试试。"
+  },
+  {
+    label: "当前员工",
+    value: `${staffMembers.value.length}`,
+    description: staffSnapshotDetail.value
+  },
+  {
+    label: "当前任务",
+    value: `${taskRecords.value.length}`,
+    description: `${taskStatusSummary.value.scheduled} 条已启用，${taskStatusSummary.value.late} 条待执行。`
   }
 ]);
 
@@ -1162,9 +1561,21 @@ function openConsole(section: ConsoleSection) {
   }
 
   if (section === "overview") {
-    statusText.value = "总览已展开，可以先快速查看当前运行状态和最近调用。";
+    statusText.value = "总览已展开，可以先快速查看平台、员工、记忆、文档和任务状态。";
   } else if (section === "platforms") {
     statusText.value = "平台管理已展开，可以新增、切换默认平台或修改接口配置。";
+  } else if (section === "staff") {
+    statusText.value = "员工管理已展开，适合维护角色、职责和轮值状态。";
+    void refreshStaffSnapshot();
+  } else if (section === "memory") {
+    statusText.value = "记忆管理已展开，当前读取的是 OpenClaw 真实记忆文件。";
+    void refreshMemorySnapshot();
+  } else if (section === "docs") {
+    statusText.value = "文档管理已展开，当前读取的是 OpenClaw 核心文档文件。";
+    void refreshDocumentSnapshot();
+  } else if (section === "tasks") {
+    statusText.value = "任务管理已展开，当前展示的是 openclaw cron 的真实调度快照。";
+    void refreshTaskSnapshot();
   } else if (section === "timeline") {
     statusText.value = "调用时间线已展开，最近请求会按时间倒序显示。";
   } else if (section === "sessions") {
@@ -1904,6 +2315,310 @@ function handleDeletePlatform(platformId: string) {
   statusText.value = `${target.name} 已删除。`;
 }
 
+function resetMemoryDraft() {
+  memoryDraft.value = createEmptyMemoryDraft();
+  selectedMemoryId.value = null;
+}
+
+function resetDocumentDraft() {
+  documentDraft.value = createEmptyDocumentDraft();
+  selectedDocumentId.value = null;
+}
+
+async function handleSaveMemory() {
+  if (!memoryDraft.value.sourcePath) {
+    window.alert("请先选择一份记忆文件。");
+    return;
+  }
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    window.alert("当前环境不支持保存记忆文件。");
+    return;
+  }
+  await invoke("save_source_file", {
+    kind: "memory",
+    sourcePath: memoryDraft.value.sourcePath,
+    content: memoryDraft.value.content
+  });
+  statusText.value = `记忆文件“${memoryDraft.value.title}”已保存。`;
+  await refreshMemorySnapshot();
+}
+
+async function handleSaveDocument() {
+  if (!documentDraft.value.source) {
+    window.alert("请先选择一份文档文件。");
+    return;
+  }
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    window.alert("当前环境不支持保存文档文件。");
+    return;
+  }
+  await invoke("save_source_file", {
+    kind: "document",
+    sourcePath: documentDraft.value.source,
+    content: documentDraft.value.content
+  });
+  statusText.value = `文档文件“${documentDraft.value.title}”已保存。`;
+  await refreshDocumentSnapshot();
+}
+
+function createMemoryDraftFromRecord(record: MemoryRecord): MemoryDraft {
+  return {
+    id: record.id,
+    title: record.title,
+    owner: record.owner,
+    scope: record.scope,
+    summary: record.summary,
+    content: record.content,
+    sourcePath: record.sourcePath,
+    relativePath: record.relativePath
+  };
+}
+
+function createDocumentDraftFromRecord(record: DocumentRecord): DocumentDraft {
+  return {
+    id: record.id,
+    title: record.title,
+    category: record.category,
+    owner: record.owner,
+    source: record.source,
+    summary: record.summary,
+    content: record.content,
+    relativePath: record.relativePath
+  };
+}
+
+function handleSelectMemory(record: MemoryRecord) {
+  selectedMemoryId.value = record.id;
+  memoryDraft.value = createMemoryDraftFromRecord(record);
+}
+
+function handleSelectDocument(record: DocumentRecord) {
+  selectedDocumentId.value = record.id;
+  documentDraft.value = createDocumentDraftFromRecord(record);
+}
+
+function getStaffInitials(name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return "AI";
+  }
+
+  return trimmed.slice(0, 2).toUpperCase();
+}
+
+function getStaffStatusClass(member: StaffMemberSnapshot) {
+  const normalized = member.statusLabel.trim();
+  if (normalized === "待命") return "is-active";
+  if (normalized === "工作中" || normalized === "处理中") return "is-busy";
+  if (normalized === "等待审核" || normalized === "需要支援" || normalized === "需要关注") return "is-offline";
+  return "is-offline";
+}
+
+function getStaffRoleLabel(member: StaffMemberSnapshot) {
+  return member.roleLabel || member.agentId;
+}
+
+async function refreshStaffSnapshot() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+
+  if (!invoke) {
+    staffMembers.value = [];
+    staffSnapshotSourcePath.value = "";
+    staffSnapshotDetail.value = "当前环境不支持读取 openclaw.json。";
+    return;
+  }
+
+  try {
+    const result = (await invoke("load_staff_snapshot")) as StaffSnapshotResponse;
+    staffMembers.value = Array.isArray(result.members) ? result.members : [];
+    staffSnapshotSourcePath.value = result.sourcePath ?? "";
+    staffSnapshotDetail.value = result.detail ?? "员工配置读取完成。";
+    staffMissionStatement.value = result.missionStatement || staffMissionStatement.value;
+  } catch (error) {
+    staffMembers.value = [];
+    staffSnapshotSourcePath.value = "";
+    staffSnapshotDetail.value = error instanceof Error ? error.message : "员工配置读取失败。";
+  }
+}
+
+function mapMemorySnapshotItem(item: SourceFileSnapshotItem): MemoryRecord {
+  return {
+    id: item.id,
+    title: item.title,
+    owner: item.facetLabel,
+    scope: item.category,
+    summary: item.summary,
+    content: item.content,
+    sourcePath: item.sourcePath,
+    relativePath: item.relativePath,
+    updatedAt: item.updatedAtMs
+  };
+}
+
+function mapDocumentSnapshotItem(item: SourceFileSnapshotItem): DocumentRecord {
+  return {
+    id: item.id,
+    title: item.title,
+    category: item.category,
+    owner: item.facetLabel,
+    source: item.sourcePath,
+    relativePath: item.relativePath,
+    summary: item.summary,
+    content: item.content,
+    updatedAt: item.updatedAtMs
+  };
+}
+
+async function refreshMemorySnapshot() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+
+  if (!invoke) {
+    memoryRecords.value = [];
+    memorySnapshotSourcePath.value = "";
+    memorySnapshotDetail.value = "当前环境不支持读取记忆文件。";
+    return;
+  }
+
+  try {
+    const result = (await invoke("load_memory_file_snapshot")) as SourceFileSnapshotResponse;
+    memoryRecords.value = Array.isArray(result.items) ? result.items.map(mapMemorySnapshotItem) : [];
+    memorySnapshotSourcePath.value = result.sourcePath ?? "";
+    memorySnapshotDetail.value = result.detail ?? "记忆文件读取完成。";
+  } catch (error) {
+    memoryRecords.value = [];
+    memorySnapshotSourcePath.value = "";
+    memorySnapshotDetail.value = error instanceof Error ? error.message : "记忆文件读取失败。";
+  }
+}
+
+async function refreshDocumentSnapshot() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+
+  if (!invoke) {
+    documentRecords.value = [];
+    documentSnapshotSourcePath.value = "";
+    documentSnapshotDetail.value = "当前环境不支持读取核心文档。";
+    return;
+  }
+
+  try {
+    const result = (await invoke("load_document_file_snapshot")) as SourceFileSnapshotResponse;
+    documentRecords.value = Array.isArray(result.items) ? result.items.map(mapDocumentSnapshotItem) : [];
+    documentSnapshotSourcePath.value = result.sourcePath ?? "";
+    documentSnapshotDetail.value = result.detail ?? "核心文档读取完成。";
+  } catch (error) {
+    documentRecords.value = [];
+    documentSnapshotSourcePath.value = "";
+    documentSnapshotDetail.value = error instanceof Error ? error.message : "核心文档读取失败。";
+  }
+}
+
+async function refreshTaskSnapshot() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+
+  if (!invoke) {
+    taskRecords.value = [];
+    taskSnapshotSourcePath.value = "";
+    taskSnapshotDetail.value = "当前环境不支持读取 cron/jobs.json。";
+    return;
+  }
+
+  try {
+    const result = (await invoke("load_task_snapshot")) as TaskSnapshotResponse;
+    taskRecords.value = Array.isArray(result.jobs) ? result.jobs : [];
+    taskSnapshotSourcePath.value = result.sourcePath ?? "";
+    taskSnapshotDetail.value = result.detail ?? "任务调度读取完成。";
+  } catch (error) {
+    taskRecords.value = [];
+    taskSnapshotSourcePath.value = "";
+    taskSnapshotDetail.value = error instanceof Error ? error.message : "任务调度读取失败。";
+  }
+}
+
+function formatMemoryStatus(_: string) {
+  return "源文件";
+}
+
+function formatDocumentStatus(_: string) {
+  return "源文件";
+}
+
+function formatTaskStatus(status: TaskSnapshotItem["statusKind"]) {
+  if (status === "late") return "待执行";
+  if (status === "scheduled") return "已启用";
+  if (status === "disabled") return "已停用";
+  return "未知";
+}
+
+function getTaskStatusWeight(status: TaskSnapshotItem["statusKind"]) {
+  if (status === "late") return 0;
+  if (status === "scheduled") return 1;
+  if (status === "disabled") return 2;
+  return 3;
+}
+
+function getTaskStatusClass(status: TaskSnapshotItem["statusKind"]) {
+  if (status === "late") return "is-blocked";
+  if (status === "scheduled") return "is-active";
+  if (status === "disabled") return "is-done";
+  return "is-queued";
+}
+
+function formatTaskScheduleKind(kind: string, deleteAfterRun: boolean) {
+  if (deleteAfterRun) {
+    return "单次";
+  }
+
+  if (kind === "cron") {
+    return "周期";
+  }
+
+  if (kind === "at") {
+    return "定时";
+  }
+
+  return "任务";
+}
+
+function getTaskScheduleClass(kind: string, deleteAfterRun: boolean) {
+  if (deleteAfterRun) {
+    return "is-focused";
+  }
+
+  if (kind === "cron") {
+    return "is-routine";
+  }
+
+  return "is-critical";
+}
+
+function formatDueAt(value: number) {
+  return `${formatTime(value)} 执行`;
+}
+
+function formatTaskRelativeDueAt(value: number) {
+  const delta = value - Date.now();
+  const hours = Math.round(Math.abs(delta) / (60 * 60 * 1000));
+
+  if (hours < 1) {
+    return delta >= 0 ? "1 小时内" : "已逾期";
+  }
+
+  if (delta >= 0) {
+    return `${hours} 小时后`;
+  }
+
+  return `逾期 ${hours} 小时`;
+}
+
 function handleTogglePlatform(platformId: string, enabled: boolean) {
   platforms.value = setPlatformEnabled(platforms.value, platformId, enabled);
   const current = platforms.value.find((item) => item.id === platformId);
@@ -2432,6 +3147,40 @@ watch(
 );
 
 watch(
+  filteredMemoryRecords,
+  (records) => {
+    if (!records.length) {
+      if (selectedMemoryId.value && !memoryRecords.value.some((record) => record.id === selectedMemoryId.value)) {
+        resetMemoryDraft();
+      }
+      return;
+    }
+
+    if (!records.some((record) => record.id === selectedMemoryId.value)) {
+      handleSelectMemory(records[0]);
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  filteredDocumentRecords,
+  (records) => {
+    if (!records.length) {
+      if (selectedDocumentId.value && !documentRecords.value.some((record) => record.id === selectedDocumentId.value)) {
+        resetDocumentDraft();
+      }
+      return;
+    }
+
+    if (!records.some((record) => record.id === selectedDocumentId.value)) {
+      handleSelectDocument(records[0]);
+    }
+  },
+  { immediate: true }
+);
+
+watch(
   selectedTimelineLog,
   (log) => {
     if (!log) {
@@ -2486,6 +3235,10 @@ onMounted(() => {
   proxyPort.value = loadProxyPort();
   platforms.value = loadPlatforms();
   requestLogs.value = loadRequestLogs(platforms.value);
+  void refreshStaffSnapshot();
+  void refreshMemorySnapshot();
+  void refreshDocumentSnapshot();
+  void refreshTaskSnapshot();
   const storedActivePlatformId = loadActivePlatformId();
   const storedActivePlatform =
     platforms.value.find((platform) => platform.id === storedActivePlatformId) ?? null;
@@ -2663,7 +3416,7 @@ onBeforeUnmount(() => {
           <p class="desktop-console-panel__intro">
             当前默认平台
             <span class="desktop-console-panel__platform">{{ activePlatform?.name ?? openClawDefaultPlatformName }}</span>
-            ，这里只负责平台管理和调用分析。
+            ，这里已经扩展为平台、员工、记忆、文档、任务统一管理台。
           </p>
         </div>
         <div class="desktop-console-panel__actions">
@@ -2715,15 +3468,32 @@ onBeforeUnmount(() => {
             </div>
           </header>
 
-          <div class="overview-status-grid">
-            <article v-for="card in overviewStatusCards" :key="card.label" class="overview-status-card">
-              <span>{{ card.label }}</span>
-              <strong>{{ card.value }}</strong>
-              <p>{{ card.description }}</p>
-            </article>
-          </div>
-        </section>
-      </div>
+            <div class="overview-status-grid">
+              <article v-for="card in overviewStatusCards" :key="card.label" class="overview-status-card">
+                <span>{{ card.label }}</span>
+                <strong>{{ card.value }}</strong>
+                <p>{{ card.description }}</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="section-block overview-section">
+            <header class="section-block__header">
+              <div>
+                <h3>控制中心模块</h3>
+                <p>参照 openclaw-control-center 的组织方式，把人员、记忆、文档和任务收拢到同一个控制台。</p>
+              </div>
+            </header>
+
+            <div class="overview-status-grid">
+              <article v-for="card in controlCenterCards" :key="card.label" class="overview-status-card">
+                <span>{{ card.label }}</span>
+                <strong>{{ card.value }}</strong>
+                <p>{{ card.description }}</p>
+              </article>
+            </div>
+          </section>
+        </div>
 
       <div v-else-if="activeSection === 'platforms'" class="desktop-console-body desktop-console-body--platforms">
         <section class="section-block section-block--platforms">
@@ -2789,6 +3559,424 @@ onBeforeUnmount(() => {
                   </button>
                 </div>
               </article>
+            </div>
+          </section>
+        </section>
+      </div>
+
+      <div v-else-if="activeSection === 'staff'" class="desktop-console-body desktop-console-body--overview staff-layout">
+        <section class="section-block overview-section">
+          <header class="section-block__header">
+            <div>
+              <h3>员工总览</h3>
+              <p>员工信息按 openclaw-control-center 的方式读取，展示角色定位、当前状态、正在处理什么、最近产出，以及是否在排班里。</p>
+            </div>
+          </header>
+
+          <div class="staff-brief-grid">
+            <article v-for="member in staffMembers" :key="member.agentId" class="staff-brief-card">
+              <div class="staff-brief-head">
+                <div class="staff-avatar">
+                  <div class="staff-avatar__badge" :class="getStaffStatusClass(member)">
+                    {{ getStaffInitials(member.displayName) }}
+                  </div>
+                </div>
+                <div class="staff-brief-identity">
+                  <strong>{{ member.displayName }}</strong>
+                  <p>{{ getStaffRoleLabel(member) }}</p>
+                  <div class="staff-chip-row">
+                    <span class="staff-status-chip" :class="getStaffStatusClass(member)">{{ member.statusLabel }}</span>
+                    <span class="staff-soft-chip">{{ member.scheduledLabel }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <dl class="staff-brief-list">
+                <div class="staff-brief-row">
+                  <dt>当前状态</dt>
+                  <dd>{{ member.statusLabel }}</dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>{{ member.currentWorkLabel }}</dt>
+                  <dd>{{ member.currentWork }}</dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>最近产出</dt>
+                  <dd>{{ member.recentOutput }}</dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>是否在排班里</dt>
+                  <dd>{{ member.scheduledLabel }}</dd>
+                </div>
+              </dl>
+            </article>
+            <div v-if="staffMembers.length === 0" class="empty-state">暂无可显示的员工信息。请确认 `~/.openclaw/openclaw.json` 或运行时员工目录存在。</div>
+          </div>
+        </section>
+
+        <section class="section-block compact-details">
+          <h4 class="compact-details__summary">员工共同目标</h4>
+          <div class="compact-details__body">
+            <div class="mission-banner">{{ staffMissionStatement }}</div>
+            <p class="compact-details__meta">来源：{{ staffSnapshotSourcePath || "未定位 openclaw.json" }}</p>
+            <p class="compact-details__meta">{{ staffSnapshotDetail }}</p>
+          </div>
+        </section>
+
+        <section class="section-block compact-details">
+          <h4 class="compact-details__summary">员工配置明细</h4>
+          <div class="compact-details__body">
+            <div class="staff-config-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>agentId</th>
+                    <th>工作目录</th>
+                    <th>职责焦点</th>
+                    <th>模型</th>
+                    <th>工具权限</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="member in staffMembers" :key="`${member.agentId}-detail`">
+                    <td>{{ member.displayName }}</td>
+                    <td>{{ member.agentId }}</td>
+                    <td>{{ member.workspace }}</td>
+                    <td>{{ getStaffRoleLabel(member) }}</td>
+                    <td>{{ member.model }}</td>
+                    <td>{{ member.toolsProfile }}</td>
+                    <td>{{ member.statusLabel }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div v-else-if="activeSection === 'memory'" class="desktop-console-body desktop-console-body--overview">
+        <section class="section-block overview-section">
+          <header class="section-block__header section-block__header--compact">
+            <div>
+              <h3>记忆管理</h3>
+              <p>参照 openclaw-control-center，直接浏览和编辑 OpenClaw 的真实记忆文件。</p>
+            </div>
+            <div class="toolbar-actions">
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshMemorySnapshot">
+                刷新
+              </button>
+            </div>
+          </header>
+
+          <div class="platform-inline-note">
+            <p>{{ memorySnapshotDetail }}</p>
+            <p>来源：{{ memorySnapshotSourcePath || "未定位记忆工作区" }}</p>
+          </div>
+
+          <div class="management-workbench management-workbench--dense">
+            <aside class="management-sidebar">
+              <div class="management-sidebar__tools">
+                <div class="management-sidebar__headline">
+                  <strong>记忆目录</strong>
+                  <small>{{ filteredMemoryRecords.length }} / {{ memoryRecords.length }} 条</small>
+                </div>
+                <div class="management-segmented">
+                  <button
+                    v-for="scope in memoryScopeOptions"
+                    :key="scope.key"
+                    class="management-segmented__item"
+                    :class="{ active: activeMemoryScope === scope.key }"
+                    type="button"
+                    @click="activeMemoryScope = scope.key"
+                  >
+                    {{ scope.label }}
+                  </button>
+                </div>
+                <input v-model="memoryFilterText" class="management-filter-input" type="text" placeholder="筛选标题、归属人、范围或摘要" />
+              </div>
+
+              <div class="management-nav">
+                <button
+                  v-for="record in filteredMemoryRecords"
+                  :key="record.id"
+                  class="management-nav-item"
+                  :class="{ active: selectedMemoryRecord?.id === record.id }"
+                  type="button"
+                  @click="handleSelectMemory(record)"
+                >
+                  <div class="management-nav-item__topline">
+                    <strong>{{ record.title }}</strong>
+                    <span>{{ formatMemoryStatus(record.scope) }}</span>
+                  </div>
+                  <p>{{ record.summary }}</p>
+                  <small>{{ record.scope }} · {{ record.relativePath }} · {{ formatTime(record.updatedAt) }}</small>
+                </button>
+                <div v-if="filteredMemoryRecords.length === 0" class="empty-state management-empty-state">当前筛选下没有记忆条目。</div>
+              </div>
+            </aside>
+
+            <section class="management-editor">
+              <div class="management-editor__header">
+                <div>
+                  <strong>{{ selectedMemoryId ? "编辑记忆文件" : "选择记忆文件" }}</strong>
+                  <p>
+                    {{
+                      selectedMemoryRecord
+                        ? `${selectedMemoryRecord.scope} · ${selectedMemoryRecord.relativePath} · 最近更新 ${formatTime(selectedMemoryRecord.updatedAt)}`
+                        : "这里只展示 Main 和记忆工作区里的真实源文件。"
+                    }}
+                  </p>
+                </div>
+                <div class="management-editor__actions">
+                  <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshMemorySnapshot">
+                    重新读取
+                  </button>
+                </div>
+              </div>
+
+              <form class="management-editor__form" @submit.prevent="handleSaveMemory">
+                <div class="management-form-grid management-form-grid--workbench">
+                  <input v-model="memoryDraft.title" type="text" placeholder="记忆标题" readonly />
+                  <input v-model="memoryDraft.owner" type="text" placeholder="归属员工" readonly />
+                  <input v-model="memoryDraft.scope" type="text" placeholder="记忆分类" readonly />
+                  <input v-model="memoryDraft.relativePath" type="text" placeholder="相对路径" readonly />
+                  <input v-model="memoryDraft.sourcePath" type="text" placeholder="源文件路径" readonly />
+                  <div class="management-editor__meta-card">
+                    <span>当前来源</span>
+                    <strong>{{ memoryEditorModeLabel }}</strong>
+                    <small>{{ selectedMemoryId ? "保存会直接写回 OpenClaw 真实记忆文件" : "先从左侧选择记忆文件" }}</small>
+                  </div>
+                  <textarea v-model="memoryDraft.content" rows="12" placeholder="记忆文件内容" />
+                </div>
+
+                <div class="management-form-grid__actions management-form-grid__actions--editor">
+                  <button class="desktop-console-panel__action" type="submit" :disabled="!memoryDraft.sourcePath">{{ memoryEditorModeLabel }}</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+      </div>
+
+      <div v-else-if="activeSection === 'docs'" class="desktop-console-body desktop-console-body--overview">
+        <section class="section-block overview-section">
+          <header class="section-block__header section-block__header--compact">
+            <div>
+              <h3>文档管理</h3>
+              <p>参照 openclaw-control-center，直接读取 Main 和各 agent 工作区里的核心文档。</p>
+            </div>
+            <div class="toolbar-actions">
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshDocumentSnapshot">
+                刷新
+              </button>
+            </div>
+          </header>
+
+          <div class="management-workbench management-workbench--dense">
+            <aside class="management-sidebar">
+              <div class="management-sidebar__tools">
+                <div class="management-sidebar__headline">
+                  <strong>文档目录</strong>
+                  <small>{{ filteredDocumentRecords.length }} / {{ documentRecords.length }} 份</small>
+                </div>
+                <div class="management-segmented">
+                  <button
+                    v-for="category in documentCategoryOptions"
+                    :key="category.key"
+                    class="management-segmented__item"
+                    :class="{ active: activeDocumentCategory === category.key }"
+                    type="button"
+                    @click="activeDocumentCategory = category.key"
+                  >
+                    {{ category.label }}
+                  </button>
+                </div>
+                <input
+                  v-model="documentFilterText"
+                  class="management-filter-input"
+                  type="text"
+                  placeholder="筛选标题、分类、负责人、来源或摘要"
+                />
+              </div>
+
+              <div class="management-nav">
+                <button
+                  v-for="record in filteredDocumentRecords"
+                  :key="record.id"
+                  class="management-nav-item management-nav-item--document"
+                  :class="{ active: selectedDocumentRecord?.id === record.id }"
+                  type="button"
+                  @click="handleSelectDocument(record)"
+                >
+                  <div class="management-nav-item__topline">
+                    <strong>{{ record.title }}</strong>
+                    <span class="management-nav-item__badge">{{ formatDocumentStatus(record.category) }}</span>
+                  </div>
+                  <p>{{ record.summary }}</p>
+                  <small>{{ record.category }} · {{ record.relativePath }} · {{ formatTime(record.updatedAt) }}</small>
+                </button>
+                <div v-if="filteredDocumentRecords.length === 0" class="empty-state management-empty-state">当前筛选下没有文档。</div>
+              </div>
+            </aside>
+
+            <section class="management-editor">
+              <div class="management-editor__header">
+                <div>
+                  <strong>{{ selectedDocumentId ? "编辑核心文档" : "选择核心文档" }}</strong>
+                  <p>
+                    {{
+                      selectedDocumentRecord
+                        ? `${selectedDocumentRecord.category} · ${selectedDocumentRecord.relativePath} · 最近更新 ${formatTime(selectedDocumentRecord.updatedAt)}`
+                        : "这里只展示 Main 和各 agent 工作区的核心文档文件。"
+                    }}
+                  </p>
+                </div>
+                <div class="management-editor__actions">
+                  <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshDocumentSnapshot">
+                    重新读取
+                  </button>
+                </div>
+              </div>
+
+              <form class="management-editor__form" @submit.prevent="handleSaveDocument">
+                <div class="management-form-grid management-form-grid--workbench">
+                  <input v-model="documentDraft.title" type="text" placeholder="文档标题" readonly />
+                  <input v-model="documentDraft.category" type="text" placeholder="文档分类" readonly />
+                  <input v-model="documentDraft.owner" type="text" placeholder="负责人" readonly />
+                  <input v-model="documentDraft.relativePath" type="text" placeholder="相对路径" readonly />
+                  <input v-model="documentDraft.source" type="text" placeholder="来源路径" readonly />
+                  <div class="management-editor__meta-card">
+                    <span>当前来源</span>
+                    <strong>{{ documentEditorModeLabel }}</strong>
+                    <small>{{ selectedDocumentId ? "保存会直接写回 OpenClaw 真实文档文件" : "先从左侧选择文档文件" }}</small>
+                  </div>
+                  <textarea v-model="documentDraft.content" rows="12" placeholder="文档内容" />
+                </div>
+
+                <div class="management-form-grid__actions management-form-grid__actions--editor">
+                  <button class="desktop-console-panel__action" type="submit" :disabled="!documentDraft.source">{{ documentEditorModeLabel }}</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+      </div>
+
+      <div v-else-if="activeSection === 'tasks'" class="desktop-console-body desktop-console-body--overview">
+        <section class="tasks-dashboard">
+          <section class="section-block overview-section tasks-hero">
+            <header class="section-block__header tasks-hero__header">
+              <div>
+                <h3>今日与下一批排程</h3>
+                <p>直接读取 openclaw 的 `cron/jobs.json`，把真实调度任务按运行时间和启用状态集中展示。</p>
+              </div>
+              <div class="tasks-hero__badge">
+                <span>下一截止</span>
+                <strong>{{ nextTaskDueRecord?.nextRunAtMs ? formatTaskRelativeDueAt(nextTaskDueRecord.nextRunAtMs) : "暂无排程" }}</strong>
+              </div>
+            </header>
+
+            <div class="tasks-kpi-grid">
+              <article class="tasks-kpi-card tasks-kpi-card--primary">
+                <span>任务总数</span>
+                <strong>{{ taskBoardMetrics.total }}</strong>
+                <small>当前看板累计条目</small>
+              </article>
+              <article class="tasks-kpi-card">
+                <span>已启用</span>
+                <strong>{{ taskBoardMetrics.pending }}</strong>
+                <small>将在 cron 中继续运行</small>
+              </article>
+              <article class="tasks-kpi-card">
+                <span>12 小时内</span>
+                <strong>{{ taskBoardMetrics.dueSoon }}</strong>
+                <small>即将到期</small>
+              </article>
+              <article class="tasks-kpi-card">
+                <span>未标注代理</span>
+                <strong>{{ taskBoardMetrics.unassigned }}</strong>
+                <small>agentId 待确认</small>
+              </article>
+            </div>
+
+            <div class="tasks-schedule-grid">
+              <article v-for="group in taskScheduleCards" :key="group.id" class="tasks-schedule-card" :class="`tasks-schedule-card--${group.tone}`">
+                <div class="tasks-schedule-card__header">
+                  <div>
+                    <strong>{{ group.title }}</strong>
+                    <p>{{ group.subtitle }}</p>
+                  </div>
+                  <span>{{ group.records.length }} 条</span>
+                </div>
+
+                <div v-if="group.records.length" class="tasks-schedule-list">
+                  <article v-for="record in group.records.slice(0, 3)" :key="record.id" class="tasks-schedule-item">
+                    <div class="tasks-schedule-item__topline">
+                      <strong>{{ record.name }}</strong>
+                      <span class="task-status-pill" :class="getTaskStatusClass(record.statusKind)">{{ formatTaskStatus(record.statusKind) }}</span>
+                    </div>
+                    <p>{{ record.summary }}</p>
+                    <div class="tasks-schedule-item__meta">
+                      <span>Agent {{ record.agentId }}</span>
+                      <span>Target {{ record.sessionTarget }}</span>
+                      <span>{{ record.nextRunAtMs ? formatDueAt(record.nextRunAtMs) : "未提供下次执行时间" }}</span>
+                    </div>
+                  </article>
+                </div>
+                <div v-else class="empty-state">当前分组没有任务</div>
+              </article>
+            </div>
+
+          </section>
+
+          <section class="section-block overview-section tasks-board">
+            <header class="section-block__header tasks-board__header">
+              <div>
+                <h3>Cron 执行看板</h3>
+                <p>按状态分组展示当前任务、任务目的以及下一次执行时间，风格向 control-center 靠拢。</p>
+              </div>
+              <div class="tasks-board__summary">
+                <span>待执行 {{ taskBoardMetrics.overdue }}</span>
+                <strong>{{ taskStatusSummary.scheduled + taskStatusSummary.late }} 个启用任务</strong>
+              </div>
+            </header>
+
+            <div class="tasks-board-groups">
+              <section v-for="group in taskBoardGroups" :key="group.key" class="tasks-board-group">
+                <div class="tasks-board-group__header">
+                  <div>
+                    <strong>{{ group.label }}</strong>
+                    <p>{{ group.summary }}</p>
+                  </div>
+                  <span>{{ group.count }} 个任务</span>
+                </div>
+
+                <div v-if="group.records.length" class="tasks-board-list">
+                  <article v-for="record in group.records" :key="record.id" class="tasks-board-card">
+                    <div class="tasks-board-card__topline">
+                      <div>
+                        <strong>{{ record.name }}</strong>
+                        <p>{{ record.summary }}</p>
+                      </div>
+                      <div class="tasks-board-card__tags">
+                        <span class="task-priority-pill" :class="getTaskScheduleClass(record.scheduleKind, record.deleteAfterRun)">
+                          {{ formatTaskScheduleKind(record.scheduleKind, record.deleteAfterRun) }}
+                        </span>
+                        <span class="task-status-pill" :class="getTaskStatusClass(record.statusKind)">{{ formatTaskStatus(record.statusKind) }}</span>
+                      </div>
+                    </div>
+                    <div class="tasks-board-card__meta">
+                      <span>Agent {{ record.agentId }}</span>
+                      <span>Target {{ record.sessionTarget }}</span>
+                      <span>{{ record.nextRunAtMs ? `下次: ${formatDueAt(record.nextRunAtMs)}` : "未提供下次执行时间" }}</span>
+                      <span>{{ record.nextRunAtMs ? formatTaskRelativeDueAt(record.nextRunAtMs) : record.statusLabel }}</span>
+                    </div>
+                  </article>
+                </div>
+                <div v-else class="empty-state">当前分组没有任务</div>
+              </section>
             </div>
           </section>
         </section>
@@ -3370,6 +4558,7 @@ onBeforeUnmount(() => {
     >
       <button class="desktop-context-menu__item" type="button" @click="openChatPanel()">聊天</button>
       <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">平台管理</button>
+      <button class="desktop-context-menu__item" type="button" @click="openConsole('tasks')">任务管理</button>
       <button class="desktop-context-menu__item desktop-context-menu__item--danger" type="button" @click="handleQuitClick">
         退出
       </button>

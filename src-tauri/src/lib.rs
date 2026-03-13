@@ -1,5 +1,6 @@
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -73,6 +74,87 @@ struct GatewayHealthResponse {
     checked_url: Option<String>,
     detail: Option<String>,
     latency_ms: Option<u128>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StaffMemberSnapshot {
+    agent_id: String,
+    display_name: String,
+    role_label: String,
+    model: String,
+    workspace: String,
+    tools_profile: String,
+    status_label: String,
+    current_work_label: String,
+    current_work: String,
+    recent_output: String,
+    scheduled_label: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StaffSnapshotResponse {
+    mission_statement: String,
+    source_path: String,
+    detail: String,
+    members: Vec<StaffMemberSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskSnapshotItem {
+    id: String,
+    name: String,
+    agent_id: String,
+    session_target: String,
+    enabled: bool,
+    delete_after_run: bool,
+    status_kind: String,
+    status_label: String,
+    summary: String,
+    next_run_at_ms: Option<i64>,
+    created_at_ms: Option<i64>,
+    updated_at_ms: Option<i64>,
+    schedule_kind: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskSnapshotResponse {
+    source_path: String,
+    detail: String,
+    jobs: Vec<TaskSnapshotItem>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SourceFileSnapshotItem {
+    id: String,
+    title: String,
+    summary: String,
+    content: String,
+    source_path: String,
+    relative_path: String,
+    facet_key: String,
+    facet_label: String,
+    category: String,
+    updated_at_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceFileSnapshotResponse {
+    source_path: String,
+    detail: String,
+    items: Vec<SourceFileSnapshotItem>,
+}
+
+#[derive(Debug, Clone)]
+struct EditableScope {
+    facet_key: String,
+    facet_label: String,
+    workspace_root: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -173,6 +255,1087 @@ fn load_openclaw_gateway_token_from_config() -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn resolve_openclaw_config_path() -> PathBuf {
+    if let Ok(explicit) = std::env::var("OPENCLAW_CONFIG_PATH") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Ok(home_dir) = std::env::var("HOME") {
+        return PathBuf::from(home_dir).join(".openclaw").join("openclaw.json");
+    }
+
+    PathBuf::from(".openclaw").join("openclaw.json")
+}
+
+fn resolve_openclaw_home_path() -> PathBuf {
+    if let Ok(explicit) = std::env::var("OPENCLAW_HOME") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Ok(home_dir) = std::env::var("HOME") {
+        return PathBuf::from(home_dir).join(".openclaw");
+    }
+
+    PathBuf::from(".openclaw")
+}
+
+fn resolve_workspace_main_root() -> PathBuf {
+    resolve_openclaw_home_path().join("workspace-main")
+}
+
+fn resolve_workspace_agents_root() -> PathBuf {
+    resolve_openclaw_home_path().join("workspaces")
+}
+
+fn load_staff_mission_statement() -> String {
+    let fallback = "构建可持续自治的 AI 员工体系，持续完成高价值任务。".to_string();
+    let current_dir = match std::env::current_dir() {
+        Ok(value) => value,
+        Err(_) => return fallback,
+    };
+    let agent_path = current_dir.join("AGENTS.md");
+    let raw = match std::fs::read_to_string(agent_path) {
+        Ok(value) => value,
+        Err(_) => return fallback,
+    };
+
+    raw.lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("- ") && line.to_ascii_lowercase().contains("objective"))
+        .map(|line| line.trim_start_matches('-').trim().to_string())
+        .filter(|line| line.len() > 8)
+        .unwrap_or(fallback)
+}
+
+fn value_as_object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
+    value.as_object()
+}
+
+fn load_staff_from_runtime_dirs(
+    scheduled_agents: &std::collections::HashSet<String>,
+) -> Result<Vec<StaffMemberSnapshot>, String> {
+    let agents_path = resolve_openclaw_config_path()
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".openclaw"))
+        .join("agents");
+
+    let entries = match std::fs::read_dir(&agents_path) {
+        Ok(value) => value,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let mut members = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let agent_id = entry.file_name().to_string_lossy().trim().to_string();
+        if agent_id.is_empty() {
+            continue;
+        }
+        let runtime_summary = load_runtime_session_summary(&agent_id);
+        let status_label = runtime_summary
+            .latest_updated_at_ms
+            .map(derive_status_label)
+            .unwrap_or_else(|| "待命".to_string());
+        let (current_work, recent_output) = runtime_summary
+            .latest_session_file
+            .as_deref()
+            .map(load_recent_activity_from_session_file)
+            .unwrap_or((None, None));
+        members.push(StaffMemberSnapshot {
+            agent_id: agent_id.clone(),
+            display_name: agent_id.clone(),
+            role_label: humanize_agent_role(&agent_id),
+            model: runtime_summary
+                .latest_model
+                .unwrap_or_else(|| "未标注".to_string()),
+            workspace: "未标注".to_string(),
+            tools_profile: "default".to_string(),
+            status_label,
+            current_work_label: "正在处理什么".to_string(),
+            current_work: current_work.unwrap_or_else(|| "当前无实时任务".to_string()),
+            recent_output: recent_output.unwrap_or_else(|| "最近暂无产出。".to_string()),
+            scheduled_label: if scheduled_agents.contains(&agent_id) {
+                "已排班".to_string()
+            } else {
+                "未排班".to_string()
+            },
+        });
+    }
+
+    members.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
+    Ok(members)
+}
+
+fn humanize_agent_role(agent_id: &str) -> String {
+    match agent_id.trim().to_lowercase().as_str() {
+        "main" => "主控员工".to_string(),
+        "gateway" => "网关员工".to_string(),
+        other => format!("{other} 员工"),
+    }
+}
+
+fn extract_text_from_message_content(content: &Value) -> Option<String> {
+    if let Some(text) = content.as_str() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if let Some(items) = content.as_array() {
+        let mut texts = Vec::new();
+        for item in items {
+            let Some(obj) = item.as_object() else {
+                continue;
+            };
+            if let Some(text) = obj.get("text").and_then(Value::as_str) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    texts.push(trimmed.to_string());
+                }
+            }
+        }
+        if !texts.is_empty() {
+            return Some(texts.join("\n"));
+        }
+    }
+
+    None
+}
+
+fn sanitize_staff_output(content: &str) -> String {
+    let mut normalized = content.replace("[[reply_to_current]]", "").trim().to_string();
+    if normalized.starts_with('[') {
+        if let Some(pos) = normalized.find(']') {
+            normalized = normalized[(pos + 1)..].trim().to_string();
+        }
+    }
+    if normalized.is_empty() {
+        "最近暂无产出。".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn humanize_scope_label(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("main") {
+        return "Main".to_string();
+    }
+    if trimmed.is_empty() {
+        return "未标注".to_string();
+    }
+    trimmed.to_string()
+}
+
+fn load_editable_scopes() -> Vec<EditableScope> {
+    let mut scopes = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    let main_root = resolve_workspace_main_root();
+    scopes.push(EditableScope {
+        facet_key: "main".to_string(),
+        facet_label: "Main".to_string(),
+        workspace_root: main_root.clone(),
+    });
+    seen.insert("main".to_string());
+
+    let config_path = resolve_openclaw_config_path();
+    if let Ok(raw) = std::fs::read_to_string(config_path) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+            if let Some(list) = parsed
+                .get("agents")
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("list"))
+                .and_then(Value::as_array)
+            {
+                for row in list {
+                    let Some(obj) = row.as_object() else {
+                        continue;
+                    };
+                    let agent_id = obj
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .or_else(|| obj.get("name").and_then(Value::as_str))
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("");
+                    if agent_id.is_empty() {
+                        continue;
+                    }
+                    let facet_key = agent_id.to_lowercase();
+                    if seen.contains(&facet_key) {
+                        continue;
+                    }
+                    let workspace_root = if facet_key == "main" {
+                        main_root.clone()
+                    } else {
+                        obj.get("workspace")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| resolve_workspace_agents_root().join(agent_id))
+                    };
+                    scopes.push(EditableScope {
+                        facet_key: facet_key.clone(),
+                        facet_label: humanize_scope_label(agent_id),
+                        workspace_root,
+                    });
+                    seen.insert(facet_key);
+                }
+            }
+        }
+    }
+
+    if let Ok(entries) = std::fs::read_dir(resolve_workspace_agents_root()) {
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let agent_id = entry.file_name().to_string_lossy().trim().to_string();
+            if agent_id.is_empty() {
+                continue;
+            }
+            let facet_key = agent_id.to_lowercase();
+            if seen.contains(&facet_key) {
+                continue;
+            }
+            scopes.push(EditableScope {
+                facet_key: facet_key.clone(),
+                facet_label: humanize_scope_label(&agent_id),
+                workspace_root: entry.path(),
+            });
+            seen.insert(facet_key);
+        }
+    }
+
+    scopes.sort_by(|left, right| {
+        if left.facet_key == "main" {
+            return std::cmp::Ordering::Less;
+        }
+        if right.facet_key == "main" {
+            return std::cmp::Ordering::Greater;
+        }
+        left.facet_label.cmp(&right.facet_label)
+    });
+    scopes
+}
+
+fn safe_read_source_file(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Some(String::new());
+    }
+    Some(trimmed.to_string())
+}
+
+fn build_source_file_title(path: &Path, content: &str) -> String {
+    for line in content.lines().map(str::trim) {
+        if let Some(value) = line.strip_prefix("# ") {
+            let heading = value.trim();
+            if !heading.is_empty() {
+                return heading.to_string();
+            }
+        }
+    }
+
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("未命名文件")
+        .to_string()
+}
+
+fn build_source_file_summary(content: &str) -> String {
+    let normalized = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        "文件内容为空。".to_string()
+    } else if normalized.chars().count() > 180 {
+        normalized.chars().take(180).collect::<String>()
+    } else {
+        normalized
+    }
+}
+
+fn build_source_file_item(
+    path: &Path,
+    relative_base: &Path,
+    facet_key: &str,
+    facet_label: &str,
+    category: &str,
+) -> Option<SourceFileSnapshotItem> {
+    let content = safe_read_source_file(path)?;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let updated_at_ms = meta
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0);
+    let title = build_source_file_title(path, &content);
+    let summary = build_source_file_summary(&content);
+    let source_path = path.display().to_string();
+    let relative_path = path
+        .strip_prefix(relative_base)
+        .ok()
+        .map(|value| value.display().to_string())
+        .unwrap_or_else(|| source_path.clone());
+    let id = relative_path.replace(['/', '\\', ' '], "-").to_lowercase();
+
+    Some(SourceFileSnapshotItem {
+        id,
+        title,
+        summary,
+        content,
+        source_path,
+        relative_path,
+        facet_key: facet_key.to_string(),
+        facet_label: facet_label.to_string(),
+        category: category.to_string(),
+        updated_at_ms,
+    })
+}
+
+fn load_memory_file_items() -> Vec<SourceFileSnapshotItem> {
+    let mut output = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let main_root = resolve_workspace_main_root();
+    let scopes = load_editable_scopes();
+
+    let append = |output: &mut Vec<SourceFileSnapshotItem>,
+                  seen: &mut std::collections::HashSet<String>,
+                  item: Option<SourceFileSnapshotItem>| {
+        if let Some(row) = item {
+            if seen.insert(row.source_path.clone()) {
+                output.push(row);
+            }
+        }
+    };
+
+    append(
+        &mut output,
+        &mut seen,
+        build_source_file_item(
+            &main_root.join("MEMORY.md"),
+            &main_root,
+            "main",
+            "Main",
+            "Main 长期记忆",
+        ),
+    );
+
+    if let Ok(entries) = std::fs::read_dir(main_root.join("memory")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ext = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_lowercase();
+            if !["md", "markdown", "txt"].contains(&ext.as_str()) {
+                continue;
+            }
+            append(
+                &mut output,
+                &mut seen,
+                build_source_file_item(&path, &main_root, "main", "Main", "Main 记忆记录"),
+            );
+        }
+    }
+
+    for scope in scopes.iter().filter(|scope| scope.facet_key != "main") {
+        append(
+            &mut output,
+            &mut seen,
+            build_source_file_item(
+                &scope.workspace_root.join("MEMORY.md"),
+                &scope.workspace_root,
+                &scope.facet_key,
+                &scope.facet_label,
+                &format!("{} 长期记忆", scope.facet_label),
+            ),
+        );
+
+        if let Ok(entries) = std::fs::read_dir(scope.workspace_root.join("memory")) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let ext = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_lowercase();
+                if !["md", "markdown", "txt"].contains(&ext.as_str()) {
+                    continue;
+                }
+                append(
+                    &mut output,
+                    &mut seen,
+                    build_source_file_item(
+                        &path,
+                        &scope.workspace_root,
+                        &scope.facet_key,
+                        &scope.facet_label,
+                        &format!("{} 记忆记录", scope.facet_label),
+                    ),
+                );
+            }
+        }
+    }
+
+    output.sort_by(|left, right| {
+        (left.facet_key != "main")
+            .cmp(&(right.facet_key != "main"))
+            .then_with(|| left.facet_label.cmp(&right.facet_label))
+            .then_with(|| right.updated_at_ms.cmp(&left.updated_at_ms))
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    output
+}
+
+fn load_document_file_items() -> Vec<SourceFileSnapshotItem> {
+    let mut output = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let main_root = resolve_workspace_main_root();
+    let scopes = load_editable_scopes();
+    let main_candidates = [
+        "AGENTS.md",
+        "IDENTITY.md",
+        "SOUL.md",
+        "BOOTSTRAP.md",
+        "HEARTBEAT.md",
+        "TOOLS.md",
+        "README.md",
+        "NOTEBOOK.md",
+        "focus.md",
+        "inbox.md",
+        "routines.md",
+    ];
+
+    let append = |output: &mut Vec<SourceFileSnapshotItem>,
+                  seen: &mut std::collections::HashSet<String>,
+                  item: Option<SourceFileSnapshotItem>| {
+        if let Some(row) = item {
+            if seen.insert(row.source_path.clone()) {
+                output.push(row);
+            }
+        }
+    };
+
+    for file_name in main_candidates {
+        append(
+            &mut output,
+            &mut seen,
+            build_source_file_item(
+                &main_root.join(file_name),
+                &main_root,
+                "main",
+                "Main",
+                "Main 核心文档",
+            ),
+        );
+    }
+
+    for scope in scopes.iter().filter(|scope| scope.facet_key != "main") {
+        for file_name in [
+            "AGENTS.md",
+            "IDENTITY.md",
+            "SOUL.md",
+            "BOOTSTRAP.md",
+            "HEARTBEAT.md",
+            "TOOLS.md",
+            "README.md",
+            "NOTEBOOK.md",
+            "focus.md",
+            "inbox.md",
+            "routines.md",
+        ] {
+            append(
+                &mut output,
+                &mut seen,
+                build_source_file_item(
+                    &scope.workspace_root.join(file_name),
+                    &scope.workspace_root,
+                    &scope.facet_key,
+                    &scope.facet_label,
+                    &format!("{} 核心文档", scope.facet_label),
+                ),
+            );
+        }
+    }
+
+    output.sort_by(|left, right| {
+        (left.facet_key != "main")
+            .cmp(&(right.facet_key != "main"))
+            .then_with(|| left.facet_label.cmp(&right.facet_label))
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    output
+}
+
+#[tauri::command]
+fn load_memory_file_snapshot() -> Result<SourceFileSnapshotResponse, String> {
+    let items = load_memory_file_items();
+    Ok(SourceFileSnapshotResponse {
+        source_path: resolve_workspace_main_root().display().to_string(),
+        detail: format!("已从 OpenClaw 记忆文件读取 {} 条记录。", items.len()),
+        items,
+    })
+}
+
+#[tauri::command]
+fn load_document_file_snapshot() -> Result<SourceFileSnapshotResponse, String> {
+    let items = load_document_file_items();
+    Ok(SourceFileSnapshotResponse {
+        source_path: resolve_workspace_main_root().display().to_string(),
+        detail: format!("已从 OpenClaw 核心文档读取 {} 份文件。", items.len()),
+        items,
+    })
+}
+
+#[tauri::command]
+fn save_source_file(kind: String, source_path: String, content: String) -> Result<String, String> {
+    let allowed = if kind == "memory" {
+        load_memory_file_items()
+    } else if kind == "document" {
+        load_document_file_items()
+    } else {
+        return Err("不支持的文件类型。".to_string());
+    };
+
+    let Some(target) = allowed
+        .into_iter()
+        .find(|item| std::path::Path::new(&item.source_path) == std::path::Path::new(&source_path))
+    else {
+        return Err("目标文件不在允许编辑范围内。".to_string());
+    };
+
+    std::fs::write(&target.source_path, content).map_err(|error| error.to_string())?;
+    Ok(target.source_path)
+}
+
+fn load_recent_activity_from_session_file(session_file: &str) -> (Option<String>, Option<String>) {
+    let raw = match std::fs::read_to_string(session_file) {
+        Ok(value) => value,
+        Err(_) => return (None, None),
+    };
+
+    let mut current_work = None;
+    let mut recent_output = None;
+
+    for line in raw.lines().rev() {
+        let parsed: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let Some(message) = parsed.get("message").and_then(Value::as_object) else {
+            continue;
+        };
+        let role = message.get("role").and_then(Value::as_str).unwrap_or_default();
+        let content = message.get("content");
+
+        if recent_output.is_none() && role == "assistant" {
+            if let Some(content) = content.and_then(extract_text_from_message_content) {
+                recent_output = Some(sanitize_staff_output(&content));
+            }
+        }
+
+        if current_work.is_none() && role == "user" {
+            if let Some(content) = content.and_then(extract_text_from_message_content) {
+                current_work = Some(sanitize_staff_output(&content));
+            }
+        }
+
+        if current_work.is_some() && recent_output.is_some() {
+            break;
+        }
+    }
+
+    (current_work, recent_output)
+}
+
+fn derive_status_label(updated_at_ms: i64) -> String {
+    let now_ms = current_timestamp_millis() as i64;
+    let delta = now_ms.saturating_sub(updated_at_ms);
+    if delta <= 45 * 60 * 1000 {
+        "工作中".to_string()
+    } else {
+        "待命".to_string()
+    }
+}
+
+fn load_scheduled_agents() -> std::collections::HashSet<String> {
+    let cron_path = resolve_openclaw_config_path()
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".openclaw"))
+        .join("cron")
+        .join("jobs.json");
+    let raw = match std::fs::read_to_string(cron_path) {
+        Ok(value) => value,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+    let parsed: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+
+    let mut agents = std::collections::HashSet::new();
+    if let Some(jobs) = parsed.get("jobs").and_then(Value::as_array) {
+        for job in jobs {
+            let Some(obj) = job.as_object() else {
+                continue;
+            };
+            let enabled = obj.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+            if !enabled {
+                continue;
+            }
+            for key in ["agentId", "ownerAgentId", "sessionTarget"] {
+                if let Some(agent_id) = obj.get(key).and_then(Value::as_str) {
+                    let trimmed = agent_id.trim();
+                    if !trimmed.is_empty() && trimmed != "isolated" {
+                        agents.insert(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+    agents
+}
+
+#[derive(Debug, Default)]
+struct RuntimeSessionSummary {
+    latest_updated_at_ms: Option<i64>,
+    latest_model: Option<String>,
+    latest_session_file: Option<String>,
+}
+
+fn load_runtime_session_summary(agent_id: &str) -> RuntimeSessionSummary {
+    let sessions_path = resolve_openclaw_config_path()
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".openclaw"))
+        .join("agents")
+        .join(agent_id)
+        .join("sessions")
+        .join("sessions.json");
+
+    let raw = match std::fs::read_to_string(sessions_path) {
+        Ok(value) => value,
+        Err(_) => return RuntimeSessionSummary::default(),
+    };
+    let parsed: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => return RuntimeSessionSummary::default(),
+    };
+
+    let mut best = RuntimeSessionSummary::default();
+    let mut best_updated_at = i64::MIN;
+    let Some(entries) = parsed.as_object() else {
+        return best;
+    };
+
+    for value in entries.values() {
+        let Some(session) = value.as_object() else {
+            continue;
+        };
+        let updated_at = session
+            .get("updatedAt")
+            .and_then(Value::as_i64)
+            .or_else(|| session.get("lastActivityAt").and_then(Value::as_i64))
+            .unwrap_or(0);
+        if updated_at < best_updated_at {
+            continue;
+        }
+
+        let latest_model = session
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let latest_session_file = session
+            .get("sessionFile")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+
+        best_updated_at = updated_at;
+        best = RuntimeSessionSummary {
+            latest_updated_at_ms: if updated_at > 0 { Some(updated_at) } else { None },
+            latest_model,
+            latest_session_file,
+        };
+    }
+
+    best
+}
+
+fn value_as_i64(value: Option<&Value>) -> Option<i64> {
+    value
+        .and_then(Value::as_i64)
+        .or_else(|| value.and_then(Value::as_u64).and_then(|value| i64::try_from(value).ok()))
+}
+
+fn extract_task_payload_summary(payload: Option<&Value>) -> String {
+    let Some(payload) = payload.and_then(Value::as_object) else {
+        return "未提供任务说明。".to_string();
+    };
+
+    for key in ["text", "prompt", "message", "summary", "description"] {
+        if let Some(value) = payload.get(key).and_then(Value::as_str) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+
+    if let Some(kind) = payload.get("kind").and_then(Value::as_str) {
+        let trimmed = kind.trim();
+        if !trimmed.is_empty() {
+            return format!("任务载荷类型：{trimmed}");
+        }
+    }
+
+    "未提供任务说明。".to_string()
+}
+
+fn derive_task_status(enabled: bool, next_run_at_ms: Option<i64>, now_ms: i64) -> (String, String) {
+    if !enabled {
+        return ("disabled".to_string(), "已停用".to_string());
+    }
+
+    if let Some(next_run_at_ms) = next_run_at_ms {
+        if next_run_at_ms <= now_ms {
+            return ("late".to_string(), "待执行".to_string());
+        }
+    }
+
+    ("scheduled".to_string(), "已启用".to_string())
+}
+
+#[tauri::command]
+fn load_task_snapshot() -> Result<TaskSnapshotResponse, String> {
+    let source_path = resolve_openclaw_config_path()
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".openclaw"))
+        .join("cron")
+        .join("jobs.json");
+
+    let raw = match std::fs::read_to_string(&source_path) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(TaskSnapshotResponse {
+                source_path: source_path.display().to_string(),
+                detail: "cron/jobs.json 未找到，当前没有可读取的任务调度数据。".to_string(),
+                jobs: Vec::new(),
+            })
+        }
+    };
+
+    let parsed: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(TaskSnapshotResponse {
+                source_path: source_path.display().to_string(),
+                detail: "cron/jobs.json 解析失败，当前无法读取任务调度数据。".to_string(),
+                jobs: Vec::new(),
+            })
+        }
+    };
+
+    let Some(items) = parsed.get("jobs").and_then(Value::as_array) else {
+        return Ok(TaskSnapshotResponse {
+            source_path: source_path.display().to_string(),
+            detail: "cron/jobs.json 中没有 jobs 数组。".to_string(),
+            jobs: Vec::new(),
+        });
+    };
+
+    let now_ms = current_timestamp_millis() as i64;
+    let mut jobs = Vec::new();
+
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+
+        let id = obj
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown-job")
+            .to_string();
+        let name = obj
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&id)
+            .to_string();
+        let agent_id = obj
+            .get("agentId")
+            .and_then(Value::as_str)
+            .or_else(|| obj.get("ownerAgentId").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("未标注")
+            .to_string();
+        let session_target = obj
+            .get("sessionTarget")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&agent_id)
+            .to_string();
+        let enabled = obj.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+        let delete_after_run = obj
+            .get("deleteAfterRun")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let created_at_ms = value_as_i64(obj.get("createdAtMs"));
+        let updated_at_ms = value_as_i64(obj.get("updatedAtMs"));
+        let schedule = obj.get("schedule").and_then(Value::as_object);
+        let schedule_kind = schedule
+            .and_then(|value| value.get("kind"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string();
+        let next_run_at_ms = obj
+            .get("state")
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("nextRunAtMs"))
+            .and_then(Value::as_i64)
+            .or_else(|| {
+                obj.get("state")
+                    .and_then(Value::as_object)
+                    .and_then(|value| value.get("nextRunAtMs"))
+                    .and_then(Value::as_u64)
+                    .and_then(|value| i64::try_from(value).ok())
+            });
+        let summary = extract_task_payload_summary(obj.get("payload"));
+        let (status_kind, status_label) = derive_task_status(enabled, next_run_at_ms, now_ms);
+
+        jobs.push(TaskSnapshotItem {
+            id,
+            name,
+            agent_id,
+            session_target,
+            enabled,
+            delete_after_run,
+            status_kind,
+            status_label,
+            summary,
+            next_run_at_ms,
+            created_at_ms,
+            updated_at_ms,
+            schedule_kind,
+        });
+    }
+
+    jobs.sort_by(|left, right| {
+        let left_rank = match left.status_kind.as_str() {
+            "late" => 0,
+            "scheduled" => 1,
+            "disabled" => 2,
+            _ => 3,
+        };
+        let right_rank = match right.status_kind.as_str() {
+            "late" => 0,
+            "scheduled" => 1,
+            "disabled" => 2,
+            _ => 3,
+        };
+
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| left.next_run_at_ms.unwrap_or(i64::MAX).cmp(&right.next_run_at_ms.unwrap_or(i64::MAX)))
+            .then_with(|| right.updated_at_ms.unwrap_or(0).cmp(&left.updated_at_ms.unwrap_or(0)))
+    });
+
+    Ok(TaskSnapshotResponse {
+        source_path: source_path.display().to_string(),
+        detail: format!("已从 cron/jobs.json 读取 {} 条任务。", jobs.len()),
+        jobs,
+    })
+}
+
+#[tauri::command]
+fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
+    let source_path = resolve_openclaw_config_path();
+    let mission_statement = load_staff_mission_statement();
+    let scheduled_agents = load_scheduled_agents();
+
+    let raw = match std::fs::read_to_string(&source_path) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(StaffSnapshotResponse {
+                mission_statement,
+                source_path: source_path.display().to_string(),
+                detail: "openclaw.json 未找到，当前没有可读取的员工配置。".to_string(),
+                members: Vec::new(),
+            })
+        }
+    };
+
+    let parsed: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(StaffSnapshotResponse {
+                mission_statement,
+                source_path: source_path.display().to_string(),
+                detail: "openclaw.json 解析失败，当前无法读取员工配置。".to_string(),
+                members: Vec::new(),
+            })
+        }
+    };
+
+    let root = value_as_object(&parsed);
+    let agents_root = root
+        .and_then(|obj| obj.get("agents"))
+        .and_then(value_as_object);
+    let defaults = agents_root
+        .and_then(|obj| obj.get("defaults"))
+        .and_then(value_as_object);
+    let default_model = defaults
+        .and_then(|obj| obj.get("model"))
+        .and_then(value_as_object)
+        .and_then(|obj| obj.get("primary"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("未标注");
+
+    let mut members = Vec::new();
+    if let Some(list) = agents_root.and_then(|obj| obj.get("list")).and_then(Value::as_array) {
+        for item in list {
+            let Some(obj) = value_as_object(item) else {
+                continue;
+            };
+            let agent_id = obj
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("");
+            if agent_id.is_empty() {
+                continue;
+            }
+
+            let display_name = obj
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(agent_id);
+            let model = obj
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(default_model);
+            let workspace = obj
+                .get("workspace")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("未标注");
+            let tools_profile = obj
+                .get("tools")
+                .and_then(value_as_object)
+                .and_then(|tools| tools.get("profile"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("default");
+            let runtime_summary = load_runtime_session_summary(agent_id);
+            let status_label = runtime_summary
+                .latest_updated_at_ms
+                .map(derive_status_label)
+                .unwrap_or_else(|| "待命".to_string());
+            let (current_work, recent_output) = runtime_summary
+                .latest_session_file
+                .as_deref()
+                .map(load_recent_activity_from_session_file)
+                .unwrap_or((None, None));
+            let effective_model = if model == "未标注" {
+                runtime_summary.latest_model.as_deref().unwrap_or(model)
+            } else {
+                model
+            };
+
+            members.push(StaffMemberSnapshot {
+                agent_id: agent_id.to_string(),
+                display_name: display_name.to_string(),
+                role_label: humanize_agent_role(agent_id),
+                model: effective_model.to_string(),
+                workspace: workspace.to_string(),
+                tools_profile: tools_profile.to_string(),
+                status_label,
+                current_work_label: "正在处理什么".to_string(),
+                current_work: current_work.unwrap_or_else(|| "当前无实时任务".to_string()),
+                recent_output: recent_output.unwrap_or_else(|| "最近暂无产出。".to_string()),
+                scheduled_label: if scheduled_agents.contains(agent_id) {
+                    "已排班".to_string()
+                } else {
+                    "未排班".to_string()
+                },
+            });
+        }
+    }
+
+    members.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
+
+    if members.is_empty() {
+        let runtime_members = load_staff_from_runtime_dirs(&scheduled_agents)?;
+        if !runtime_members.is_empty() {
+            return Ok(StaffSnapshotResponse {
+                mission_statement,
+                source_path: source_path.display().to_string(),
+                detail: format!(
+                    "openclaw.json 中 agents.list 为空，已回退为运行时员工目录，共读取 {} 名员工。",
+                    runtime_members.len()
+                ),
+                members: runtime_members,
+            });
+        }
+    }
+
+    Ok(StaffSnapshotResponse {
+        mission_statement,
+        source_path: source_path.display().to_string(),
+        detail: format!("已从 openclaw.json 读取 {} 名员工。", members.len()),
+        members,
+    })
 }
 
 fn is_openai_compatible_endpoint(endpoint: &str) -> bool {
@@ -784,7 +1947,17 @@ pub fn run() {
     load_openclaw_env();
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![quit_app, openclaw_chat, sync_local_proxy, check_openclaw_gateway])
+        .invoke_handler(tauri::generate_handler![
+            quit_app,
+            openclaw_chat,
+            sync_local_proxy,
+            check_openclaw_gateway,
+            load_staff_snapshot,
+            load_task_snapshot,
+            load_memory_file_snapshot,
+            load_document_file_snapshot,
+            save_source_file
+        ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_always_on_top(true);
