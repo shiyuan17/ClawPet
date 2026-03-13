@@ -259,9 +259,9 @@ export async function sendOpenClawChat(messages: OpenClawMessage[], options: Ope
     "Content-Type": "application/json"
   };
 
-  const token =
-    options.apiKey?.trim() ||
-    (isLocalProxyEndpoint(endpoint) ? "" : import.meta.env.VITE_OPENCLAW_GATEWAY_TOKEN || "");
+  // Local OpenClaw is responsible for upstream authentication itself.
+  // Only send credentials when the caller explicitly provides one.
+  const token = options.apiKey?.trim() || "";
   const model = options.model?.trim() || import.meta.env.VITE_OPENCLAW_MODEL || "";
   const body =
     protocol === "anthropic"

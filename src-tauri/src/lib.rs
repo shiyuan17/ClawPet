@@ -157,6 +157,24 @@ fn load_openclaw_env() {
     }
 }
 
+fn load_openclaw_gateway_token_from_config() -> Option<String> {
+    let home_dir = std::env::var_os("HOME")?;
+    let config_path = PathBuf::from(home_dir).join(".openclaw").join("openclaw.json");
+    let config_text = std::fs::read_to_string(config_path).ok()?;
+    let config = serde_json::from_str::<serde_json::Value>(&config_text).ok()?;
+    let auth = config.get("gateway")?.get("auth")?;
+    let mode = auth.get("mode")?.as_str()?;
+    if mode != "token" {
+        return None;
+    }
+
+    auth.get("token")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn is_openai_compatible_endpoint(endpoint: &str) -> bool {
     endpoint
         .trim_end_matches('/')
@@ -555,10 +573,9 @@ async fn openclaw_chat(
         .ok_or_else(|| "未设置可用的聊天接口地址。".to_string())?;
     let request_protocol = protocol.unwrap_or_else(|| "openai".to_string()).to_lowercase();
     let is_openai_compatible = is_openai_compatible_endpoint(&endpoint);
-    let gateway_token = std::env::var("OPENCLAW_GATEWAY_TOKEN").ok();
-    let api_key = api_key
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| std::env::var("OPENCLAW_API_KEY").ok());
+    let gateway_token = load_openclaw_gateway_token_from_config()
+        .or_else(|| std::env::var("OPENCLAW_GATEWAY_TOKEN").ok());
+    let api_key = api_key.filter(|value| !value.trim().is_empty());
     let model = model
         .filter(|value| !value.trim().is_empty())
         .or_else(|| std::env::var("OPENCLAW_MODEL").ok());

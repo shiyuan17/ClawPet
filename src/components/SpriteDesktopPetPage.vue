@@ -1,10 +1,24 @@
 <script setup lang="ts">
 import { interpolate } from "remotion/no-react";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import actCuteRotationConfig from "../images/animate/act_cute_rotation/index.json";
+import actCuteRotationSprite from "../images/animate/act_cute_rotation/sprite.png";
+import chatTypingConfig from "../images/animate/chat_typing/index.json";
+import chatTypingSprite from "../images/animate/chat_typing/sprite.png";
+import haveMealConfig from "../images/animate/have_meal/index.json";
+import haveMealSprite from "../images/animate/have_meal/sprite.png";
+import sleepConfig from "../images/animate/sleep/index.json";
+import sleepSprite from "../images/animate/sleep/sprite.png";
+import smileAndBlinkConfig from "../images/animate/smile_and_blink/index.json";
+import smileAndBlinkSprite from "../images/animate/smile_and_blink/sprite.png";
 import smileBlinkConfig from "../images/animate/smile_blink/index.json";
 import smileBlinkSprite from "../images/animate/smile_blink/sprite.png";
 import stompFeetConfig from "../images/animate/stomp_feet/index.json";
 import stompFeetSprite from "../images/animate/stomp_feet/sprite.png";
+import stretchYawnConfig from "../images/animate/stretch_yawn_and_rub_your_eyes/index.json";
+import stretchYawnSprite from "../images/animate/stretch_yawn_and_rub_your_eyes/sprite.png";
+import thinkConfig from "../images/animate/think/index.json";
+import thinkSprite from "../images/animate/think/sprite.png";
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
 import {
   appendRequestLog,
@@ -42,7 +56,16 @@ type AnimationConfig = {
   frames: Frame[];
 };
 
-type AnimationName = "smile_blink" | "stomp_feet";
+type AnimationName =
+  | "act_cute_rotation"
+  | "chat_typing"
+  | "have_meal"
+  | "sleep"
+  | "smile_and_blink"
+  | "smile_blink"
+  | "stomp_feet"
+  | "stretch_yawn_and_rub_your_eyes"
+  | "think";
 type ConsoleSection = "platforms" | "timeline" | "sessions" | "failures";
 
 type AnimationDefinition = {
@@ -123,6 +146,46 @@ type JsonViewResult = {
 };
 
 const animations: Record<AnimationName, AnimationDefinition> = {
+  act_cute_rotation: {
+    name: "act_cute_rotation",
+    label: "转圈卖萌",
+    description: "拖拽或空闲巡航时会转圈撒娇。",
+    loop: true,
+    sprite: actCuteRotationSprite,
+    config: actCuteRotationConfig as AnimationConfig
+  },
+  chat_typing: {
+    name: "chat_typing",
+    label: "打字回复",
+    description: "等待 OpenClaw 回复时保持输入状态。",
+    loop: true,
+    sprite: chatTypingSprite,
+    config: chatTypingConfig as AnimationConfig
+  },
+  have_meal: {
+    name: "have_meal",
+    label: "开心进食",
+    description: "收到回复或被投喂灵感后会满足地吃一口。",
+    loop: false,
+    sprite: haveMealSprite,
+    config: haveMealConfig as AnimationConfig
+  },
+  sleep: {
+    name: "sleep",
+    label: "呼呼睡觉",
+    description: "长时间无人打扰时进入睡眠陪伴。",
+    loop: true,
+    sprite: sleepSprite,
+    config: sleepConfig as AnimationConfig
+  },
+  smile_and_blink: {
+    name: "smile_and_blink",
+    label: "贴贴微笑",
+    description: "聊天面板打开时，保持专注又温柔的陪伴。",
+    loop: true,
+    sprite: smileAndBlinkSprite,
+    config: smileAndBlinkConfig as AnimationConfig
+  },
   smile_blink: {
     name: "smile_blink",
     label: "微笑眨眼",
@@ -138,12 +201,35 @@ const animations: Record<AnimationName, AnimationDefinition> = {
     loop: false,
     sprite: stompFeetSprite,
     config: stompFeetConfig as AnimationConfig
+  },
+  stretch_yawn_and_rub_your_eyes: {
+    name: "stretch_yawn_and_rub_your_eyes",
+    label: "伸懒腰醒神",
+    description: "从睡眠中被唤醒时先打个哈欠，再恢复互动。",
+    loop: false,
+    sprite: stretchYawnSprite,
+    config: stretchYawnConfig as AnimationConfig
+  },
+  think: {
+    name: "think",
+    label: "歪头思考",
+    description: "查看控制台或进入空闲思考时会露出思索表情。",
+    loop: true,
+    sprite: thinkSprite,
+    config: thinkConfig as AnimationConfig
   }
 };
 
 const actionTips: Record<AnimationName, string> = {
+  act_cute_rotation: "被你拖起来后，它开始原地转圈卖萌。",
+  chat_typing: "正在替你盯着回复，等 OpenClaw 把字打完。",
+  have_meal: "像被投喂到一样，收到回应后会满足地吃一口。",
+  sleep: "太久没有新互动，它已经安心睡着了。",
+  smile_and_blink: "聊天窗口打开时，它会保持更专注的陪伴表情。",
   smile_blink: "今天状态不错，适合放在页面右下角陪你工作。",
-  stomp_feet: "你刚刚戳到它了，它正在跺脚表达情绪。"
+  stomp_feet: "你刚刚戳到它了，它正在跺脚表达情绪。",
+  stretch_yawn_and_rub_your_eyes: "刚被你叫醒，先伸个懒腰再继续营业。",
+  think: "它在认真琢磨眼前的信息，像在陪你一起排查。"
 };
 
 const chatStorageKey = "keai.desktop-pet.openclaw.chat-history";
@@ -223,6 +309,8 @@ const panelPlacement = ref({
 const viewportSize = 280;
 const autoplayDelayMs = 9000;
 const playbackRate = 3;
+const sleepDelayMs = 24000;
+const idleShowcaseSequence: AnimationName[] = ["think", "smile_and_blink", "have_meal", "act_cute_rotation"];
 const platformPresets = getPlatformPresets();
 const globalPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "global"));
 const chinaPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "china"));
@@ -565,6 +653,9 @@ const selectedFailureLog = computed(() => selectedFailure.value?.logs[0] ?? null
 let rafId = 0;
 let idleTimer = 0;
 let animationStartedAt = 0;
+let queuedAnimationName: AnimationName | null = null;
+let lastInteractionAt = 0;
+let idleShowcaseIndex = 0;
 let dragPointerId: number | null = null;
 let dragStart = { x: 0, y: 0, petX: 0, petY: 0 };
 let windowPointerMoveListener: ((event: PointerEvent) => void) | null = null;
@@ -748,16 +839,94 @@ function getAnimationDuration(animation: AnimationDefinition) {
   return (lastFrame.t + getFrameInterval(frames)) / playbackRate;
 }
 
-function setAnimation(name: AnimationName) {
+function noteInteraction() {
+  lastInteractionAt = performance.now();
+}
+
+function getIdleElapsed(now = performance.now()) {
+  return Math.max(0, now - lastInteractionAt);
+}
+
+function shouldSleep(now = performance.now()) {
+  return getIdleElapsed(now) >= sleepDelayMs;
+}
+
+function resolveBaseAnimationName(now = performance.now()): AnimationName {
+  if (isSending.value) {
+    return "chat_typing";
+  }
+
+  if (isDragging.value) {
+    return "act_cute_rotation";
+  }
+
+  if (shouldSleep(now)) {
+    return "sleep";
+  }
+
+  if (isConsoleOpen.value) {
+    return "think";
+  }
+
+  if (isChatOpen.value) {
+    return "smile_and_blink";
+  }
+
+  return "smile_blink";
+}
+
+function setAnimation(name: AnimationName, nextName?: AnimationName | null) {
+  if (currentAnimationName.value === name && queuedAnimationName === (nextName ?? null)) {
+    return;
+  }
+
   currentAnimationName.value = name;
   currentFrameIndex.value = 0;
   animationStartedAt = performance.now();
+  queuedAnimationName = nextName ?? null;
   statusText.value = actionTips[name];
   window.clearTimeout(idleTimer);
 
   if (animations[name].loop) {
-    queueIdleAction();
+    if (queuedAnimationName && queuedAnimationName !== name) {
+      idleTimer = window.setTimeout(() => {
+        const nextAnimation = queuedAnimationName ?? resolveBaseAnimationName();
+        setAnimation(nextAnimation);
+      }, getAnimationDuration(animations[name]) * 1000);
+    } else {
+      queueIdleAction();
+    }
   }
+}
+
+function applyBaseAnimation(force = false) {
+  const nextName = resolveBaseAnimationName();
+
+  if (!force && currentAnimationName.value === nextName) {
+    return;
+  }
+
+  if (!force && !animations[currentAnimationName.value].loop) {
+    queuedAnimationName = nextName;
+    return;
+  }
+
+  setAnimation(nextName);
+}
+
+function wakeThenAnimate(name: AnimationName, nextName?: AnimationName | null) {
+  const fallbackName = nextName ?? resolveBaseAnimationName();
+  const sleeping =
+    currentAnimationName.value === "sleep" ||
+    shouldSleep() ||
+    currentAnimationName.value === "stretch_yawn_and_rub_your_eyes";
+
+  if (sleeping && name !== "sleep" && name !== "stretch_yawn_and_rub_your_eyes") {
+    setAnimation("stretch_yawn_and_rub_your_eyes", name);
+    return;
+  }
+
+  setAnimation(name, fallbackName === name ? null : fallbackName);
 }
 
 function scrollMessagesToBottom() {
@@ -913,13 +1082,14 @@ function captureCurrentPanelPlacement() {
 
 function openChatPanel() {
   hideContextMenu();
+  noteInteraction();
 
   if (!isChatOpen.value) {
     isChatOpen.value = true;
     startChatAnimation();
   }
 
-  statusText.value = "OpenClaw 对话窗口已打开。";
+  applyBaseAnimation();
   startBubbleAnimation();
   scrollMessagesToBottom();
 }
@@ -931,13 +1101,18 @@ function toggleChatPanel(nextValue?: boolean) {
   }
 
   isChatOpen.value = finalValue;
+  if (finalValue) {
+    noteInteraction();
+  }
   startChatAnimation();
+  applyBaseAnimation(true);
   statusText.value = finalValue ? "对话窗口已打开。" : "对话窗口已收起。";
 }
 
 function openConsole(section: ConsoleSection) {
   activeSection.value = section;
   hideContextMenu();
+  noteInteraction();
 
   if (!isConsoleOpen.value) {
     if (panelPlacement.value.mode === "auto") {
@@ -956,6 +1131,8 @@ function openConsole(section: ConsoleSection) {
   } else {
     statusText.value = "失败分析已展开，我帮你把问题聚合到一起了。";
   }
+
+  applyBaseAnimation();
 }
 
 function toggleConsolePanel(nextValue?: boolean) {
@@ -965,18 +1142,36 @@ function toggleConsolePanel(nextValue?: boolean) {
   }
 
   isConsoleOpen.value = finalValue;
+  if (finalValue) {
+    noteInteraction();
+  }
   startPanelAnimation();
+  applyBaseAnimation(true);
   statusText.value = finalValue ? "控制台面板已打开。" : "控制台已收起，我继续在这里陪你。";
 }
 
 function queueIdleAction() {
   window.clearTimeout(idleTimer);
   idleTimer = window.setTimeout(() => {
-    if (!isDragging.value && currentAnimationName.value === "smile_blink") {
-      setAnimation("stomp_feet");
-    } else {
+    if (isDragging.value || isSending.value) {
       queueIdleAction();
+      return;
     }
+
+    const baseAnimation = resolveBaseAnimationName();
+    if (baseAnimation === "sleep") {
+      applyBaseAnimation(true);
+      return;
+    }
+
+    const nextShowcase = idleShowcaseSequence[idleShowcaseIndex % idleShowcaseSequence.length];
+    idleShowcaseIndex += 1;
+    if (nextShowcase === baseAnimation) {
+      queueIdleAction();
+      return;
+    }
+
+    setAnimation(nextShowcase, baseAnimation);
   }, autoplayDelayMs);
 }
 
@@ -1030,7 +1225,8 @@ function tick(now: number) {
   currentFrameIndex.value = nextFrameIndex;
 
   if (!animation.loop && elapsed >= duration) {
-    setAnimation("smile_blink");
+    const nextAnimation = queuedAnimationName ?? resolveBaseAnimationName();
+    setAnimation(nextAnimation);
   }
 
   rafId = window.requestAnimationFrame(tick);
@@ -1042,8 +1238,9 @@ function handlePetClick() {
     return;
   }
 
-  setAnimation("stomp_feet");
+  noteInteraction();
   openChatPanel();
+  wakeThenAnimate("stomp_feet", "smile_and_blink");
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -1062,6 +1259,8 @@ function handlePointerDown(event: PointerEvent) {
     petY: petPosition.value.y
   };
   petEl.setPointerCapture(event.pointerId);
+  noteInteraction();
+  wakeThenAnimate("act_cute_rotation", "act_cute_rotation");
   statusText.value = "拖着我走吧，我会老老实实待在舞台里。";
 }
 
@@ -1077,6 +1276,7 @@ function handlePointerMove(event: PointerEvent) {
 
   dragDistance.value = Math.hypot(dx, dy);
   petPosition.value = clampPetPosition(nextX, nextY);
+  noteInteraction();
 }
 
 function finishDrag(event?: PointerEvent) {
@@ -1090,8 +1290,9 @@ function finishDrag(event?: PointerEvent) {
 
   isDragging.value = false;
   dragPointerId = null;
+  noteInteraction();
   statusText.value = "位置记住了，继续待机陪伴。";
-  queueIdleAction();
+  applyBaseAnimation(true);
 }
 
 function handleResize() {
@@ -1451,6 +1652,8 @@ async function submitChat() {
   });
   chatInput.value = "";
   isSending.value = true;
+  noteInteraction();
+  applyBaseAnimation(true);
   statusText.value = `消息已经发给 ${platformName}，正在等待回复。`;
   startBubbleAnimation();
   scrollMessagesToBottom();
@@ -1494,6 +1697,8 @@ async function submitChat() {
       cacheReadInputTokens: response.usage?.cacheReadInputTokens
     });
 
+    noteInteraction();
+    wakeThenAnimate("have_meal", resolveBaseAnimationName());
     statusText.value = "OpenClaw 已回复，你可以继续追问。";
   } catch (error) {
     const duration = Math.round(performance.now() - startedAt);
@@ -1529,6 +1734,7 @@ async function submitChat() {
     openConsole("failures");
   } finally {
     isSending.value = false;
+    applyBaseAnimation();
     startBubbleAnimation();
     scrollMessagesToBottom();
   }
@@ -2110,9 +2316,13 @@ function getFailureNextStep(log: RequestLog) {
 }
 
 watch(currentAnimationName, (name) => {
-  if (name === "smile_blink" && !isDragging.value) {
+  if (animations[name].loop && !queuedAnimationName) {
     queueIdleAction();
   }
+});
+
+watch([isChatOpen, isConsoleOpen, isDragging, isSending], () => {
+  applyBaseAnimation();
 });
 
 watch(
@@ -2245,9 +2455,10 @@ onMounted(() => {
   void syncLocalProxyServer();
   void refreshGatewayMonitor();
   centerPet();
+  lastInteractionAt = performance.now();
   animationStartedAt = performance.now();
   rafId = window.requestAnimationFrame(tick);
-  queueIdleAction();
+  applyBaseAnimation(true);
   void syncCursorPassThrough();
   cursorPassThroughTimer = window.setInterval(() => {
     void syncCursorPassThrough();
@@ -2281,6 +2492,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.cancelAnimationFrame(rafId);
+  window.cancelAnimationFrame(chatAnimationFrame);
   window.cancelAnimationFrame(panelAnimationFrame);
   window.cancelAnimationFrame(bubbleAnimationFrame);
   window.clearTimeout(idleTimer);
