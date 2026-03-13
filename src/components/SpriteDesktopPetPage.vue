@@ -933,11 +933,20 @@ const controlCenterCards = computed(() => [
     description: `${taskStatusSummary.value.scheduled} 条已启用，${taskStatusSummary.value.late} 条待执行。`
   }
 ]);
+function getSessionSummaryGroupId(log: RequestLog) {
+  if (log.sessionId.startsWith("runtime-")) {
+    return `runtime-group:${log.platformId}`;
+  }
+
+  return log.sessionId;
+}
+
 const sessionSummaries = computed<SessionSummary[]>(() => {
   const map = new Map<string, SessionSummary>();
 
   for (const log of requestLogs.value) {
-    const current = map.get(log.sessionId);
+    const sessionGroupId = getSessionSummaryGroupId(log);
+    const current = map.get(sessionGroupId);
     const preview = summarizeLogText(log);
 
     if (current) {
@@ -960,8 +969,8 @@ const sessionSummaries = computed<SessionSummary[]>(() => {
         current.latestError = log.error.trim();
       }
     } else {
-      map.set(log.sessionId, {
-        id: log.sessionId,
+      map.set(sessionGroupId, {
+        id: sessionGroupId,
         startedAt: log.createdAt,
         lastAt: log.createdAt,
         platformName: log.platformName,
