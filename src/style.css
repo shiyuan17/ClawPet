@@ -143,13 +143,13 @@ select {
   border: 1px solid rgba(121, 73, 34, 0.14);
   border-radius: 28px;
   background:
-    radial-gradient(circle at top right, rgba(255, 218, 170, 0.86), transparent 32%),
-    radial-gradient(circle at bottom left, rgba(229, 189, 145, 0.22), transparent 28%),
-    linear-gradient(180deg, rgba(255, 251, 247, 0.97), rgba(255, 243, 228, 0.94));
+    radial-gradient(circle at top right, rgba(255, 220, 178, 0.74), transparent 30%),
+    radial-gradient(circle at bottom left, rgba(229, 189, 145, 0.12), transparent 24%),
+    linear-gradient(180deg, rgba(255, 250, 245, 0.995), rgba(255, 244, 232, 0.985));
   box-shadow:
     0 28px 60px rgba(85, 46, 19, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(22px);
+  backdrop-filter: blur(30px) saturate(1.08);
 }
 
 .desktop-console-panel__header {
@@ -249,7 +249,8 @@ select {
   padding: 14px 16px;
   border: 1px solid rgba(121, 73, 34, 0.08);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.68);
+  background: rgba(255, 252, 248, 0.97);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
 }
 
 .desktop-metric-card span {
@@ -277,7 +278,7 @@ select {
   padding: 10px 14px;
   border: 1px solid rgba(137, 84, 42, 0.12);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 250, 245, 0.9);
   color: #704121;
   cursor: pointer;
 }
@@ -315,6 +316,14 @@ select {
   padding-right: 4px;
 }
 
+.desktop-console-body--overview {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  overflow: auto;
+  padding-right: 4px;
+  padding-bottom: 28px;
+}
+
 .desktop-console-body--split {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.72fr);
 }
@@ -338,6 +347,61 @@ select {
   overflow: visible;
 }
 
+.overview-section {
+  display: grid;
+  gap: 14px;
+  overflow: visible;
+}
+
+.overview-metrics-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.overview-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.overview-status-card {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-height: 108px;
+  padding: 16px;
+  border: 1px solid rgba(121, 73, 34, 0.1);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 227, 194, 0.44), transparent 36%),
+    rgba(255, 252, 248, 0.985);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.overview-status-card span,
+.detail-stat-card small {
+  color: rgba(94, 60, 35, 0.72);
+  font-size: 12px;
+}
+
+.overview-status-card strong {
+  color: #4f2b13;
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.overview-status-card p {
+  margin: 0;
+  color: rgba(72, 44, 25, 0.74);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.detail-stat-card small {
+  margin: 0;
+  line-height: 1.55;
+}
+
 .assistant-side {
   display: grid;
   gap: 14px;
@@ -348,7 +412,10 @@ select {
   padding: 16px;
   border: 1px solid rgba(121, 73, 34, 0.1);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 250, 245, 0.97);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.84),
+    0 8px 20px rgba(122, 72, 34, 0.04);
 }
 
 .section-block__header {
@@ -991,7 +1058,7 @@ select {
   padding: 10px 12px;
   border: 1px solid rgba(121, 73, 34, 0.1);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.74);
+  background: rgba(255, 252, 248, 0.97);
 }
 
 .detail-stat-card--primary {
@@ -1022,7 +1089,7 @@ select {
   padding: 14px;
   border: 1px solid rgba(121, 73, 34, 0.1);
   border-radius: 16px;
-  background: rgba(255, 250, 245, 0.74);
+  background: rgba(255, 250, 245, 0.97);
 }
 
 .detail-summary-grid {
@@ -1170,7 +1237,7 @@ select {
   min-height: 140px;
   padding: 18px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 252, 248, 0.94);
   color: rgba(94, 60, 35, 0.68);
 }
 
@@ -1216,6 +1283,12 @@ select {
   .desktop-console-body--assistant,
   .desktop-console-body--split,
   .desktop-console-panel__metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .desktop-console-body--overview,
+  .overview-metrics-grid,
+  .overview-status-grid {
     grid-template-columns: 1fr;
   }
 

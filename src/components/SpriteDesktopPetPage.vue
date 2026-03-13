@@ -66,7 +66,7 @@ type AnimationName =
   | "stomp_feet"
   | "stretch_yawn_and_rub_your_eyes"
   | "think";
-type ConsoleSection = "platforms" | "timeline" | "sessions" | "failures";
+type ConsoleSection = "overview" | "platforms" | "timeline" | "sessions" | "failures";
 
 type AnimationDefinition = {
   name: AnimationName;
@@ -259,7 +259,7 @@ const isWindowActive = ref(typeof document !== "undefined" ? document.hasFocus()
 const contextMenu = ref({ visible: false, x: 0, y: 0 });
 const isChatOpen = ref(false);
 const isConsoleOpen = ref(false);
-const activeSection = ref<ConsoleSection>("platforms");
+const activeSection = ref<ConsoleSection>("overview");
 const isSending = ref(false);
 const chatInput = ref("");
 const chatMessages = ref<ChatMessage[]>([...defaultChatMessages]);
@@ -315,6 +315,13 @@ const platformPresets = getPlatformPresets();
 const globalPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "global"));
 const chinaPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "china"));
 const openClawDefaultPlatformName = "OpenClaw 默认通道";
+const consoleSections: Array<{ id: ConsoleSection; label: string }> = [
+  { id: "overview", label: "总览" },
+  { id: "platforms", label: "平台管理" },
+  { id: "timeline", label: "时间线" },
+  { id: "sessions", label: "会话视图" },
+  { id: "failures", label: "失败分析" }
+];
 
 function isImplicitSeededOpenAiPlatform(platform: PlatformConfig | null) {
   if (!platform) {
@@ -338,6 +345,7 @@ const activePlatform = computed(
   () => platforms.value.find((platform) => platform.id === activePlatformId.value && platform.enabled) || null
 );
 const enabledPlatformCount = computed(() => platforms.value.filter((platform) => platform.enabled).length);
+const configuredSubscriptionCount = computed(() => platforms.value.filter((platform) => platform.apiKey.trim()).length);
 const openClawMessages = computed<OpenClawMessage[]>(() =>
   chatMessages.value
     .filter((message) => message.status !== "pending" && message.role !== "system")
@@ -525,6 +533,7 @@ const metrics = computed(() => {
   ];
 });
 const timelineEntries = computed(() => requestLogs.value);
+const scheduledTaskCount = computed(() => 0);
 const sessionSummaries = computed<SessionSummary[]>(() => {
   const map = new Map<string, SessionSummary>();
 
@@ -649,6 +658,36 @@ const sessionOverlayLog = computed(() => {
   return session.logs.find((log) => log.id === sessionOverlayLogId.value) ?? null;
 });
 const selectedFailureLog = computed(() => selectedFailure.value?.logs[0] ?? null);
+const latestRequestLog = computed(() => timelineEntries.value[0] ?? null);
+const overviewStatusCards = computed(() => [
+  {
+    label: "定时任务数",
+    value: `${scheduledTaskCount.value}`,
+    description: scheduledTaskCount.value > 0 ? "后台任务正在按计划执行。" : "当前版本暂未配置自动任务。"
+  },
+  {
+    label: "订阅统计",
+    value: `${configuredSubscriptionCount.value}/${platforms.value.length}`,
+    description:
+      platforms.value.length > 0
+        ? `已配置密钥 ${configuredSubscriptionCount.value} 个，启用平台 ${enabledPlatformCount.value} 个。`
+        : "还没有接入平台，暂时没有可统计的订阅。"
+  },
+  {
+    label: "默认平台",
+    value: activePlatform.value?.name ?? openClawDefaultPlatformName,
+    description: activePlatform.value
+      ? `${activePlatform.value.protocol.toUpperCase()} · ${activePlatform.value.model}`
+      : "可在平台管理中设置默认接入平台。"
+  },
+  {
+    label: "最近调用",
+    value: latestRequestLog.value ? formatTime(latestRequestLog.value.createdAt) : "暂无记录",
+    description: latestRequestLog.value
+      ? `${latestRequestLog.value.platformName} · ${isFailedLog(latestRequestLog.value) ? "失败" : "成功"}`
+      : "还没有请求日志，先发起一次对话试试。"
+  }
+]);
 
 let rafId = 0;
 let idleTimer = 0;
@@ -1122,7 +1161,9 @@ function openConsole(section: ConsoleSection) {
     startPanelAnimation();
   }
 
-  if (section === "platforms") {
+  if (section === "overview") {
+    statusText.value = "总览已展开，可以先快速查看当前运行状态和最近调用。";
+  } else if (section === "platforms") {
     statusText.value = "平台管理已展开，可以新增、切换默认平台或修改接口配置。";
   } else if (section === "timeline") {
     statusText.value = "调用时间线已展开，最近请求会按时间倒序显示。";
@@ -2636,32 +2677,55 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <div class="desktop-console-panel__metrics">
-        <article v-for="metric in metrics" :key="metric.label" class="desktop-metric-card">
-          <span>{{ metric.label }}</span>
-          <strong>{{ metric.value }}</strong>
-        </article>
-      </div>
-
       <nav class="desktop-console-nav">
         <button
-          v-for="item in [
-            { id: 'platforms', label: '平台管理' },
-            { id: 'timeline', label: '时间线' },
-            { id: 'sessions', label: '会话视图' },
-            { id: 'failures', label: '失败分析' }
-          ]"
+          v-for="item in consoleSections"
           :key="item.id"
           class="desktop-console-nav__item"
           :class="{ active: activeSection === item.id }"
           type="button"
-          @click="openConsole(item.id as ConsoleSection)"
+          @click="openConsole(item.id)"
         >
           {{ item.label }}
         </button>
       </nav>
 
-      <div v-if="activeSection === 'platforms'" class="desktop-console-body desktop-console-body--platforms">
+      <div v-if="activeSection === 'overview'" class="desktop-console-body desktop-console-body--overview">
+        <section class="section-block overview-section">
+          <header class="section-block__header">
+            <div>
+              <h3>统计信息</h3>
+              <p>保留原控制台核心指标，集中展示平台、调用、网关和 Token 情况。</p>
+            </div>
+          </header>
+
+          <div class="desktop-console-panel__metrics overview-metrics-grid">
+            <article v-for="metric in metrics" :key="metric.label" class="desktop-metric-card">
+              <span>{{ metric.label }}</span>
+              <strong>{{ metric.value }}</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="section-block overview-section">
+          <header class="section-block__header">
+            <div>
+              <h3>当前状态</h3>
+              <p>聚焦今天最常看的运行状态，避免在多个页签之间来回切换。</p>
+            </div>
+          </header>
+
+          <div class="overview-status-grid">
+            <article v-for="card in overviewStatusCards" :key="card.label" class="overview-status-card">
+              <span>{{ card.label }}</span>
+              <strong>{{ card.value }}</strong>
+              <p>{{ card.description }}</p>
+            </article>
+          </div>
+        </section>
+      </div>
+
+      <div v-else-if="activeSection === 'platforms'" class="desktop-console-body desktop-console-body--platforms">
         <section class="section-block section-block--platforms">
           <header class="section-block__header">
             <div>
