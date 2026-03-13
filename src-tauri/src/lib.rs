@@ -1,3 +1,4 @@
+use base64::Engine;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -181,6 +182,21 @@ struct OpenClawMessageLogItem {
 struct OpenClawMessageLogResponse {
     detail: String,
     logs: Vec<OpenClawMessageLogItem>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingToolCall {
+    tool_name: String,
+    arguments: String,
+    created_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioFilePayload {
+    data_url: String,
+    mime_type: String,
+    file_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -478,6 +494,66 @@ fn extract_message_text(message: &serde_json::Map<String, Value>) -> Option<Stri
         .map(|text| sanitize_staff_output(&text))
 }
 
+fn extract_tool_calls(message: &serde_json::Map<String, Value>) -> Vec<(String, PendingToolCall)> {
+    let Some(items) = message.get("content").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    let created_at = extract_message_timestamp_ms(message, 0);
+    let mut output = Vec::new();
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        if obj.get("type").and_then(Value::as_str) != Some("toolCall") {
+            continue;
+        }
+
+        let Some(tool_call_id) = obj.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let tool_name = obj
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("tool")
+            .to_string();
+        let arguments = obj
+            .get("arguments")
+            .map(|value| serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()))
+            .unwrap_or_else(|| "{}".to_string());
+
+        output.push((
+            tool_call_id.to_string(),
+            PendingToolCall {
+                tool_name,
+                arguments,
+                created_at,
+            },
+        ));
+    }
+
+    output
+}
+
+fn extract_tool_result_text(message: &serde_json::Map<String, Value>) -> Option<String> {
+    let text = extract_message_text(message)?;
+    let details = message.get("details").and_then(Value::as_object);
+    let audio_path = details
+        .and_then(|value| value.get("audioPath"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(path) = audio_path {
+        if text.contains(path) {
+            return Some(text);
+        }
+        return Some(format!("{text}\n{path}"));
+    }
+
+    Some(text)
+}
+
 fn infer_openclaw_response_status(text: &str) -> (u16, Option<String>) {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -577,6 +653,8 @@ fn load_openclaw_message_logs_from_session_file(
     let platform_name = format!("OpenClaw 运行时 / {agent_id}");
 
     let mut pending_user: Option<(String, i64)> = None;
+    let mut pending_tool_calls: std::collections::HashMap<String, PendingToolCall> =
+        std::collections::HashMap::new();
     let mut output = Vec::new();
 
     for (line_index, line) in raw.lines().enumerate() {
@@ -596,35 +674,98 @@ fn load_openclaw_message_logs_from_session_file(
         let role = message.get("role").and_then(Value::as_str).unwrap_or_default();
         let fallback_created_at = i64::try_from(line_index).unwrap_or(0);
         let created_at = extract_message_timestamp_ms(message, fallback_created_at);
-        let Some(text) = extract_message_text(message) else {
-            continue;
-        };
 
         if role == "user" {
+            let Some(text) = extract_message_text(message) else {
+                continue;
+            };
             pending_user = Some((text, created_at));
             continue;
         }
 
-        if role != "assistant" {
+        if role == "assistant" {
+            for (tool_call_id, tool_call) in extract_tool_calls(message) {
+                pending_tool_calls.insert(tool_call_id, tool_call);
+            }
+
+            let Some(text) = extract_message_text(message) else {
+                continue;
+            };
+
+            let (request_body, request_at) = pending_user.take().unwrap_or_else(|| ("".to_string(), created_at));
+            let duration = created_at.saturating_sub(request_at);
+            let duration = u32::try_from(duration).unwrap_or(u32::MAX);
+            let (response_status, error) = infer_openclaw_response_status(&text);
+            let (prompt_tokens, completion_tokens, total_tokens, cache_read_input_tokens) = extract_usage_numbers(message);
+
+            output.push(OpenClawMessageLogItem {
+                id: format!("runtime-{agent_id}-{session_id}-{created_at}"),
+                session_id: format!("runtime-{agent_id}-{session_id}"),
+                platform_id: platform_id.clone(),
+                platform_name: platform_name.clone(),
+                protocol: "openai".to_string(),
+                method: "MESSAGE".to_string(),
+                endpoint: endpoint.clone(),
+                base_url: Some(base_url.clone()),
+                path: Some(path.clone()),
+                request_body,
+                response_status,
+                response_body: text.clone(),
+                stream_summary: Some(text),
+                duration,
+                first_token_time: Some(duration),
+                error,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                cache_read_input_tokens,
+                created_at,
+            });
             continue;
         }
 
-        let (request_body, request_at) = pending_user.take().unwrap_or_else(|| ("".to_string(), created_at));
+        if role != "toolResult" {
+            continue;
+        }
+
+        let tool_call_id = message
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let tool_name = message
+            .get("toolName")
+            .and_then(Value::as_str)
+            .unwrap_or("tool");
+        let Some(text) = extract_tool_result_text(message) else {
+            continue;
+        };
+        let pending_tool_call = pending_tool_calls.remove(&tool_call_id);
+        let request_at = pending_tool_call
+            .as_ref()
+            .map(|value| value.created_at)
+            .unwrap_or(created_at);
         let duration = created_at.saturating_sub(request_at);
         let duration = u32::try_from(duration).unwrap_or(u32::MAX);
         let (response_status, error) = infer_openclaw_response_status(&text);
-        let (prompt_tokens, completion_tokens, total_tokens, cache_read_input_tokens) = extract_usage_numbers(message);
+        let resolved_tool_name = pending_tool_call
+            .as_ref()
+            .map(|value| value.tool_name.clone())
+            .unwrap_or_else(|| tool_name.to_string());
+        let request_body = pending_tool_call
+            .map(|value| value.arguments)
+            .unwrap_or_else(|| "{}".to_string());
 
         output.push(OpenClawMessageLogItem {
-            id: format!("runtime-{agent_id}-{session_id}-{created_at}"),
+            id: format!("runtime-{agent_id}-{session_id}-tool-{created_at}"),
             session_id: format!("runtime-{agent_id}-{session_id}"),
             platform_id: platform_id.clone(),
-            platform_name: platform_name.clone(),
+            platform_name: format!("{platform_name} / {resolved_tool_name}"),
             protocol: "openai".to_string(),
-            method: "MESSAGE".to_string(),
-            endpoint: endpoint.clone(),
+            method: format!("TOOL:{resolved_tool_name}"),
+            endpoint: format!("{endpoint}/tool/{resolved_tool_name}"),
             base_url: Some(base_url.clone()),
-            path: Some(path.clone()),
+            path: Some(format!("{path}/tool/{resolved_tool_name}")),
             request_body,
             response_status,
             response_body: text.clone(),
@@ -632,10 +773,10 @@ fn load_openclaw_message_logs_from_session_file(
             duration,
             first_token_time: Some(duration),
             error,
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
-            cache_read_input_tokens,
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
             created_at,
         });
     }
@@ -1100,6 +1241,52 @@ fn load_document_file_snapshot() -> Result<SourceFileSnapshotResponse, String> {
         source_path: resolve_workspace_main_root().display().to_string(),
         detail: format!("已从 OpenClaw 核心文档读取 {} 份文件。", items.len()),
         items,
+    })
+}
+
+fn guess_audio_mime_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("m4a") => "audio/mp4",
+        Some("aac") => "audio/aac",
+        Some("ogg") => "audio/ogg",
+        Some("flac") => "audio/flac",
+        _ => "application/octet-stream",
+    }
+}
+
+#[tauri::command]
+fn read_local_audio_file(path: String) -> Result<AudioFilePayload, String> {
+    let resolved = PathBuf::from(path.trim());
+    if resolved.as_os_str().is_empty() {
+        return Err("音频路径不能为空。".to_string());
+    }
+
+    if !resolved.is_file() {
+        return Err(format!("音频文件不存在：{}", resolved.display()));
+    }
+
+    let bytes = std::fs::read(&resolved)
+        .map_err(|error| format!("读取音频文件失败（{}）：{error}", resolved.display()))?;
+    let mime_type = guess_audio_mime_type(&resolved).to_string();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let data_url = format!("data:{mime_type};base64,{encoded}");
+    let file_name = resolved
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("audio")
+        .to_string();
+
+    Ok(AudioFilePayload {
+        data_url,
+        mime_type,
+        file_name,
     })
 }
 
@@ -2239,6 +2426,7 @@ pub fn run() {
             openclaw_chat,
             sync_local_proxy,
             check_openclaw_gateway,
+            read_local_audio_file,
             load_openclaw_message_logs,
             load_staff_snapshot,
             load_task_snapshot,

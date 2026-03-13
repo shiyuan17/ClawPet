@@ -93,6 +93,12 @@ type ChatMessage = {
   status: "pending" | "done" | "error";
 };
 
+type AudioFilePayload = {
+  dataUrl: string;
+  mimeType: string;
+  fileName: string;
+};
+
 type PlatformDraft = {
   id: string;
   name: string;
@@ -1135,6 +1141,9 @@ let panelMoveStart = { x: 0, y: 0, panelX: 0, panelY: 0 };
 let panelResizeStart = { x: 0, y: 0, width: 0, height: 0 };
 let gatewayMonitorTimer = 0;
 let runtimeLogTimer = 0;
+let activeVoiceAudio: HTMLAudioElement | null = null;
+const activeVoiceMessageId = ref<string | null>(null);
+const audioPayloadCache = new Map<string, AudioFilePayload>();
 
 type TauriWindowApi = {
   close: () => Promise<void> | void;
@@ -1168,6 +1177,128 @@ function safeJson(value: unknown) {
     return JSON.stringify(value, null, 2);
   } catch {
     return String(value);
+  }
+}
+
+function extractAudioPath(text: string) {
+  const match = text.match(/(?:^|\s|MEDIA:)(\/[^\s"'<>]+\.(?:mp3|wav|m4a|aac|ogg|flac))(?:$|\s)/i);
+  return match?.[1] ?? null;
+}
+
+function getAudioMessagePath(message: ChatMessage) {
+  return extractAudioPath(message.text);
+}
+
+function isAudioMessage(message: ChatMessage) {
+  return Boolean(getAudioMessagePath(message));
+}
+
+function getAudioMessageLabel(message: ChatMessage) {
+  const audioPath = getAudioMessagePath(message);
+  if (!audioPath) {
+    return message.text;
+  }
+
+  return audioPath.split("/").filter(Boolean).pop() ?? "语音消息";
+}
+
+function isAudioMessagePlaying(messageId: string) {
+  return activeVoiceMessageId.value === messageId;
+}
+
+async function loadAudioPayload(path: string) {
+  const cached = audioPayloadCache.get(path);
+  if (cached) {
+    return cached;
+  }
+
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    throw new Error("当前环境不支持读取本地音频文件。");
+  }
+
+  const payload = (await invoke("read_local_audio_file", { path })) as AudioFilePayload;
+  audioPayloadCache.set(path, payload);
+  return payload;
+}
+
+function stopVoicePlayback() {
+  if (activeVoiceAudio) {
+    activeVoiceAudio.pause();
+    activeVoiceAudio.currentTime = 0;
+    activeVoiceAudio = null;
+  }
+
+  activeVoiceMessageId.value = null;
+}
+
+function buildRuntimeToolMessage(log: RequestLog): ChatMessage {
+  const text = (log.streamSummary?.trim() || log.responseBody?.trim() || "").trim();
+  return {
+    id: `runtime-tool-${log.id}`,
+    role: "assistant",
+    text,
+    status: "done"
+  };
+}
+
+function insertRuntimeToolMessages(beforeMessageId: string, logs: RequestLog[], afterMs: number) {
+  const pendingIndex = chatMessages.value.findIndex((message) => message.id === beforeMessageId);
+  if (pendingIndex < 0) {
+    return;
+  }
+
+  const toolMessages = logs
+    .filter((log) => log.platformId.startsWith("openclaw-runtime-"))
+    .filter((log) => log.method.startsWith("TOOL:"))
+    .filter((log) => log.createdAt >= afterMs)
+    .filter((log) => !chatMessages.value.some((message) => message.id === `runtime-tool-${log.id}`))
+    .filter((log) => Boolean(extractAudioPath(log.streamSummary || log.responseBody || "")))
+    .sort((left, right) => left.createdAt - right.createdAt)
+    .map(buildRuntimeToolMessage);
+
+  if (!toolMessages.length) {
+    return;
+  }
+
+  chatMessages.value.splice(pendingIndex, 0, ...toolMessages);
+}
+
+async function handleAudioMessageClick(message: ChatMessage) {
+  const path = getAudioMessagePath(message);
+  if (!path) {
+    return;
+  }
+
+  if (isAudioMessagePlaying(message.id)) {
+    stopVoicePlayback();
+    return;
+  }
+
+  try {
+    stopVoicePlayback();
+    const payload = await loadAudioPayload(path);
+    const audio = new Audio(payload.dataUrl);
+    activeVoiceAudio = audio;
+    activeVoiceMessageId.value = message.id;
+    audio.addEventListener("ended", () => {
+      if (activeVoiceAudio === audio) {
+        activeVoiceAudio = null;
+        activeVoiceMessageId.value = null;
+      }
+    });
+    audio.addEventListener("pause", () => {
+      if (activeVoiceAudio === audio && audio.currentTime < audio.duration) {
+        activeVoiceAudio = null;
+        activeVoiceMessageId.value = null;
+      }
+    });
+    await audio.play();
+    statusText.value = `正在播放 ${payload.fileName}。`;
+  } catch (error) {
+    stopVoicePlayback();
+    statusText.value = error instanceof Error ? error.message : "语音播放失败。";
   }
 }
 
@@ -2132,6 +2263,7 @@ async function submitChat() {
   const platformId = effectivePlatform?.id ?? "openclaw-default";
   const platformName = effectivePlatform?.name ?? "OpenClaw 默认通道";
   const startedAt = performance.now();
+  const startedAtMs = Date.now();
 
   chatMessages.value.push({
     id: createMessageId("user"),
@@ -2160,6 +2292,8 @@ async function submitChat() {
     const promptTokens = response.usage?.promptTokens ?? estimateTokenCount(requestBody);
     const completionTokens = response.usage?.completionTokens ?? estimateTokenCount(response.text);
     const totalTokens = response.usage?.totalTokens ?? promptTokens + completionTokens;
+    const runtimeLogs = await refreshOpenClawMessageLogs();
+    insertRuntimeToolMessages(pendingId, runtimeLogs, startedAtMs);
     const pendingMessage = chatMessages.value.find((message) => message.id === pendingId);
     if (pendingMessage) {
       pendingMessage.text = response.text;
@@ -2593,16 +2727,18 @@ async function refreshOpenClawMessageLogs() {
   if (!invoke) {
     runtimeRequestLogs.value = [];
     runtimeLogDetail.value = "当前环境不支持读取 OpenClaw 运行时消息。";
-    return;
+    return [];
   }
 
   try {
     const result = (await invoke("load_openclaw_message_logs")) as OpenClawMessageLogResponse;
     runtimeRequestLogs.value = Array.isArray(result.logs) ? result.logs : [];
     runtimeLogDetail.value = result.detail ?? "OpenClaw 运行时消息读取完成。";
+    return runtimeRequestLogs.value;
   } catch (error) {
     runtimeRequestLogs.value = [];
     runtimeLogDetail.value = error instanceof Error ? error.message : "OpenClaw 运行时消息读取失败。";
+    return [];
   }
 }
 
@@ -3143,6 +3279,33 @@ function maskSensitiveHeaders(headers?: Record<string, string>) {
   );
 }
 
+async function copyText(text: string, successMessage: string) {
+  const value = text.trim();
+  if (!value) {
+    statusText.value = "当前没有可复制的内容。";
+    return;
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    statusText.value = successMessage;
+  } catch (error) {
+    statusText.value = error instanceof Error ? error.message : "复制失败，请稍后再试。";
+  }
+}
+
 function buildRequestHeaders(protocol: PlatformProtocol, apiKey?: string) {
   const headers: Record<string, string> = {
     "Content-Type": "application/json"
@@ -3465,6 +3628,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  stopVoicePlayback();
   window.cancelAnimationFrame(rafId);
   window.cancelAnimationFrame(chatAnimationFrame);
   window.cancelAnimationFrame(panelAnimationFrame);
@@ -3562,10 +3726,31 @@ onBeforeUnmount(() => {
               v-for="(message, index) in chatMessages"
               :key="message.id"
               class="chat-bubble"
-              :class="[`chat-bubble--${message.role}`, `chat-bubble--${message.status}`]"
+              :class="[
+                `chat-bubble--${message.role}`,
+                `chat-bubble--${message.status}`,
+                { 'chat-bubble--audio': isAudioMessage(message) }
+              ]"
               :style="getBubbleStyle(index)"
             >
-              <p>{{ message.text }}</p>
+              <button
+                v-if="isAudioMessage(message)"
+                class="voice-message"
+                :class="{ 'is-playing': isAudioMessagePlaying(message.id) }"
+                type="button"
+                @click="handleAudioMessageClick(message)"
+              >
+                <span
+                  class="voice-message__icon"
+                  :class="isAudioMessagePlaying(message.id) ? 'is-pause' : 'is-play'"
+                  aria-hidden="true"
+                />
+                <span class="voice-message__body">
+                  <strong>{{ getAudioMessageLabel(message) }}</strong>
+                  <small>{{ isAudioMessagePlaying(message.id) ? "点击停止播放" : "点击播放语音" }}</small>
+                </span>
+              </button>
+              <p v-else>{{ message.text }}</p>
             </article>
           </div>
 
@@ -3785,12 +3970,28 @@ onBeforeUnmount(() => {
                   <strong>{{ formatCacheTokens(selectedTimelineLog) }}</strong>
                 </div>
               </div>
-              <div class="detail-endpoint">{{ getLogRequestUrl(selectedTimelineLog) }}</div>
+              <div class="detail-copy-row">
+                <div class="detail-endpoint">{{ getLogRequestUrl(selectedTimelineLog) }}</div>
+                <button
+                  class="detail-copy-button"
+                  type="button"
+                  @click="copyText(getLogRequestUrl(selectedTimelineLog), '已复制请求地址。')"
+                >
+                  复制
+                </button>
+              </div>
             </div>
 
             <div v-if="selectedTimelineLog.requestHeaders && Object.keys(selectedTimelineLog.requestHeaders).length > 0" class="detail-code">
               <div class="detail-code__header">
                 <h4>请求头</h4>
+                <button
+                  class="detail-copy-button"
+                  type="button"
+                  @click="copyText(JSON.stringify(maskSensitiveHeaders(selectedTimelineLog.requestHeaders), null, 2), '已复制请求头。')"
+                >
+                  复制
+                </button>
               </div>
               <pre>{{ JSON.stringify(maskSensitiveHeaders(selectedTimelineLog.requestHeaders), null, 2) }}</pre>
             </div>
@@ -3811,6 +4012,13 @@ onBeforeUnmount(() => {
             <div class="detail-code">
               <div class="detail-code__header">
                 <h4>{{ getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).label }}</h4>
+                <button
+                  class="detail-copy-button"
+                  type="button"
+                  @click="copyText(getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).view.text, '已复制请求内容。')"
+                >
+                  复制
+                </button>
               </div>
               <pre>{{ getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).view.text }}</pre>
             </div>
@@ -3915,12 +4123,28 @@ onBeforeUnmount(() => {
                   <strong>{{ selectedSession.promptTokens }}/{{ selectedSession.completionTokens }}</strong>
                 </div>
               </div>
-              <div class="detail-endpoint detail-endpoint--soft">{{ selectedSession.previewText }}</div>
+              <div class="detail-copy-row">
+                <div class="detail-endpoint detail-endpoint--soft">{{ selectedSession.previewText }}</div>
+                <button
+                  class="detail-copy-button"
+                  type="button"
+                  @click="copyText(selectedSession.previewText, '已复制会话摘要。')"
+                >
+                  复制
+                </button>
+              </div>
             </div>
 
             <div class="detail-code session-output-card">
               <div class="detail-code__header">
                 <h4>会话输出</h4>
+                <button
+                  class="detail-copy-button"
+                  type="button"
+                  @click="copyText(selectedSession.fullOutput, '已复制会话输出。')"
+                >
+                  复制
+                </button>
               </div>
               <pre>{{ selectedSession.fullOutput }}</pre>
             </div>
@@ -3928,6 +4152,13 @@ onBeforeUnmount(() => {
             <div v-if="selectedSession.latestError" class="detail-code detail-code--danger">
               <div class="detail-code__header">
                 <h4>最近一次失败</h4>
+                <button
+                  class="detail-copy-button"
+                  type="button"
+                  @click="copyText(selectedSession.latestError, '已复制失败信息。')"
+                >
+                  复制
+                </button>
               </div>
               <pre>{{ selectedSession.latestError }}</pre>
             </div>
@@ -4010,12 +4241,28 @@ onBeforeUnmount(() => {
                   <strong>{{ formatCacheTokens(selectedSessionLog) }}</strong>
                 </div>
               </div>
-              <div class="detail-endpoint">{{ getLogRequestUrl(selectedSessionLog) }}</div>
+              <div class="detail-copy-row">
+                <div class="detail-endpoint">{{ getLogRequestUrl(selectedSessionLog) }}</div>
+                <button
+                  class="detail-copy-button"
+                  type="button"
+                  @click="copyText(getLogRequestUrl(selectedSessionLog), '已复制请求地址。')"
+                >
+                  复制
+                </button>
+              </div>
             </div>
 
             <div v-if="selectedSessionLog.requestHeaders && Object.keys(selectedSessionLog.requestHeaders).length > 0" class="detail-code">
               <div class="detail-code__header">
                 <h4>请求头</h4>
+                <button
+                  class="detail-copy-button"
+                  type="button"
+                  @click="copyText(JSON.stringify(maskSensitiveHeaders(selectedSessionLog.requestHeaders), null, 2), '已复制请求头。')"
+                >
+                  复制
+                </button>
               </div>
               <pre>{{ JSON.stringify(maskSensitiveHeaders(selectedSessionLog.requestHeaders), null, 2) }}</pre>
             </div>
@@ -4037,6 +4284,13 @@ onBeforeUnmount(() => {
               <div class="detail-code__header">
                 <h4>{{ getActivePreviewSection(selectedSessionLog, sessionPreviewSection).label }}</h4>
                 <span>{{ getLogRequestUrl(selectedSessionLog) }}</span>
+                <button
+                  class="detail-copy-button"
+                  type="button"
+                  @click="copyText(getActivePreviewSection(selectedSessionLog, sessionPreviewSection).view.text, '已复制请求内容。')"
+                >
+                  复制
+                </button>
               </div>
               <pre>{{ getActivePreviewSection(selectedSessionLog, sessionPreviewSection).view.text }}</pre>
             </div>

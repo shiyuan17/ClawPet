@@ -2129,6 +2129,17 @@ select {
   line-height: 1.5;
 }
 
+.chat-bubble--audio {
+  padding: 6px;
+  border: 1px solid rgba(121, 73, 34, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 246, 242, 0.96)),
+    radial-gradient(circle at left top, rgba(236, 210, 184, 0.2), transparent 52%);
+  box-shadow:
+    0 10px 24px rgba(96, 57, 25, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
 .chat-bubble--assistant,
 .chat-bubble--system,
 .chat-bubble--pending,
@@ -2155,6 +2166,122 @@ select {
 .chat-bubble--error {
   background: rgba(255, 228, 228, 0.95);
   color: #8a2f2f;
+}
+
+.voice-message {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-width: 200px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(255, 250, 246, 0.92), rgba(249, 242, 235, 0.82));
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 0.16s ease,
+    background 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.voice-message:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, rgba(255, 248, 241, 0.98), rgba(245, 236, 227, 0.9));
+  box-shadow: 0 10px 20px rgba(121, 73, 34, 0.08);
+}
+
+.voice-message__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(140, 84, 40, 0.16), rgba(191, 124, 74, 0.28));
+  color: #7a4822;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 4px 12px rgba(121, 73, 34, 0.08);
+}
+
+.voice-message__icon::before,
+.voice-message__icon::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.voice-message__icon.is-play::before {
+  left: calc(50% + 1px);
+  width: 0;
+  height: 0;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 11px solid #7a4822;
+}
+
+.voice-message__icon.is-pause::before,
+.voice-message__icon.is-pause::after {
+  width: 4px;
+  height: 14px;
+  border-radius: 999px;
+  background: #7a4822;
+}
+
+.voice-message__icon.is-pause::before {
+  left: calc(50% - 4px);
+}
+
+.voice-message__icon.is-pause::after {
+  left: calc(50% + 4px);
+}
+
+.voice-message:hover .voice-message__icon {
+  transform: scale(1.03);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 6px 14px rgba(121, 73, 34, 0.12);
+}
+
+.voice-message__body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.voice-message__body strong,
+.voice-message__body small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-message__body strong {
+  color: #3d2415;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.voice-message__body small {
+  color: rgba(94, 60, 35, 0.72);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.voice-message.is-playing .voice-message__icon {
+  background: linear-gradient(135deg, rgba(140, 84, 40, 0.22), rgba(191, 124, 74, 0.34));
+}
+
+.voice-message.is-playing .voice-message__body small {
+  color: #a14e39;
+  font-weight: 700;
 }
 
 .desktop-chat-panel__composer {
@@ -2286,9 +2413,18 @@ select {
   font-size: 14px;
   line-height: 1.35;
   color: #3d2818;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.detail-copy-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
 }
 
 .detail-endpoint {
+  flex: 1;
   padding: 10px 12px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.92);
@@ -2297,11 +2433,36 @@ select {
   font-size: 11px;
   line-height: 1.5;
   word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .detail-endpoint--soft {
   font-family: inherit;
   word-break: break-word;
+}
+
+.detail-copy-button {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border: 1px solid rgba(121, 73, 34, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #6e4120;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.detail-copy-button:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 249, 243, 0.98);
+  border-color: rgba(121, 73, 34, 0.2);
 }
 
 .detail-meta {
@@ -2366,6 +2527,7 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -2386,6 +2548,8 @@ select {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .detail-tab-row {
