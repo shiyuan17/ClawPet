@@ -1442,6 +1442,10 @@ function shouldSleep(now = performance.now()) {
 
 function resolveBaseAnimationName(now = performance.now()): AnimationName {
   if (isSending.value) {
+    return "think";
+  }
+
+  if (isChatOpen.value && chatInput.value.trim()) {
     return "chat_typing";
   }
 
@@ -3414,6 +3418,10 @@ watch([isChatOpen, isConsoleOpen, isDragging, isSending], () => {
   applyBaseAnimation();
 });
 
+watch(chatInput, () => {
+  applyBaseAnimation();
+});
+
 watch(
   chatMessages,
   () => {
@@ -5063,7 +5071,7 @@ onBeforeUnmount(() => {
     >
       <button class="desktop-context-menu__item" type="button" @click="openChatPanel()">聊天</button>
       <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">平台管理</button>
-      <button class="desktop-context-menu__item" type="button" @click="openConsole('tasks')">任务管理</button>
+      <button class="desktop-context-menu__item" type="button" @click="openLogAnalysis('timeline')">日志分析</button>
       <button class="desktop-context-menu__item desktop-context-menu__item--danger" type="button" @click="handleQuitClick">
         退出
       </button>
