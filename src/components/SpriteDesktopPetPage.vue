@@ -72,10 +72,10 @@ type ConsoleSection =
   | "staff"
   | "memory"
   | "docs"
-  | "tasks"
-  | "timeline"
-  | "sessions"
-  | "failures";
+  | "tasks";
+
+type LogAnalysisView = "timeline" | "sessions" | "failures";
+type PanelMode = "console" | "logs";
 
 type AnimationDefinition = {
   name: AnimationName;
@@ -255,6 +255,11 @@ type GatewayMonitorState = {
   latencyMs?: number | null;
 };
 
+type OpenClawMessageLogResponse = {
+  detail: string;
+  logs: RequestLog[];
+};
+
 function createEmptyMemoryDraft(): MemoryDraft {
   return {
     id: "",
@@ -402,14 +407,17 @@ const isWindowActive = ref(typeof document !== "undefined" ? document.hasFocus()
 const contextMenu = ref({ visible: false, x: 0, y: 0 });
 const isChatOpen = ref(false);
 const isConsoleOpen = ref(false);
+const activePanelMode = ref<PanelMode>("console");
 const activeSection = ref<ConsoleSection>("overview");
+const activeLogAnalysisView = ref<LogAnalysisView>("timeline");
 const isSending = ref(false);
 const chatInput = ref("");
 const chatMessages = ref<ChatMessage[]>([...defaultChatMessages]);
 const chatMotionValue = ref(0);
 const panelMotionValue = ref(0);
 const bubbleMotionValue = ref(1);
-const requestLogs = ref<RequestLog[]>([]);
+const localRequestLogs = ref<RequestLog[]>([]);
+const runtimeRequestLogs = ref<RequestLog[]>([]);
 const platforms = ref<PlatformConfig[]>([]);
 const staffMembers = ref<StaffMemberSnapshot[]>([]);
 const memoryRecords = ref<MemoryRecord[]>([]);
@@ -421,8 +429,7 @@ const editingPlatformId = ref<string | null>(null);
 const platformForm = ref<PlatformDraft>(createPlatformDraft());
 const showPlatformTips = ref(false);
 const isPlatformModalOpen = ref(false);
-const selectedGlobalPreset = ref("");
-const selectedChinaPreset = ref("");
+const selectedPresetKey = ref("");
 const selectedLogId = ref<string | null>(null);
 const selectedSessionId = ref<string | null>(null);
 const selectedSessionLogId = ref<string | null>(null);
@@ -445,6 +452,7 @@ const staffSnapshotSourcePath = ref("");
 const staffMissionStatement = ref("构建可持续自治的 AI 员工体系，持续完成高价值任务。");
 const taskSnapshotDetail = ref("正在读取任务调度...");
 const taskSnapshotSourcePath = ref("");
+const runtimeLogDetail = ref("正在读取 OpenClaw 运行时消息...");
 const memorySnapshotDetail = ref("正在读取记忆文件...");
 const memorySnapshotSourcePath = ref("");
 const documentSnapshotDetail = ref("正在读取核心文档...");
@@ -485,10 +493,7 @@ const consoleSections: Array<{ id: ConsoleSection; label: string }> = [
   { id: "staff", label: "员工管理" },
   { id: "memory", label: "记忆管理" },
   { id: "docs", label: "文档管理" },
-  { id: "tasks", label: "任务管理" },
-  { id: "timeline", label: "时间线" },
-  { id: "sessions", label: "会话视图" },
-  { id: "failures", label: "失败分析" }
+  { id: "tasks", label: "任务管理" }
 ];
 
 function isImplicitSeededOpenAiPlatform(platform: PlatformConfig | null) {
@@ -511,6 +516,11 @@ const activeAnimation = computed(() => animations[currentAnimationName.value]);
 const currentFrame = computed(() => activeAnimation.value.config.frames[currentFrameIndex.value]);
 const activePlatform = computed(
   () => platforms.value.find((platform) => platform.id === activePlatformId.value && platform.enabled) || null
+);
+const requestLogs = computed<RequestLog[]>(() =>
+  [...localRequestLogs.value, ...runtimeRequestLogs.value]
+    .sort((left, right) => right.createdAt - left.createdAt)
+    .filter((log, index, items) => items.findIndex((candidate) => candidate.id === log.id) === index)
 );
 const enabledPlatformCount = computed(() => platforms.value.filter((platform) => platform.enabled).length);
 const configuredSubscriptionCount = computed(() => platforms.value.filter((platform) => platform.apiKey.trim()).length);
@@ -1115,6 +1125,7 @@ let panelResizePointerId: number | null = null;
 let panelMoveStart = { x: 0, y: 0, panelX: 0, panelY: 0 };
 let panelResizeStart = { x: 0, y: 0, width: 0, height: 0 };
 let gatewayMonitorTimer = 0;
+let runtimeLogTimer = 0;
 
 type TauriWindowApi = {
   close: () => Promise<void> | void;
@@ -1548,6 +1559,7 @@ function toggleChatPanel(nextValue?: boolean) {
 }
 
 function openConsole(section: ConsoleSection) {
+  activePanelMode.value = "console";
   activeSection.value = section;
   hideContextMenu();
   noteInteraction();
@@ -1576,14 +1588,36 @@ function openConsole(section: ConsoleSection) {
   } else if (section === "tasks") {
     statusText.value = "任务管理已展开，当前展示的是 openclaw cron 的真实调度快照。";
     void refreshTaskSnapshot();
-  } else if (section === "timeline") {
-    statusText.value = "调用时间线已展开，最近请求会按时间倒序显示。";
-  } else if (section === "sessions") {
-    statusText.value = "会话视图已展开，适合回看一段连续请求。";
-  } else {
-    statusText.value = "失败分析已展开，我帮你把问题聚合到一起了。";
   }
 
+  applyBaseAnimation();
+}
+
+function updateLogAnalysisStatus(view = activeLogAnalysisView.value) {
+  if (view === "timeline") {
+    statusText.value = "日志分析已打开，当前查看时间线。";
+  } else if (view === "sessions") {
+    statusText.value = "日志分析已打开，当前查看会话视图。";
+  } else {
+    statusText.value = "日志分析已打开，当前查看失败分析。";
+  }
+}
+
+function openLogAnalysis(view: LogAnalysisView = "timeline") {
+  activePanelMode.value = "logs";
+  activeLogAnalysisView.value = view;
+  hideContextMenu();
+  noteInteraction();
+
+  if (!isConsoleOpen.value) {
+    if (panelPlacement.value.mode === "auto") {
+      resetPanelPlacement();
+    }
+    isConsoleOpen.value = true;
+    startPanelAnimation();
+  }
+
+  updateLogAnalysisStatus(view);
   applyBaseAnimation();
 }
 
@@ -2123,7 +2157,7 @@ async function submitChat() {
       pendingMessage.status = "done";
     }
 
-    requestLogs.value = appendRequestLog({
+    localRequestLogs.value = appendRequestLog({
       sessionId: currentSessionId.value,
       platformId,
       platformName,
@@ -2162,7 +2196,7 @@ async function submitChat() {
       pendingMessage.status = "error";
     }
 
-    requestLogs.value = appendRequestLog({
+    localRequestLogs.value = appendRequestLog({
       sessionId: currentSessionId.value,
       platformId,
       platformName,
@@ -2183,7 +2217,7 @@ async function submitChat() {
     });
 
     statusText.value = "这次没有连上目标平台，我已经把失败原因记到日志里了。";
-    openConsole("failures");
+    openLogAnalysis("failures");
   } finally {
     isSending.value = false;
     applyBaseAnimation();
@@ -2226,20 +2260,18 @@ function handleUsePreset(preset: Omit<PlatformDraft, "id">) {
   openConsole("platforms");
 }
 
-function handlePresetSelect(kind: "global" | "china") {
-  const source = kind === "global" ? globalPlatformPresets.value : chinaPlatformPresets.value;
-  const selectedName = kind === "global" ? selectedGlobalPreset.value : selectedChinaPreset.value;
-  const preset = source.find((item) => item.name === selectedName);
+function resetPresetSelection() {
+  selectedPresetKey.value = "";
+}
+
+function handlePresetSelect() {
+  const preset = platformPresets.find((item) => `${item.region}:${item.name}` === selectedPresetKey.value);
   if (!preset) {
     return;
   }
 
   handleUsePreset(preset);
-  if (kind === "global") {
-    selectedGlobalPreset.value = "";
-  } else {
-    selectedChinaPreset.value = "";
-  }
+  resetPresetSelection();
 }
 
 function handleCreatePlatform() {
@@ -2247,6 +2279,7 @@ function handleCreatePlatform() {
   editingPlatformId.value = null;
   isEditingPlatform.value = true;
   isPlatformModalOpen.value = true;
+  resetPresetSelection();
 }
 
 function handleEditPlatform(platform: PlatformConfig) {
@@ -2271,6 +2304,7 @@ function handleCancelPlatformEdit() {
   editingPlatformId.value = null;
   isPlatformModalOpen.value = false;
   platformForm.value = createPlatformDraft();
+  resetPresetSelection();
 }
 
 function handleSavePlatform() {
@@ -2543,6 +2577,26 @@ async function refreshTaskSnapshot() {
   }
 }
 
+async function refreshOpenClawMessageLogs() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+
+  if (!invoke) {
+    runtimeRequestLogs.value = [];
+    runtimeLogDetail.value = "当前环境不支持读取 OpenClaw 运行时消息。";
+    return;
+  }
+
+  try {
+    const result = (await invoke("load_openclaw_message_logs")) as OpenClawMessageLogResponse;
+    runtimeRequestLogs.value = Array.isArray(result.logs) ? result.logs : [];
+    runtimeLogDetail.value = result.detail ?? "OpenClaw 运行时消息读取完成。";
+  } catch (error) {
+    runtimeRequestLogs.value = [];
+    runtimeLogDetail.value = error instanceof Error ? error.message : "OpenClaw 运行时消息读取失败。";
+  }
+}
+
 function formatMemoryStatus(_: string) {
   return "源文件";
 }
@@ -2659,16 +2713,16 @@ function handleNewConversation() {
 }
 
 function handleClearLogs() {
-  const confirmed = window.confirm("确认清空全部调用日志吗？");
+  const confirmed = window.confirm("确认清空桌宠本地记录的调用日志吗？OpenClaw 运行时消息会在下次刷新后继续显示。");
   if (!confirmed) {
     return;
   }
 
-  requestLogs.value = clearRequestLogs();
+  localRequestLogs.value = clearRequestLogs();
   selectedLogId.value = null;
   selectedSessionId.value = null;
   selectedFailureKey.value = null;
-  statusText.value = "调用日志已清空。";
+  statusText.value = "本地调用日志已清空，OpenClaw 运行时消息仍会继续监控。";
 }
 
 function handleExportLogs() {
@@ -2898,6 +2952,113 @@ function getLogRequestUrl(log: RequestLog) {
   }
 
   return log.endpoint;
+}
+
+function findPlatformById(platformId: string | null | undefined): PlatformConfig | null {
+  if (!platformId) {
+    return null;
+  }
+
+  return platforms.value.find((item) => item.id === platformId) ?? null;
+}
+
+function getPlatformPillClass(platformId: string | null | undefined) {
+  const platform = findPlatformById(platformId);
+
+  if (!platformId || platformId === "openclaw-default") {
+    return "platform-pill--default";
+  }
+
+  if (!platform) {
+    return "platform-pill--unknown";
+  }
+
+  if (!platform.enabled) {
+    return "platform-pill--disabled";
+  }
+
+  if (platform.id === activePlatformId.value) {
+    return "platform-pill--active";
+  }
+
+  return "platform-pill--normal";
+}
+
+function getPlatformOriginLabel(platformId: string | null | undefined) {
+  if (!platformId || platformId === "openclaw-default") {
+    return "默认通道";
+  }
+
+  if (platformId.startsWith("openclaw-runtime-")) {
+    return "运行时";
+  }
+
+  const platform = findPlatformById(platformId);
+  if (!platform) {
+    return "外部记录";
+  }
+
+  return "已配置平台";
+}
+
+function getPlatformInitials(platformName: string | null | undefined) {
+  const words = (platformName ?? "")
+    .split(/[\s/·\-_.]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (words.length >= 2) {
+    return `${words[0][0] ?? ""}${words[1][0] ?? ""}`.toUpperCase();
+  }
+
+  const compact = (platformName ?? "").replace(/[\s/·\-_.]+/g, "");
+  return compact.slice(0, 2).toUpperCase() || "PT";
+}
+
+function getPlatformIdentityToneClass(platformId: string | null | undefined, platformName: string | null | undefined) {
+  if (!platformId || platformId === "openclaw-default") {
+    return "platform-identity--default";
+  }
+
+  if (platformId.startsWith("openclaw-runtime-")) {
+    return "platform-identity--runtime";
+  }
+
+  const source = `${platformId ?? ""}:${platformName ?? ""}`;
+  const hash = Array.from(source).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const tones = ["platform-identity--amber", "platform-identity--sky", "platform-identity--mint", "platform-identity--rose"];
+  return tones[hash % tones.length];
+}
+
+function getPlatformCardAccentClass(
+  platformId: string | null | undefined,
+  prefix: "log-card" | "session-card" | "mini-log-card"
+): string {
+  const platform = findPlatformById(platformId);
+  if (!platformId || platformId === "openclaw-default") {
+    return `${prefix}--platform-default`;
+  }
+  if (!platform) {
+    return "";
+  }
+  if (platform.id === activePlatformId.value) {
+    return `${prefix}--platform-active`;
+  }
+  return "";
+}
+
+function getPlatformMetaLabel(
+  platformId: string | null | undefined,
+  protocol: PlatformProtocol | null | undefined
+): string {
+  const platform = findPlatformById(platformId);
+  const protocolLabel = protocol ? protocol.toUpperCase() : "";
+
+  if (platform && platform.id === activePlatformId.value) {
+    return protocolLabel ? `${protocolLabel} · 默认` : "默认";
+  }
+
+  return protocolLabel;
 }
 
 function getDefaultPreviewSection(log: RequestLog): PreviewSection {
@@ -3130,6 +3291,12 @@ watch(
   }
 );
 
+watch(activeLogAnalysisView, (view) => {
+  if (activePanelMode.value === "logs") {
+    updateLogAnalysisStatus(view);
+  }
+});
+
 watch(
   requestLogs,
   (logs) => {
@@ -3234,7 +3401,8 @@ onMounted(() => {
   currentSessionId.value = loadStoredSessionId();
   proxyPort.value = loadProxyPort();
   platforms.value = loadPlatforms();
-  requestLogs.value = loadRequestLogs(platforms.value);
+  localRequestLogs.value = loadRequestLogs(platforms.value);
+  void refreshOpenClawMessageLogs();
   void refreshStaffSnapshot();
   void refreshMemorySnapshot();
   void refreshDocumentSnapshot();
@@ -3260,6 +3428,9 @@ onMounted(() => {
   gatewayMonitorTimer = window.setInterval(() => {
     void refreshGatewayMonitor();
   }, 30000);
+  runtimeLogTimer = window.setInterval(() => {
+    void refreshOpenClawMessageLogs();
+  }, 15000);
   windowPointerMoveListener = (event: PointerEvent) => {
     handlePointerMove(event);
   };
@@ -3292,6 +3463,7 @@ onBeforeUnmount(() => {
   window.clearTimeout(idleTimer);
   window.clearInterval(cursorPassThroughTimer);
   window.clearInterval(gatewayMonitorTimer);
+  window.clearInterval(runtimeLogTimer);
   if (windowPointerMoveListener) {
     window.removeEventListener("pointermove", windowPointerMoveListener);
   }
@@ -3348,6 +3520,18 @@ onBeforeUnmount(() => {
           <strong>对话</strong>
         </div>
         <div class="desktop-console-panel__actions">
+          <button
+            class="desktop-chat-window__icon-button desktop-chat-window__icon-button--ghost"
+            type="button"
+            aria-label="新建会话"
+            title="新会话"
+            @click="handleNewConversation"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M10 4v12" />
+              <path d="M4 10h12" />
+            </svg>
+          </button>
           <button
             class="desktop-chat-window__icon-button desktop-chat-window__icon-button--ghost"
             type="button"
@@ -3410,7 +3594,7 @@ onBeforeUnmount(() => {
       :style="consolePanelStyle"
     >
       <header class="desktop-console-panel__header desktop-console-panel__dragbar" @pointerdown="handlePanelDragStart">
-        <div>
+        <div v-if="activePanelMode === 'console'">
           <p class="desktop-console-panel__eyebrow">ClawPet Command Deck</p>
           <strong>运营控制台</strong>
           <p class="desktop-console-panel__intro">
@@ -3419,18 +3603,33 @@ onBeforeUnmount(() => {
             ，这里已经扩展为平台、员工、记忆、文档、任务统一管理台。
           </p>
         </div>
+        <div v-else>
+          <p class="desktop-console-panel__eyebrow">ClawPet Command Deck</p>
+          <strong>日志分析</strong>
+          <p class="desktop-console-panel__intro">集中查看时间线、会话视图和失败分析，不再混入控制台导航。</p>
+        </div>
         <div class="desktop-console-panel__actions">
-          <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="handleNewConversation">
-            新会话
+          <button
+            v-if="activePanelMode === 'console'"
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            @click="openLogAnalysis()"
+          >
+            日志分析
           </button>
-          <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="resetPanelPlacement">
-            复位窗口
+          <button
+            v-else
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            @click="openConsole('platforms')"
+          >
+            平台管理
           </button>
           <button class="desktop-console-panel__action" type="button" @click="toggleConsolePanel(false)">收起</button>
         </div>
       </header>
 
-      <nav class="desktop-console-nav">
+      <nav v-if="activePanelMode === 'console'" class="desktop-console-nav">
         <button
           v-for="item in consoleSections"
           :key="item.id"
@@ -3443,7 +3642,457 @@ onBeforeUnmount(() => {
         </button>
       </nav>
 
-      <div v-if="activeSection === 'overview'" class="desktop-console-body desktop-console-body--overview">
+      <nav v-else class="desktop-console-nav">
+        <button
+          class="desktop-console-nav__item"
+          :class="{ active: activeLogAnalysisView === 'timeline' }"
+          type="button"
+          @click="activeLogAnalysisView = 'timeline'"
+        >
+          时间线
+        </button>
+        <button
+          class="desktop-console-nav__item"
+          :class="{ active: activeLogAnalysisView === 'sessions' }"
+          type="button"
+          @click="activeLogAnalysisView = 'sessions'"
+        >
+          会话视图
+        </button>
+        <button
+          class="desktop-console-nav__item"
+          :class="{ active: activeLogAnalysisView === 'failures' }"
+          type="button"
+          @click="activeLogAnalysisView = 'failures'"
+        >
+          失败分析
+        </button>
+      </nav>
+
+      <div v-if="activePanelMode === 'logs'" class="desktop-console-body desktop-console-body--split">
+        <template v-if="activeLogAnalysisView === 'timeline'">
+        <section class="section-block">
+          <header class="section-block__header">
+            <div>
+              <h3>调用时间线</h3>
+              <p>按时间倒序查看所有请求，便于回放最近发生了什么。</p>
+            </div>
+            <div class="toolbar-actions">
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="handleExportLogs">
+                导出
+              </button>
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="handleClearLogs">
+                清空
+              </button>
+            </div>
+          </header>
+
+          <div class="log-list">
+            <button
+              v-for="log in timelineEntries"
+              :key="log.id"
+              class="log-card"
+              :class="[
+                { active: selectedTimelineLog?.id === log.id },
+                getPlatformCardAccentClass(log.platformId, 'log-card')
+              ]"
+              type="button"
+              @click="selectedLogId = log.id"
+            >
+              <div class="log-card__headline">
+                <div
+                  class="platform-identity"
+                  :class="[getPlatformPillClass(log.platformId), getPlatformIdentityToneClass(log.platformId, log.platformName)]"
+                >
+                  <span class="platform-identity__avatar">{{ getPlatformInitials(log.platformName) }}</span>
+                  <span class="platform-identity__body">
+                    <span class="platform-identity__eyebrow">
+                      <span>{{ getPlatformOriginLabel(log.platformId) }}</span>
+                      <span>{{ getPlatformMetaLabel(log.platformId, log.protocol) || "协议未知" }}</span>
+                    </span>
+                    <span class="platform-identity__name">{{ log.platformName }}</span>
+                  </span>
+                </div>
+                <span>{{ formatTime(log.createdAt) }}</span>
+              </div>
+              <p>{{ summarizeLogText(log) }}</p>
+              <small :data-status="isFailedLog(log) ? 'error' : 'success'">
+                {{ log.method }} · {{ isFailedLog(log) ? "失败" : "成功" }} · {{ formatDuration(log.duration) }}
+              </small>
+            </button>
+            <div v-if="timelineEntries.length === 0" class="empty-state">还没有调用记录，先去和桌宠聊两句吧。</div>
+          </div>
+        </section>
+
+        <aside class="section-block detail-panel">
+          <header class="section-block__header">
+            <div>
+              <h3>请求详情</h3>
+              <p>选中左侧条目后，可直接查看状态卡片、请求头和完整内容分段。</p>
+            </div>
+          </header>
+
+          <template v-if="selectedTimelineLog">
+            <div class="detail-stat-grid">
+              <article class="detail-stat-card detail-stat-card--primary">
+                <span>状态码</span>
+                <strong>{{ selectedTimelineLog.responseStatus || "未返回" }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>耗时</span>
+                <strong>{{ formatLatencyStat(selectedTimelineLog.duration) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>TTFT</span>
+                <strong>{{ formatLatencyStat(selectedTimelineLog.firstTokenTime) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>输出速度</span>
+                <strong>{{ formatSpeed(selectedTimelineLog.tokensPerSecond) }}</strong>
+              </article>
+            </div>
+
+            <div class="detail-summary-card">
+              <div class="detail-summary-grid">
+                <div>
+                  <span>平台</span>
+                  <div class="platform-pill" :class="getPlatformPillClass(selectedTimelineLog.platformId)">
+                    <span class="platform-pill__name">{{ selectedTimelineLog.platformName }}</span>
+                    <span class="platform-pill__meta">
+                      {{ getPlatformMetaLabel(selectedTimelineLog.platformId, selectedTimelineLog.protocol) }}
+                    </span>
+                  </div>
+                </div>
+                <div>
+                  <span>时间</span>
+                  <strong>{{ formatTime(selectedTimelineLog.createdAt) }}</strong>
+                </div>
+                <div>
+                  <span>输入/输出 Token</span>
+                  <strong>{{ formatTokenPair(selectedTimelineLog) }}</strong>
+                </div>
+                <div>
+                  <span>缓存读取 Token</span>
+                  <strong>{{ formatCacheTokens(selectedTimelineLog) }}</strong>
+                </div>
+              </div>
+              <div class="detail-endpoint">{{ getLogRequestUrl(selectedTimelineLog) }}</div>
+            </div>
+
+            <div v-if="selectedTimelineLog.requestHeaders && Object.keys(selectedTimelineLog.requestHeaders).length > 0" class="detail-code">
+              <div class="detail-code__header">
+                <h4>请求头</h4>
+              </div>
+              <pre>{{ JSON.stringify(maskSensitiveHeaders(selectedTimelineLog.requestHeaders), null, 2) }}</pre>
+            </div>
+
+            <div class="detail-tab-row">
+              <button
+                v-for="section in buildPreviewSections(selectedTimelineLog)"
+                :key="section.id"
+                class="detail-tab"
+                :class="{ active: getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).id === section.id }"
+                type="button"
+                @click="timelinePreviewSection = section.id"
+              >
+                {{ section.label }}
+              </button>
+            </div>
+
+            <div class="detail-code">
+              <div class="detail-code__header">
+                <h4>{{ getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).label }}</h4>
+              </div>
+              <pre>{{ getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).view.text }}</pre>
+            </div>
+          </template>
+          <div v-else class="empty-state">暂无详情</div>
+        </aside>
+        </template>
+
+        <template v-else-if="activeLogAnalysisView === 'sessions'">
+        <section class="section-block">
+          <header class="section-block__header">
+            <div>
+              <h3>会话视图</h3>
+              <p>把一段连续请求聚合成会话，适合回看完整上下文。</p>
+            </div>
+          </header>
+
+          <div class="session-list">
+            <button
+              v-for="session in sessionSummaries"
+              :key="session.id"
+              class="session-card"
+              :class="[
+                { active: selectedSession?.id === session.id },
+                getPlatformCardAccentClass(session.logs[0]?.platformId ?? null, 'session-card')
+              ]"
+              type="button"
+              @click="selectedSessionId = session.id"
+            >
+              <div class="session-card__headline">
+                <div
+                  class="platform-identity"
+                  :class="[
+                    getPlatformPillClass(session.logs[0]?.platformId ?? null),
+                    getPlatformIdentityToneClass(session.logs[0]?.platformId ?? null, session.platformName)
+                  ]"
+                >
+                  <span class="platform-identity__avatar">{{ getPlatformInitials(session.platformName) }}</span>
+                  <span class="platform-identity__body">
+                    <span class="platform-identity__eyebrow">
+                      <span>{{ getPlatformOriginLabel(session.logs[0]?.platformId ?? null) }}</span>
+                      <span>{{ getPlatformMetaLabel(session.logs[0]?.platformId ?? null, session.logs[0]?.protocol) || "协议未知" }}</span>
+                    </span>
+                    <span class="platform-identity__name">{{ session.platformName }}</span>
+                  </span>
+                </div>
+                <span>{{ formatTime(session.lastAt) }}</span>
+              </div>
+              <p>{{ session.previewText }}</p>
+              <small>
+                {{ session.requestCount }} 次调用 · {{ session.failureCount }} 次失败 · {{ formatDuration(session.totalDuration) }}
+              </small>
+            </button>
+            <div v-if="sessionSummaries.length === 0" class="empty-state">还没有形成会话记录。</div>
+          </div>
+        </section>
+
+        <aside class="section-block detail-panel">
+          <header class="section-block__header">
+            <div>
+              <h3>会话详情</h3>
+              <p>先看会话统计，再继续查看会话内某一次请求的完整信息。</p>
+            </div>
+          </header>
+
+          <template v-if="selectedSession && selectedSessionLog">
+            <div class="detail-stat-grid">
+              <article class="detail-stat-card detail-stat-card--primary">
+                <span>请求数</span>
+                <strong>{{ selectedSession.requestCount }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>失败数</span>
+                <strong>{{ selectedSession.failureCount }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>总耗时</span>
+                <strong>{{ formatLatencyStat(selectedSession.totalDuration) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>总 Token</span>
+                <strong>{{ selectedSession.totalTokens }}</strong>
+              </article>
+            </div>
+
+            <div class="detail-summary-card">
+              <div class="detail-summary-grid">
+                <div>
+                  <span>平台</span>
+                  <strong>{{ selectedSession.platformName }}</strong>
+                </div>
+                <div>
+                  <span>开始时间</span>
+                  <strong>{{ formatTime(selectedSession.startedAt) }}</strong>
+                </div>
+                <div>
+                  <span>最近时间</span>
+                  <strong>{{ formatTime(selectedSession.lastAt) }}</strong>
+                </div>
+                <div>
+                  <span>输入/输出 Token</span>
+                  <strong>{{ selectedSession.promptTokens }}/{{ selectedSession.completionTokens }}</strong>
+                </div>
+              </div>
+              <div class="detail-endpoint detail-endpoint--soft">{{ selectedSession.previewText }}</div>
+            </div>
+
+            <div class="detail-code session-output-card">
+              <div class="detail-code__header">
+                <h4>会话输出</h4>
+              </div>
+              <pre>{{ selectedSession.fullOutput }}</pre>
+            </div>
+
+            <div v-if="selectedSession.latestError" class="detail-code detail-code--danger">
+              <div class="detail-code__header">
+                <h4>最近一次失败</h4>
+              </div>
+              <pre>{{ selectedSession.latestError }}</pre>
+            </div>
+
+            <div class="session-timeline-section">
+              <div class="section-block__header section-block__header--compact">
+                <div>
+                  <h3>会话时间线</h3>
+                  <p>按时间回看本次会话里的每一次请求，点击任意条目查看它的完整详情。</p>
+                </div>
+              </div>
+
+              <div class="mini-log-list">
+              <button
+                v-for="log in selectedSession.logs"
+                :key="log.id"
+                class="mini-log-card"
+                :class="[
+                  { active: selectedSessionLog?.id === log.id },
+                  getPlatformCardAccentClass(log.platformId, 'mini-log-card')
+                ]"
+                type="button"
+                @click="handleOpenSessionLog(log)"
+              >
+                <div>
+                  <strong>{{ log.method }} {{ log.path || log.endpoint }}</strong>
+                  <span>{{ formatTime(log.createdAt) }}</span>
+                </div>
+                <p>{{ summarizeLogText(log) }}</p>
+                <small :data-status="isFailedLog(log) ? 'error' : 'success'">
+                  {{ log.responseStatus || "未返回" }} · {{ formatLatencyStat(log.duration) }} ·
+                  {{ sessionOverlayLog?.id === log.id ? "详情已打开" : "查看详情" }}
+                </small>
+              </button>
+            </div>
+            </div>
+
+            <div class="section-block__header section-block__header--compact">
+              <div>
+                <h3>当前请求详情</h3>
+                <p>正在查看 {{ selectedSessionLog.method }} {{ selectedSessionLog.path || selectedSessionLog.endpoint }}</p>
+              </div>
+            </div>
+
+            <div class="detail-stat-grid">
+              <article class="detail-stat-card detail-stat-card--primary">
+                <span>状态码</span>
+                <strong>{{ selectedSessionLog.responseStatus || "未返回" }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>耗时</span>
+                <strong>{{ formatLatencyStat(selectedSessionLog.duration) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>TTFT</span>
+                <strong>{{ formatLatencyStat(selectedSessionLog.firstTokenTime) }}</strong>
+              </article>
+              <article class="detail-stat-card">
+                <span>输出速度</span>
+                <strong>{{ formatSpeed(selectedSessionLog.tokensPerSecond) }}</strong>
+              </article>
+            </div>
+
+            <div class="detail-summary-card">
+              <div class="detail-summary-grid">
+                <div>
+                  <span>平台</span>
+                  <strong>{{ selectedSessionLog.platformName }}</strong>
+                </div>
+                <div>
+                  <span>时间</span>
+                  <strong>{{ formatTime(selectedSessionLog.createdAt) }}</strong>
+                </div>
+                <div>
+                  <span>输入/输出 Token</span>
+                  <strong>{{ formatTokenPair(selectedSessionLog) }}</strong>
+                </div>
+                <div>
+                  <span>缓存读取 Token</span>
+                  <strong>{{ formatCacheTokens(selectedSessionLog) }}</strong>
+                </div>
+              </div>
+              <div class="detail-endpoint">{{ getLogRequestUrl(selectedSessionLog) }}</div>
+            </div>
+
+            <div v-if="selectedSessionLog.requestHeaders && Object.keys(selectedSessionLog.requestHeaders).length > 0" class="detail-code">
+              <div class="detail-code__header">
+                <h4>请求头</h4>
+              </div>
+              <pre>{{ JSON.stringify(maskSensitiveHeaders(selectedSessionLog.requestHeaders), null, 2) }}</pre>
+            </div>
+
+            <div class="detail-tab-row">
+              <button
+                v-for="section in buildPreviewSections(selectedSessionLog)"
+                :key="section.id"
+                class="detail-tab"
+                :class="{ active: getActivePreviewSection(selectedSessionLog, sessionPreviewSection).id === section.id }"
+                type="button"
+                @click="sessionPreviewSection = section.id"
+              >
+                {{ section.label }}
+              </button>
+            </div>
+
+            <div class="detail-code">
+              <div class="detail-code__header">
+                <h4>{{ getActivePreviewSection(selectedSessionLog, sessionPreviewSection).label }}</h4>
+                <span>{{ getLogRequestUrl(selectedSessionLog) }}</span>
+              </div>
+              <pre>{{ getActivePreviewSection(selectedSessionLog, sessionPreviewSection).view.text }}</pre>
+            </div>
+          </template>
+          <div v-else class="empty-state">暂无会话详情</div>
+        </aside>
+        </template>
+
+        <template v-else>
+        <section class="section-block">
+          <header class="section-block__header">
+            <div>
+              <h3>失败分析</h3>
+              <p>自动把错误按原因聚合，优先看最频繁、最近发生的问题。</p>
+            </div>
+          </header>
+
+          <div class="failure-list">
+            <button
+              v-for="failure in failureSummaries"
+              :key="failure.key"
+              class="failure-card"
+              :class="{ active: selectedFailure?.key === failure.key }"
+              type="button"
+              @click="selectedFailureKey = failure.key"
+            >
+              <div class="failure-card__headline">
+                <strong>{{ failure.title }}</strong>
+                <span>{{ failure.count }} 次</span>
+              </div>
+              <p>{{ failure.platformNames.join(' / ') }}</p>
+              <small>{{ formatTime(failure.latestAt) }}</small>
+            </button>
+            <div v-if="failureSummaries.length === 0" class="empty-state">目前没有失败请求，状态很好。</div>
+          </div>
+        </section>
+
+        <aside class="section-block detail-panel">
+          <header class="section-block__header">
+            <div>
+              <h3>处置建议</h3>
+              <p>根据失败类型给出下一步排查建议。</p>
+            </div>
+          </header>
+
+          <template v-if="selectedFailure && selectedFailureLog">
+            <div class="detail-meta">
+              <span>{{ selectedFailure.title }}</span>
+              <span>{{ selectedFailure.platformNames.join(' / ') }}</span>
+            </div>
+            <div class="detail-code">
+              <h4>建议</h4>
+              <pre>{{ selectedFailure.nextStep }}</pre>
+            </div>
+            <div class="detail-code">
+              <h4>样例错误</h4>
+              <pre>{{ selectedFailureLog.error || selectedFailureLog.responseBody || "暂无错误详情" }}</pre>
+            </div>
+          </template>
+          <div v-else class="empty-state">暂无失败详情</div>
+        </aside>
+        </template>
+      </div>
+
+      <div v-else-if="activeSection === 'overview'" class="desktop-console-body desktop-console-body--overview">
         <section class="section-block overview-section">
           <header class="section-block__header">
             <div>
@@ -3982,386 +4631,6 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
-      <div v-else-if="activeSection === 'timeline'" class="desktop-console-body desktop-console-body--split">
-        <section class="section-block">
-          <header class="section-block__header">
-            <div>
-              <h3>调用时间线</h3>
-              <p>按时间倒序查看所有请求，便于回放最近发生了什么。</p>
-            </div>
-            <div class="toolbar-actions">
-              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="handleExportLogs">
-                导出
-              </button>
-              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="handleClearLogs">
-                清空
-              </button>
-            </div>
-          </header>
-
-          <div class="log-list">
-            <button
-              v-for="log in timelineEntries"
-              :key="log.id"
-              class="log-card"
-              :class="{ active: selectedTimelineLog?.id === log.id }"
-              type="button"
-              @click="selectedLogId = log.id"
-            >
-              <div class="log-card__headline">
-                <strong>{{ log.platformName }}</strong>
-                <span>{{ formatTime(log.createdAt) }}</span>
-              </div>
-              <p>{{ summarizeLogText(log) }}</p>
-              <small :data-status="isFailedLog(log) ? 'error' : 'success'">
-                {{ log.method }} · {{ isFailedLog(log) ? "失败" : "成功" }} · {{ formatDuration(log.duration) }}
-              </small>
-            </button>
-            <div v-if="timelineEntries.length === 0" class="empty-state">还没有调用记录，先去和桌宠聊两句吧。</div>
-          </div>
-        </section>
-
-        <aside class="section-block detail-panel">
-          <header class="section-block__header">
-            <div>
-              <h3>请求详情</h3>
-              <p>选中左侧条目后，可直接查看状态卡片、请求头和完整内容分段。</p>
-            </div>
-          </header>
-
-          <template v-if="selectedTimelineLog">
-            <div class="detail-stat-grid">
-              <article class="detail-stat-card detail-stat-card--primary">
-                <span>状态码</span>
-                <strong>{{ selectedTimelineLog.responseStatus || "未返回" }}</strong>
-              </article>
-              <article class="detail-stat-card">
-                <span>耗时</span>
-                <strong>{{ formatLatencyStat(selectedTimelineLog.duration) }}</strong>
-              </article>
-              <article class="detail-stat-card">
-                <span>TTFT</span>
-                <strong>{{ formatLatencyStat(selectedTimelineLog.firstTokenTime) }}</strong>
-              </article>
-              <article class="detail-stat-card">
-                <span>输出速度</span>
-                <strong>{{ formatSpeed(selectedTimelineLog.tokensPerSecond) }}</strong>
-              </article>
-            </div>
-
-            <div class="detail-summary-card">
-              <div class="detail-summary-grid">
-                <div>
-                  <span>平台</span>
-                  <strong>{{ selectedTimelineLog.platformName }}</strong>
-                </div>
-                <div>
-                  <span>时间</span>
-                  <strong>{{ formatTime(selectedTimelineLog.createdAt) }}</strong>
-                </div>
-                <div>
-                  <span>输入/输出 Token</span>
-                  <strong>{{ formatTokenPair(selectedTimelineLog) }}</strong>
-                </div>
-                <div>
-                  <span>缓存读取 Token</span>
-                  <strong>{{ formatCacheTokens(selectedTimelineLog) }}</strong>
-                </div>
-              </div>
-              <div class="detail-endpoint">{{ getLogRequestUrl(selectedTimelineLog) }}</div>
-            </div>
-
-            <div v-if="selectedTimelineLog.requestHeaders && Object.keys(selectedTimelineLog.requestHeaders).length > 0" class="detail-code">
-              <div class="detail-code__header">
-                <h4>请求头</h4>
-              </div>
-              <pre>{{ JSON.stringify(maskSensitiveHeaders(selectedTimelineLog.requestHeaders), null, 2) }}</pre>
-            </div>
-
-            <div class="detail-tab-row">
-              <button
-                v-for="section in buildPreviewSections(selectedTimelineLog)"
-                :key="section.id"
-                class="detail-tab"
-                :class="{ active: getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).id === section.id }"
-                type="button"
-                @click="timelinePreviewSection = section.id"
-              >
-                {{ section.label }}
-              </button>
-            </div>
-
-            <div class="detail-code">
-              <div class="detail-code__header">
-                <h4>{{ getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).label }}</h4>
-              </div>
-              <pre>{{ getActivePreviewSection(selectedTimelineLog, timelinePreviewSection).view.text }}</pre>
-            </div>
-          </template>
-          <div v-else class="empty-state">暂无详情</div>
-        </aside>
-      </div>
-
-      <div v-else-if="activeSection === 'sessions'" class="desktop-console-body desktop-console-body--split">
-        <section class="section-block">
-          <header class="section-block__header">
-            <div>
-              <h3>会话视图</h3>
-              <p>把一段连续请求聚合成会话，适合回看完整上下文。</p>
-            </div>
-          </header>
-
-          <div class="session-list">
-            <button
-              v-for="session in sessionSummaries"
-              :key="session.id"
-              class="session-card"
-              :class="{ active: selectedSession?.id === session.id }"
-              type="button"
-              @click="selectedSessionId = session.id"
-            >
-              <div class="session-card__headline">
-                <strong>{{ session.platformName }}</strong>
-                <span>{{ formatTime(session.lastAt) }}</span>
-              </div>
-              <p>{{ session.previewText }}</p>
-              <small>
-                {{ session.requestCount }} 次调用 · {{ session.failureCount }} 次失败 · {{ formatDuration(session.totalDuration) }}
-              </small>
-            </button>
-            <div v-if="sessionSummaries.length === 0" class="empty-state">还没有形成会话记录。</div>
-          </div>
-        </section>
-
-        <aside class="section-block detail-panel">
-          <header class="section-block__header">
-            <div>
-              <h3>会话详情</h3>
-              <p>先看会话统计，再继续查看会话内某一次请求的完整信息。</p>
-            </div>
-          </header>
-
-          <template v-if="selectedSession && selectedSessionLog">
-            <div class="detail-stat-grid">
-              <article class="detail-stat-card detail-stat-card--primary">
-                <span>请求数</span>
-                <strong>{{ selectedSession.requestCount }}</strong>
-              </article>
-              <article class="detail-stat-card">
-                <span>失败数</span>
-                <strong>{{ selectedSession.failureCount }}</strong>
-              </article>
-              <article class="detail-stat-card">
-                <span>总耗时</span>
-                <strong>{{ formatLatencyStat(selectedSession.totalDuration) }}</strong>
-              </article>
-              <article class="detail-stat-card">
-                <span>总 Token</span>
-                <strong>{{ selectedSession.totalTokens }}</strong>
-              </article>
-            </div>
-
-            <div class="detail-summary-card">
-              <div class="detail-summary-grid">
-                <div>
-                  <span>平台</span>
-                  <strong>{{ selectedSession.platformName }}</strong>
-                </div>
-                <div>
-                  <span>开始时间</span>
-                  <strong>{{ formatTime(selectedSession.startedAt) }}</strong>
-                </div>
-                <div>
-                  <span>最近时间</span>
-                  <strong>{{ formatTime(selectedSession.lastAt) }}</strong>
-                </div>
-                <div>
-                  <span>输入/输出 Token</span>
-                  <strong>{{ selectedSession.promptTokens }}/{{ selectedSession.completionTokens }}</strong>
-                </div>
-              </div>
-              <div class="detail-endpoint detail-endpoint--soft">{{ selectedSession.previewText }}</div>
-            </div>
-
-            <div class="detail-code session-output-card">
-              <div class="detail-code__header">
-                <h4>会话输出</h4>
-              </div>
-              <pre>{{ selectedSession.fullOutput }}</pre>
-            </div>
-
-            <div v-if="selectedSession.latestError" class="detail-code detail-code--danger">
-              <div class="detail-code__header">
-                <h4>最近一次失败</h4>
-              </div>
-              <pre>{{ selectedSession.latestError }}</pre>
-            </div>
-
-            <div class="session-timeline-section">
-              <div class="section-block__header section-block__header--compact">
-                <div>
-                  <h3>会话时间线</h3>
-                  <p>按时间回看本次会话里的每一次请求，点击任意条目查看它的完整详情。</p>
-                </div>
-              </div>
-
-              <div class="mini-log-list">
-              <button
-                v-for="log in selectedSession.logs"
-                :key="log.id"
-                class="mini-log-card"
-                :class="{ active: selectedSessionLog?.id === log.id }"
-                type="button"
-                @click="handleOpenSessionLog(log)"
-              >
-                <div>
-                  <strong>{{ log.method }} {{ log.path || log.endpoint }}</strong>
-                  <span>{{ formatTime(log.createdAt) }}</span>
-                </div>
-                <p>{{ summarizeLogText(log) }}</p>
-                <small :data-status="isFailedLog(log) ? 'error' : 'success'">
-                  {{ log.responseStatus || "未返回" }} · {{ formatLatencyStat(log.duration) }} ·
-                  {{ sessionOverlayLog?.id === log.id ? "详情已打开" : "查看详情" }}
-                </small>
-              </button>
-            </div>
-            </div>
-
-            <div class="section-block__header section-block__header--compact">
-              <div>
-                <h3>当前请求详情</h3>
-                <p>正在查看 {{ selectedSessionLog.method }} {{ selectedSessionLog.path || selectedSessionLog.endpoint }}</p>
-              </div>
-            </div>
-
-            <div class="detail-stat-grid">
-              <article class="detail-stat-card detail-stat-card--primary">
-                <span>状态码</span>
-                <strong>{{ selectedSessionLog.responseStatus || "未返回" }}</strong>
-              </article>
-              <article class="detail-stat-card">
-                <span>耗时</span>
-                <strong>{{ formatLatencyStat(selectedSessionLog.duration) }}</strong>
-              </article>
-              <article class="detail-stat-card">
-                <span>TTFT</span>
-                <strong>{{ formatLatencyStat(selectedSessionLog.firstTokenTime) }}</strong>
-              </article>
-              <article class="detail-stat-card">
-                <span>输出速度</span>
-                <strong>{{ formatSpeed(selectedSessionLog.tokensPerSecond) }}</strong>
-              </article>
-            </div>
-
-            <div class="detail-summary-card">
-              <div class="detail-summary-grid">
-                <div>
-                  <span>平台</span>
-                  <strong>{{ selectedSessionLog.platformName }}</strong>
-                </div>
-                <div>
-                  <span>时间</span>
-                  <strong>{{ formatTime(selectedSessionLog.createdAt) }}</strong>
-                </div>
-                <div>
-                  <span>输入/输出 Token</span>
-                  <strong>{{ formatTokenPair(selectedSessionLog) }}</strong>
-                </div>
-                <div>
-                  <span>缓存读取 Token</span>
-                  <strong>{{ formatCacheTokens(selectedSessionLog) }}</strong>
-                </div>
-              </div>
-              <div class="detail-endpoint">{{ getLogRequestUrl(selectedSessionLog) }}</div>
-            </div>
-
-            <div v-if="selectedSessionLog.requestHeaders && Object.keys(selectedSessionLog.requestHeaders).length > 0" class="detail-code">
-              <div class="detail-code__header">
-                <h4>请求头</h4>
-              </div>
-              <pre>{{ JSON.stringify(maskSensitiveHeaders(selectedSessionLog.requestHeaders), null, 2) }}</pre>
-            </div>
-
-            <div class="detail-tab-row">
-              <button
-                v-for="section in buildPreviewSections(selectedSessionLog)"
-                :key="section.id"
-                class="detail-tab"
-                :class="{ active: getActivePreviewSection(selectedSessionLog, sessionPreviewSection).id === section.id }"
-                type="button"
-                @click="sessionPreviewSection = section.id"
-              >
-                {{ section.label }}
-              </button>
-            </div>
-
-            <div class="detail-code">
-              <div class="detail-code__header">
-                <h4>{{ getActivePreviewSection(selectedSessionLog, sessionPreviewSection).label }}</h4>
-                <span>{{ getLogRequestUrl(selectedSessionLog) }}</span>
-              </div>
-              <pre>{{ getActivePreviewSection(selectedSessionLog, sessionPreviewSection).view.text }}</pre>
-            </div>
-          </template>
-          <div v-else class="empty-state">暂无会话详情</div>
-        </aside>
-      </div>
-
-      <div v-else class="desktop-console-body desktop-console-body--split">
-        <section class="section-block">
-          <header class="section-block__header">
-            <div>
-              <h3>失败分析</h3>
-              <p>自动把错误按原因聚合，优先看最频繁、最近发生的问题。</p>
-            </div>
-          </header>
-
-          <div class="failure-list">
-            <button
-              v-for="failure in failureSummaries"
-              :key="failure.key"
-              class="failure-card"
-              :class="{ active: selectedFailure?.key === failure.key }"
-              type="button"
-              @click="selectedFailureKey = failure.key"
-            >
-              <div class="failure-card__headline">
-                <strong>{{ failure.title }}</strong>
-                <span>{{ failure.count }} 次</span>
-              </div>
-              <p>{{ failure.platformNames.join(" / ") }}</p>
-              <small>{{ formatTime(failure.latestAt) }}</small>
-            </button>
-            <div v-if="failureSummaries.length === 0" class="empty-state">目前没有失败请求，状态很好。</div>
-          </div>
-        </section>
-
-        <aside class="section-block detail-panel">
-          <header class="section-block__header">
-            <div>
-              <h3>处置建议</h3>
-              <p>根据失败类型给出下一步排查建议。</p>
-            </div>
-          </header>
-
-          <template v-if="selectedFailure && selectedFailureLog">
-            <div class="detail-meta">
-              <span>{{ selectedFailure.title }}</span>
-              <span>{{ selectedFailure.platformNames.join(" / ") }}</span>
-            </div>
-            <div class="detail-code">
-              <h4>建议</h4>
-              <pre>{{ selectedFailure.nextStep }}</pre>
-            </div>
-            <div class="detail-code">
-              <h4>样例错误</h4>
-              <pre>{{ selectedFailureLog.error || selectedFailureLog.responseBody || "暂无错误详情" }}</pre>
-            </div>
-          </template>
-          <div v-else class="empty-state">暂无失败详情</div>
-        </aside>
-      </div>
-
       <div class="desktop-console-panel__resize-handle" @pointerdown="handlePanelResizeStart" />
     </section>
 
@@ -4463,52 +4732,25 @@ onBeforeUnmount(() => {
             <section class="platform-preset-section">
               <div class="platform-preset-section__header">
                 <div>
-                  <h4>国外平台</h4>
-                  <p>选择常见国际平台，快速生成接入草稿。</p>
+                  <h4>平台预设</h4>
+                  <p>展开一次即可直接选择目标平台，按国内外分组显示，选中后立即填充草稿。</p>
                 </div>
               </div>
 
               <div class="platform-select-row">
-                <select v-model="selectedGlobalPreset" class="platform-select">
-                  <option value="">选择国外平台</option>
-                  <option v-for="preset in globalPlatformPresets" :key="preset.name" :value="preset.name">
-                    {{ preset.name }} · {{ preset.protocol.toUpperCase() }}
-                  </option>
+                <select v-model="selectedPresetKey" class="platform-select" @change="handlePresetSelect">
+                  <option value="">选择预设平台</option>
+                  <optgroup label="国外平台">
+                    <option v-for="preset in globalPlatformPresets" :key="`global-${preset.name}`" :value="`${preset.region}:${preset.name}`">
+                      {{ preset.name }} · {{ preset.protocol.toUpperCase() }}
+                    </option>
+                  </optgroup>
+                  <optgroup label="国内平台">
+                    <option v-for="preset in chinaPlatformPresets" :key="`china-${preset.name}`" :value="`${preset.region}:${preset.name}`">
+                      {{ preset.name }} · {{ preset.protocol.toUpperCase() }}
+                    </option>
+                  </optgroup>
                 </select>
-                <button
-                  class="desktop-console-panel__action"
-                  type="button"
-                  :disabled="!selectedGlobalPreset"
-                  @click="handlePresetSelect('global')"
-                >
-                  填充
-                </button>
-              </div>
-            </section>
-
-            <section class="platform-preset-section">
-              <div class="platform-preset-section__header">
-                <div>
-                  <h4>国内平台</h4>
-                  <p>选择国内常用模型服务商，按需填充默认配置。</p>
-                </div>
-              </div>
-
-              <div class="platform-select-row">
-                <select v-model="selectedChinaPreset" class="platform-select">
-                  <option value="">选择国内平台</option>
-                  <option v-for="preset in chinaPlatformPresets" :key="preset.name" :value="preset.name">
-                    {{ preset.name }} · {{ preset.protocol.toUpperCase() }}
-                  </option>
-                </select>
-                <button
-                  class="desktop-console-panel__action"
-                  type="button"
-                  :disabled="!selectedChinaPreset"
-                  @click="handlePresetSelect('china')"
-                >
-                  填充
-                </button>
               </div>
             </section>
           </section>

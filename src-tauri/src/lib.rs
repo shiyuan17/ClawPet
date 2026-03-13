@@ -150,6 +150,39 @@ struct SourceFileSnapshotResponse {
     items: Vec<SourceFileSnapshotItem>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawMessageLogItem {
+    id: String,
+    session_id: String,
+    platform_id: String,
+    platform_name: String,
+    protocol: String,
+    method: String,
+    endpoint: String,
+    base_url: Option<String>,
+    path: Option<String>,
+    request_body: String,
+    response_status: u16,
+    response_body: String,
+    stream_summary: Option<String>,
+    duration: u32,
+    first_token_time: Option<u32>,
+    error: Option<String>,
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    total_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
+    created_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawMessageLogResponse {
+    detail: String,
+    logs: Vec<OpenClawMessageLogItem>,
+}
+
 #[derive(Debug, Clone)]
 struct EditableScope {
     facet_key: String,
@@ -432,6 +465,260 @@ fn sanitize_staff_output(content: &str) -> String {
     } else {
         normalized
     }
+}
+
+fn extract_message_timestamp_ms(message: &serde_json::Map<String, Value>, fallback: i64) -> i64 {
+    value_as_i64(message.get("timestamp")).unwrap_or(fallback)
+}
+
+fn extract_message_text(message: &serde_json::Map<String, Value>) -> Option<String> {
+    message
+        .get("content")
+        .and_then(extract_text_from_message_content)
+        .map(|text| sanitize_staff_output(&text))
+}
+
+fn infer_openclaw_response_status(text: &str) -> (u16, Option<String>) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return (200, None);
+    }
+
+    if let Some(start) = trimmed.find("（") {
+        if let Some(end_offset) = trimmed[start + 3..].find('）') {
+            let code = &trimmed[start + 3..start + 3 + end_offset];
+            if let Ok(status) = code.parse::<u16>() {
+                return (status, (status >= 400).then(|| trimmed.to_string()));
+            }
+        }
+    }
+
+    if let Some(index) = trimmed.find("status code ") {
+        let digits = trimmed[index + "status code ".len()..]
+            .chars()
+            .take_while(|char| char.is_ascii_digit())
+            .collect::<String>();
+        if let Ok(status) = digits.parse::<u16>() {
+            return (status, (status >= 400).then(|| trimmed.to_string()));
+        }
+    }
+
+    if let Some(index) = trimmed.find("HTTP ") {
+        let digits = trimmed[index + "HTTP ".len()..]
+            .chars()
+            .take_while(|char| char.is_ascii_digit())
+            .collect::<String>();
+        if let Ok(status) = digits.parse::<u16>() {
+            return (status, (status >= 400).then(|| trimmed.to_string()));
+        }
+    }
+
+    if trimmed.contains("请求失败")
+        || trimmed.contains("返回错误状态")
+        || trimmed.contains("invalid_api_key")
+        || trimmed.contains("unauthorized")
+        || trimmed.contains("rate limit")
+    {
+        return (500, Some(trimmed.to_string()));
+    }
+
+    (200, None)
+}
+
+fn extract_usage_numbers(message: &serde_json::Map<String, Value>) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>) {
+    let usage = message
+        .get("usage")
+        .and_then(Value::as_object);
+    let prompt_tokens = usage
+        .and_then(|value| value.get("input"))
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let completion_tokens = usage
+        .and_then(|value| value.get("output"))
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let total_tokens = usage
+        .and_then(|value| value.get("totalTokens"))
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .or_else(|| match (prompt_tokens, completion_tokens) {
+            (Some(input), Some(output)) => Some(input.saturating_add(output)),
+            _ => None,
+        });
+    let cache_read_input_tokens = usage
+        .and_then(|value| value.get("cacheRead"))
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+
+    (prompt_tokens, completion_tokens, total_tokens, cache_read_input_tokens)
+}
+
+fn load_openclaw_message_logs_from_session_file(
+    agent_id: &str,
+    session_file: &Path,
+) -> Vec<OpenClawMessageLogItem> {
+    let raw = match std::fs::read_to_string(session_file) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+
+    let session_file_name = session_file
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown-session");
+    let session_id = session_file
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(session_file_name);
+    let endpoint = format!("openclaw://runtime/{agent_id}/{session_id}");
+    let base_url = format!("openclaw://runtime/{agent_id}");
+    let path = format!("/{session_id}");
+    let platform_id = format!("openclaw-runtime-{agent_id}");
+    let platform_name = format!("OpenClaw 运行时 / {agent_id}");
+
+    let mut pending_user: Option<(String, i64)> = None;
+    let mut output = Vec::new();
+
+    for (line_index, line) in raw.lines().enumerate() {
+        let parsed: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let Some(obj) = parsed.as_object() else {
+            continue;
+        };
+        if obj.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let Some(message) = obj.get("message").and_then(Value::as_object) else {
+            continue;
+        };
+        let role = message.get("role").and_then(Value::as_str).unwrap_or_default();
+        let fallback_created_at = i64::try_from(line_index).unwrap_or(0);
+        let created_at = extract_message_timestamp_ms(message, fallback_created_at);
+        let Some(text) = extract_message_text(message) else {
+            continue;
+        };
+
+        if role == "user" {
+            pending_user = Some((text, created_at));
+            continue;
+        }
+
+        if role != "assistant" {
+            continue;
+        }
+
+        let (request_body, request_at) = pending_user.take().unwrap_or_else(|| ("".to_string(), created_at));
+        let duration = created_at.saturating_sub(request_at);
+        let duration = u32::try_from(duration).unwrap_or(u32::MAX);
+        let (response_status, error) = infer_openclaw_response_status(&text);
+        let (prompt_tokens, completion_tokens, total_tokens, cache_read_input_tokens) = extract_usage_numbers(message);
+
+        output.push(OpenClawMessageLogItem {
+            id: format!("runtime-{agent_id}-{session_id}-{created_at}"),
+            session_id: format!("runtime-{agent_id}-{session_id}"),
+            platform_id: platform_id.clone(),
+            platform_name: platform_name.clone(),
+            protocol: "openai".to_string(),
+            method: "MESSAGE".to_string(),
+            endpoint: endpoint.clone(),
+            base_url: Some(base_url.clone()),
+            path: Some(path.clone()),
+            request_body,
+            response_status,
+            response_body: text.clone(),
+            stream_summary: Some(text),
+            duration,
+            first_token_time: Some(duration),
+            error,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cache_read_input_tokens,
+            created_at,
+        });
+    }
+
+    output
+}
+
+#[tauri::command]
+fn load_openclaw_message_logs() -> Result<OpenClawMessageLogResponse, String> {
+    let agents_path = resolve_openclaw_config_path()
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".openclaw"))
+        .join("agents");
+
+    let entries = match std::fs::read_dir(&agents_path) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(OpenClawMessageLogResponse {
+                detail: "未找到 OpenClaw 运行时会话目录。".to_string(),
+                logs: Vec::new(),
+            })
+        }
+    };
+
+    let mut session_files = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let agent_id = entry.file_name().to_string_lossy().trim().to_string();
+        if agent_id.is_empty() {
+            continue;
+        }
+
+        let sessions_dir = entry.path().join("sessions");
+        let Ok(files) = std::fs::read_dir(&sessions_dir) else {
+            continue;
+        };
+
+        for file in files {
+            let Ok(file) = file else {
+                continue;
+            };
+            let path = file.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+                continue;
+            }
+
+            let modified_at = file
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+                .map(|value| value.as_millis())
+                .and_then(|value| i64::try_from(value).ok())
+                .unwrap_or_default();
+
+            session_files.push((modified_at, agent_id.clone(), path));
+        }
+    }
+
+    session_files.sort_by(|left, right| right.0.cmp(&left.0));
+
+    let mut logs = Vec::new();
+    for (_, agent_id, path) in session_files.into_iter().take(12) {
+        logs.extend(load_openclaw_message_logs_from_session_file(&agent_id, &path));
+    }
+
+    logs.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    logs.truncate(180);
+
+    Ok(OpenClawMessageLogResponse {
+        detail: format!("已从 OpenClaw 运行时会话读取 {} 条消息日志。", logs.len()),
+        logs,
+    })
 }
 
 fn humanize_scope_label(raw: &str) -> String {
@@ -1952,6 +2239,7 @@ pub fn run() {
             openclaw_chat,
             sync_local_proxy,
             check_openclaw_gateway,
+            load_openclaw_message_logs,
             load_staff_snapshot,
             load_task_snapshot,
             load_memory_file_snapshot,
