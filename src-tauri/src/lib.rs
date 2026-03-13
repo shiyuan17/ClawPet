@@ -2,14 +2,16 @@ use base64::Engine;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
+use tauri_plugin_global_shortcut::{Builder as GlobalShortcutBuilder, ShortcutState};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct OpenClawMessage {
@@ -290,7 +292,9 @@ fn load_openclaw_env() {
 
 fn load_openclaw_gateway_token_from_config() -> Option<String> {
     let home_dir = std::env::var_os("HOME")?;
-    let config_path = PathBuf::from(home_dir).join(".openclaw").join("openclaw.json");
+    let config_path = PathBuf::from(home_dir)
+        .join(".openclaw")
+        .join("openclaw.json");
     let config_text = std::fs::read_to_string(config_path).ok()?;
     let config = serde_json::from_str::<serde_json::Value>(&config_text).ok()?;
     let auth = config.get("gateway")?.get("auth")?;
@@ -315,7 +319,9 @@ fn resolve_openclaw_config_path() -> PathBuf {
     }
 
     if let Ok(home_dir) = std::env::var("HOME") {
-        return PathBuf::from(home_dir).join(".openclaw").join("openclaw.json");
+        return PathBuf::from(home_dir)
+            .join(".openclaw")
+            .join("openclaw.json");
     }
 
     PathBuf::from(".openclaw").join("openclaw.json")
@@ -470,7 +476,10 @@ fn extract_text_from_message_content(content: &Value) -> Option<String> {
 }
 
 fn sanitize_staff_output(content: &str) -> String {
-    let mut normalized = content.replace("[[reply_to_current]]", "").trim().to_string();
+    let mut normalized = content
+        .replace("[[reply_to_current]]", "")
+        .trim()
+        .to_string();
     if normalized.starts_with('[') {
         if let Some(pos) = normalized.find(']') {
             normalized = normalized[(pos + 1)..].trim().to_string();
@@ -601,10 +610,10 @@ fn infer_openclaw_response_status(text: &str) -> (u16, Option<String>) {
     (200, None)
 }
 
-fn extract_usage_numbers(message: &serde_json::Map<String, Value>) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>) {
-    let usage = message
-        .get("usage")
-        .and_then(Value::as_object);
+fn extract_usage_numbers(
+    message: &serde_json::Map<String, Value>,
+) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>) {
+    let usage = message.get("usage").and_then(Value::as_object);
     let prompt_tokens = usage
         .and_then(|value| value.get("input"))
         .and_then(Value::as_u64)
@@ -626,7 +635,12 @@ fn extract_usage_numbers(message: &serde_json::Map<String, Value>) -> (Option<u3
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok());
 
-    (prompt_tokens, completion_tokens, total_tokens, cache_read_input_tokens)
+    (
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cache_read_input_tokens,
+    )
 }
 
 fn load_openclaw_message_logs_from_session_file(
@@ -671,7 +685,10 @@ fn load_openclaw_message_logs_from_session_file(
         let Some(message) = obj.get("message").and_then(Value::as_object) else {
             continue;
         };
-        let role = message.get("role").and_then(Value::as_str).unwrap_or_default();
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let fallback_created_at = i64::try_from(line_index).unwrap_or(0);
         let created_at = extract_message_timestamp_ms(message, fallback_created_at);
 
@@ -692,11 +709,14 @@ fn load_openclaw_message_logs_from_session_file(
                 continue;
             };
 
-            let (request_body, request_at) = pending_user.take().unwrap_or_else(|| ("".to_string(), created_at));
+            let (request_body, request_at) = pending_user
+                .take()
+                .unwrap_or_else(|| ("".to_string(), created_at));
             let duration = created_at.saturating_sub(request_at);
             let duration = u32::try_from(duration).unwrap_or(u32::MAX);
             let (response_status, error) = infer_openclaw_response_status(&text);
-            let (prompt_tokens, completion_tokens, total_tokens, cache_read_input_tokens) = extract_usage_numbers(message);
+            let (prompt_tokens, completion_tokens, total_tokens, cache_read_input_tokens) =
+                extract_usage_numbers(message);
 
             output.push(OpenClawMessageLogItem {
                 id: format!("runtime-{agent_id}-{session_id}-{created_at}"),
@@ -850,7 +870,9 @@ fn load_openclaw_message_logs() -> Result<OpenClawMessageLogResponse, String> {
 
     let mut logs = Vec::new();
     for (_, agent_id, path) in session_files.into_iter().take(12) {
-        logs.extend(load_openclaw_message_logs_from_session_file(&agent_id, &path));
+        logs.extend(load_openclaw_message_logs_from_session_file(
+            &agent_id, &path,
+        ));
     }
 
     logs.sort_by(|left, right| right.created_at.cmp(&left.created_at));
@@ -1087,7 +1109,11 @@ fn load_memory_file_items() -> Vec<SourceFileSnapshotItem> {
     if let Ok(entries) = std::fs::read_dir(main_root.join("memory")) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let ext = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_lowercase();
+            let ext = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_lowercase();
             if !["md", "markdown", "txt"].contains(&ext.as_str()) {
                 continue;
             }
@@ -1115,7 +1141,11 @@ fn load_memory_file_items() -> Vec<SourceFileSnapshotItem> {
         if let Ok(entries) = std::fs::read_dir(scope.workspace_root.join("memory")) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let ext = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_lowercase();
+                let ext = path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 if !["md", "markdown", "txt"].contains(&ext.as_str()) {
                     continue;
                 }
@@ -1328,7 +1358,10 @@ fn load_recent_activity_from_session_file(session_file: &str) -> (Option<String>
         let Some(message) = parsed.get("message").and_then(Value::as_object) else {
             continue;
         };
-        let role = message.get("role").and_then(Value::as_str).unwrap_or_default();
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let content = message.get("content");
 
         if recent_output.is_none() && role == "assistant" {
@@ -1460,7 +1493,11 @@ fn load_runtime_session_summary(agent_id: &str) -> RuntimeSessionSummary {
 
         best_updated_at = updated_at;
         best = RuntimeSessionSummary {
-            latest_updated_at_ms: if updated_at > 0 { Some(updated_at) } else { None },
+            latest_updated_at_ms: if updated_at > 0 {
+                Some(updated_at)
+            } else {
+                None
+            },
             latest_model,
             latest_session_file,
         };
@@ -1470,9 +1507,11 @@ fn load_runtime_session_summary(agent_id: &str) -> RuntimeSessionSummary {
 }
 
 fn value_as_i64(value: Option<&Value>) -> Option<i64> {
-    value
-        .and_then(Value::as_i64)
-        .or_else(|| value.and_then(Value::as_u64).and_then(|value| i64::try_from(value).ok()))
+    value.and_then(Value::as_i64).or_else(|| {
+        value
+            .and_then(Value::as_u64)
+            .and_then(|value| i64::try_from(value).ok())
+    })
 }
 
 fn extract_task_payload_summary(payload: Option<&Value>) -> String {
@@ -1652,8 +1691,17 @@ fn load_task_snapshot() -> Result<TaskSnapshotResponse, String> {
 
         left_rank
             .cmp(&right_rank)
-            .then_with(|| left.next_run_at_ms.unwrap_or(i64::MAX).cmp(&right.next_run_at_ms.unwrap_or(i64::MAX)))
-            .then_with(|| right.updated_at_ms.unwrap_or(0).cmp(&left.updated_at_ms.unwrap_or(0)))
+            .then_with(|| {
+                left.next_run_at_ms
+                    .unwrap_or(i64::MAX)
+                    .cmp(&right.next_run_at_ms.unwrap_or(i64::MAX))
+            })
+            .then_with(|| {
+                right
+                    .updated_at_ms
+                    .unwrap_or(0)
+                    .cmp(&left.updated_at_ms.unwrap_or(0))
+            })
     });
 
     Ok(TaskSnapshotResponse {
@@ -1710,7 +1758,10 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
         .unwrap_or("未标注");
 
     let mut members = Vec::new();
-    if let Some(list) = agents_root.and_then(|obj| obj.get("list")).and_then(Value::as_array) {
+    if let Some(list) = agents_root
+        .and_then(|obj| obj.get("list"))
+        .and_then(Value::as_array)
+    {
         for item in list {
             let Some(obj) = value_as_object(item) else {
                 continue;
@@ -1867,13 +1918,17 @@ fn find_header_value(headers: &[(String, String)], name: &str) -> Option<String>
 }
 
 fn has_header(headers: &[(String, String)], name: &str) -> bool {
-    headers.iter().any(|(key, _)| key.eq_ignore_ascii_case(name))
+    headers
+        .iter()
+        .any(|(key, _)| key.eq_ignore_ascii_case(name))
 }
 
 fn build_cors_headers(request_headers: &[(String, String)]) -> Vec<(String, String)> {
     let origin = find_header_value(request_headers, "origin").unwrap_or_else(|| "*".to_string());
     let allow_headers = find_header_value(request_headers, "access-control-request-headers")
-        .unwrap_or_else(|| "content-type, authorization, x-api-key, anthropic-version, accept".to_string());
+        .unwrap_or_else(|| {
+            "content-type, authorization, x-api-key, anthropic-version, accept".to_string()
+        });
 
     vec![
         ("Access-Control-Allow-Origin".to_string(), origin),
@@ -1896,7 +1951,9 @@ fn current_timestamp_millis() -> u128 {
         .unwrap_or(0)
 }
 
-fn read_http_request(stream: &mut std::net::TcpStream) -> Result<(String, String, Vec<(String, String)>, Vec<u8>), String> {
+fn read_http_request(
+    stream: &mut std::net::TcpStream,
+) -> Result<(String, String, Vec<(String, String)>, Vec<u8>), String> {
     let mut buffer = Vec::new();
     let mut header_end = None;
     let mut chunk = [0_u8; 4096];
@@ -1988,12 +2045,17 @@ fn write_http_response(
     header_lines.push_str(&format!("Content-Length: {}\r\n", body.len()));
     header_lines.push_str("Connection: close\r\n\r\n");
 
-    stream.write_all(header_lines.as_bytes()).map_err(|error| error.to_string())?;
+    stream
+        .write_all(header_lines.as_bytes())
+        .map_err(|error| error.to_string())?;
     stream.write_all(body).map_err(|error| error.to_string())?;
     stream.flush().map_err(|error| error.to_string())
 }
 
-fn find_platform_by_path<'a>(platforms: &'a [LocalProxyPlatform], path: &str) -> Option<&'a LocalProxyPlatform> {
+fn find_platform_by_path<'a>(
+    platforms: &'a [LocalProxyPlatform],
+    path: &str,
+) -> Option<&'a LocalProxyPlatform> {
     platforms
         .iter()
         .filter(|platform| path.starts_with(&normalize_prefix(&platform.path_prefix)))
@@ -2033,7 +2095,15 @@ fn proxy_single_request(
     };
     let prefix = normalize_prefix(&platform.path_prefix);
     let actual_path = path.strip_prefix(&prefix).unwrap_or("/");
-    let target_url = format!("{}{}", platform.base_url.trim_end_matches('/'), if actual_path.is_empty() { "/" } else { actual_path });
+    let target_url = format!(
+        "{}{}",
+        platform.base_url.trim_end_matches('/'),
+        if actual_path.is_empty() {
+            "/"
+        } else {
+            actual_path
+        }
+    );
     let protocol = platform.protocol.to_lowercase();
     let api_key = platform.api_key.clone();
     let has_authorization = has_header(&headers, "authorization");
@@ -2042,13 +2112,16 @@ fn proxy_single_request(
 
     tauri::async_runtime::block_on(async move {
         let client = reqwest::Client::new();
-        let method_value =
-            reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| format!("无效请求方法: {error}"))?;
+        let method_value = reqwest::Method::from_bytes(method.as_bytes())
+            .map_err(|error| format!("无效请求方法: {error}"))?;
         let mut request = client.request(method_value, target_url);
 
         for (key, value) in headers {
             let lower = key.to_ascii_lowercase();
-            if matches!(lower.as_str(), "host" | "content-length" | "connection" | "origin") {
+            if matches!(
+                lower.as_str(),
+                "host" | "content-length" | "connection" | "origin"
+            ) {
                 continue;
             }
             request = request.header(&key, value);
@@ -2104,7 +2177,11 @@ fn proxy_single_request(
     })
 }
 
-fn run_local_proxy(listener: TcpListener, stop: Arc<AtomicBool>, platforms: Arc<Vec<LocalProxyPlatform>>) {
+fn run_local_proxy(
+    listener: TcpListener,
+    stop: Arc<AtomicBool>,
+    platforms: Arc<Vec<LocalProxyPlatform>>,
+) {
     let _ = listener.set_nonblocking(true);
 
     while !stop.load(Ordering::SeqCst) {
@@ -2129,15 +2206,28 @@ fn run_local_proxy(listener: TcpListener, stop: Arc<AtomicBool>, platforms: Arc<
                                     }))
                                     .collect::<Vec<_>>()
                             });
-                            let body = serde_json::to_vec(&payload).map_err(|error| error.to_string())?;
-                            write_http_response(&mut stream, 200, Some("application/json"), &cors_headers, &body)?;
+                            let body =
+                                serde_json::to_vec(&payload).map_err(|error| error.to_string())?;
+                            write_http_response(
+                                &mut stream,
+                                200,
+                                Some("application/json"),
+                                &cors_headers,
+                                &body,
+                            )?;
                             return Ok(());
                         }
 
                         let (status, content_type, mut response_headers, response_body) =
                             proxy_single_request(method, path, headers, body, platforms)?;
                         response_headers.extend(cors_headers);
-                        write_http_response(&mut stream, status, Some(&content_type), &response_headers, &response_body)?;
+                        write_http_response(
+                            &mut stream,
+                            status,
+                            Some(&content_type),
+                            &response_headers,
+                            &response_body,
+                        )?;
                         Ok(())
                     })();
 
@@ -2196,6 +2286,21 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+fn toggle_main_window_visibility(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    let is_visible = window.is_visible().unwrap_or(true);
+    if is_visible {
+        let _ = window.hide();
+        return;
+    }
+
+    let _ = window.show();
+    let _ = window.set_always_on_top(true);
+}
+
 #[tauri::command]
 async fn openclaw_chat(
     messages: Vec<OpenClawMessage>,
@@ -2208,7 +2313,9 @@ async fn openclaw_chat(
         .filter(|value| !value.trim().is_empty())
         .or_else(|| std::env::var("OPENCLAW_API_URL").ok())
         .ok_or_else(|| "未设置可用的聊天接口地址。".to_string())?;
-    let request_protocol = protocol.unwrap_or_else(|| "openai".to_string()).to_lowercase();
+    let request_protocol = protocol
+        .unwrap_or_else(|| "openai".to_string())
+        .to_lowercase();
     let is_openai_compatible = is_openai_compatible_endpoint(&endpoint);
     let gateway_token = load_openclaw_gateway_token_from_config()
         .or_else(|| std::env::var("OPENCLAW_GATEWAY_TOKEN").ok());
@@ -2227,9 +2334,15 @@ async fn openclaw_chat(
             request = request.header("x-api-key", api_key);
         }
         request = request.header("anthropic-version", "2023-06-01");
-    } else if let Some(token) = gateway_token.as_deref().filter(|token| !token.trim().is_empty()) {
+    } else if let Some(token) = gateway_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+    {
         request = request.header(AUTHORIZATION, format!("Bearer {token}"));
-    } else if let Some(api_key) = api_key.as_deref().filter(|api_key| !api_key.trim().is_empty()) {
+    } else if let Some(api_key) = api_key
+        .as_deref()
+        .filter(|api_key| !api_key.trim().is_empty())
+    {
         request = request.header(AUTHORIZATION, format!("Bearer {api_key}"));
     }
 
@@ -2257,7 +2370,11 @@ async fn openclaw_chat(
         request.json(&AnthropicRequest {
             model,
             max_tokens: 1024,
-            system: if system.is_empty() { None } else { Some(system) },
+            system: if system.is_empty() {
+                None
+            } else {
+                Some(system)
+            },
             messages: anthropic_messages,
         })
     } else if is_openai_compatible {
@@ -2416,11 +2533,56 @@ async fn check_openclaw_gateway(endpoint: Option<String>) -> Result<GatewayHealt
     })
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err("仅支持打开 http 或 https 链接。".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(trimmed);
+        command
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", trimmed]);
+        command
+    };
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(trimmed);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("打开外部浏览器失败：{error}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     load_openclaw_env();
 
     tauri::Builder::default()
+        .plugin(
+            GlobalShortcutBuilder::new()
+                .with_shortcuts(["Ctrl+`", "Alt+`"])
+                .expect("failed to configure global shortcuts")
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        toggle_main_window_visibility(app);
+                    }
+                })
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             quit_app,
             openclaw_chat,
@@ -2432,7 +2594,8 @@ pub fn run() {
             load_task_snapshot,
             load_memory_file_snapshot,
             load_document_file_snapshot,
-            save_source_file
+            save_source_file,
+            open_external_url
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

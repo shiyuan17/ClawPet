@@ -75,7 +75,20 @@ type ConsoleSection =
   | "tasks";
 
 type LogAnalysisView = "timeline" | "sessions" | "failures";
-type PanelMode = "console" | "logs";
+type PanelMode = "console" | "logs" | "subscriptions";
+
+type CodingPlanRecommendation = {
+  id: string;
+  category: "cloud" | "model";
+  name: string;
+  summary: string;
+  latest: string;
+  highlights: string[];
+  pricing: string;
+  pricingNote?: string;
+  platformUrl: string;
+  accent: "amber" | "sky" | "mint" | "rose" | "default";
+};
 
 type AnimationDefinition = {
   name: AnimationName;
@@ -501,6 +514,113 @@ const consoleSections: Array<{ id: ConsoleSection; label: string }> = [
   { id: "docs", label: "文档管理" },
   { id: "tasks", label: "任务管理" }
 ];
+const codingPlanRecommendations: CodingPlanRecommendation[] = [
+  {
+    id: "alibaba",
+    category: "cloud",
+    name: "阿里云百炼 Coding Plan",
+    summary: "首家集齐四大国产顶尖大模型的订阅服务，适合希望一次性覆盖多模型能力的团队。",
+    latest: "近期升级支持了 Qwen3.5-Plus、GLM-5、MiniMax M2.5、Kimi K2.5 等最新模型。",
+    highlights: ["月度总量额度，适合偶发高强度开发", "支持 Qwen Code、Claude Code、Cline", "多模型覆盖完整"],
+    pricing: "Lite 版首月 7.9 元起，Pro 版首月 39.9 元起",
+    platformUrl: "https://www.aliyun.com/benefit/scene/codingplan",
+    accent: "amber"
+  },
+  {
+    id: "tencent",
+    category: "cloud",
+    name: "腾讯云 Coding Plan",
+    summary: "2026 年 3 月全新上架，适合已经在腾讯云生态内做研发协同的团队。",
+    latest: "支持 Tencent HY 2.0 Instruct、GLM-5、Kimi-K2.5、MiniMax-M2.5。",
+    highlights: ["支持 CodeBuddy、OpenClaw、Claude Code", "新用户专享首月低至 7.9 元", "新上架平台迭代节奏快"],
+    pricing: "新用户专享首月低至 7.9 元",
+    platformUrl: "https://cloud.tencent.com/act/pro/codingplan",
+    accent: "sky"
+  },
+  {
+    id: "volcengine",
+    category: "cloud",
+    name: "火山引擎方舟 Coding Plan",
+    summary: "工具兼容和接入灵活度最强，尤其适合 Claude Code 用户直接原生接入。",
+    latest: "支持 Doubao-Seed-Code、DeepSeek-V3.2、Kimi-K2.5 等模型。",
+    highlights: ["唯一支持 Anthropic 协议", "Claude Code 无需配置代理即可原生接入", "客户端覆盖最广，已覆盖 11 款"],
+    pricing: "首购 9.9 元起",
+    platformUrl: "https://www.volcengine.com/docs/82379/2188957",
+    accent: "rose"
+  },
+  {
+    id: "baidu",
+    category: "cloud",
+    name: "百度千帆 Coding Plan",
+    summary: "偏向全流程研发辅助，适合希望把代码编写、逻辑理解、系统优化打通的团队。",
+    latest: "2026 年 2 月正式上线，首批集成 GLM-4.7、DeepSeek-V3.2 等模型。",
+    highlights: ["覆盖代码编写", "覆盖逻辑理解", "覆盖系统优化全流程"],
+    pricing: "价格信息待补充",
+    pricingNote: "当前更强调全流程能力覆盖。",
+    platformUrl: "https://cloud.baidu.com/doc/qianfan/s/imlg0beiu",
+    accent: "default"
+  },
+  {
+    id: "chinaunicom",
+    category: "cloud",
+    name: "联通云 Coding Plan",
+    summary: "强调多工具自由切换，适合不同研发习惯并存的团队统一采购。",
+    latest: "2026 年 3 月上线，支持 GLM-5、MiniMax M2.5、Qwen3.5、DSV3.X 系列五大模型。",
+    highlights: ["可在 OpenCode、Claude Code、OpenClaw、CoPaw 四个工具中自由切换", "多模型覆盖广", "适合多工具共存团队"],
+    pricing: "价格信息待补充",
+    pricingNote: "当前更适合关注工具兼容性的团队。",
+    platformUrl: "https://www.cucloud.cn/",
+    accent: "mint"
+  },
+  {
+    id: "ucloud",
+    category: "cloud",
+    name: "优刻得 Coding Plan",
+    summary: "作为中立云厂商，不绑定单一模型生态，适合想做多模型横向比较的团队。",
+    latest: "2026 年 3 月上线，支持 DeepSeek-V3.2、GLM-5、MiniMax M2.5、Kimi K2.5。",
+    highlights: ["中立云厂商", "不绑定单一模型生态", "提供一站式聚合服务"],
+    pricing: "价格信息待补充",
+    pricingNote: "核心卖点在于聚合中立性。",
+    platformUrl: "https://www.compshare.cn/",
+    accent: "default"
+  },
+  {
+    id: "zhipu",
+    category: "model",
+    name: "智谱 GLM Coding Plan",
+    summary: "模型厂商平台里扩展能力最完整的一档，适合重度 MCP 和工具链协同场景。",
+    latest: "已支持 GLM-5、GLM-4.7；并上线用量看板、Zread MCP 等功能更新。",
+    highlights: ["附赠 4 个专属 MCP", "支持联网搜索、视觉理解等", "客户端兼容性极强，支持 20+ 款"],
+    pricing: "入门档约 49 元/月",
+    platformUrl: "https://docs.bigmodel.cn/cn/coding-plan/overview",
+    accent: "mint"
+  },
+  {
+    id: "minimax",
+    category: "model",
+    name: "MiniMax Coding Plan",
+    summary: "主打编程性价比，适合预算敏感但希望稳定获得编码能力的个人与小团队。",
+    latest: "支持 MiniMax M2.5、M2.1 等模型。",
+    highlights: ["入门仅 29 元/月", "首月 9.9 元", "极速版可选"],
+    pricing: "入门档 29 元/月",
+    pricingNote: "首月优惠后更适合低成本试用。",
+    platformUrl: "https://platform.minimaxi.com/docs/guides/pricing-coding-plan",
+    accent: "amber"
+  },
+  {
+    id: "kimi",
+    category: "model",
+    name: "Kimi Coding Plan",
+    summary: "采用 Token 计量制，是唯一不限 5 小时窗口的平台，适合长时间连续编程。",
+    latest: "支持 Kimi K2.5。",
+    highlights: ["Token 计量制", "适合长时间连续编程", "更适合重上下文会话"],
+    pricing: "入门档 49 元/月",
+    platformUrl: "https://www.kimi.com/code/zh",
+    accent: "sky"
+  }
+];
+const cloudCodingPlans = computed(() => codingPlanRecommendations.filter((plan) => plan.category === "cloud"));
+const modelCodingPlans = computed(() => codingPlanRecommendations.filter((plan) => plan.category === "model"));
 
 function isImplicitSeededOpenAiPlatform(platform: PlatformConfig | null) {
   if (!platform) {
@@ -1765,6 +1885,23 @@ function openLogAnalysis(view: LogAnalysisView = "timeline") {
   applyBaseAnimation();
 }
 
+function openSubscriptionRecommendations() {
+  activePanelMode.value = "subscriptions";
+  hideContextMenu();
+  noteInteraction();
+
+  if (!isConsoleOpen.value) {
+    if (panelPlacement.value.mode === "auto") {
+      resetPanelPlacement();
+    }
+    isConsoleOpen.value = true;
+    startPanelAnimation();
+  }
+
+  statusText.value = "订阅推荐已打开，当前查看最新 Coding Plan 平台汇总。";
+  applyBaseAnimation();
+}
+
 function toggleConsolePanel(nextValue?: boolean) {
   const finalValue = nextValue ?? !isConsoleOpen.value;
   if (finalValue === isConsoleOpen.value) {
@@ -1970,6 +2107,31 @@ function hideContextMenu() {
 
 function getTauriApi() {
   return (window as Window & { __TAURI__?: TauriNamespace }).__TAURI__;
+}
+
+async function openCodingPlanPlatform(url: string) {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+
+  if (!url.trim()) {
+    statusText.value = "暂未配置对应平台地址。";
+    return;
+  }
+
+  if (invoke) {
+    try {
+      await invoke("open_external_url", { url });
+      statusText.value = "已在默认浏览器中打开对应 Coding Plan 平台。";
+      return;
+    } catch (error) {
+      statusText.value = error instanceof Error ? error.message : "打开外部平台失败。";
+    }
+  }
+
+  if (typeof window !== "undefined") {
+    window.open(url, "_blank", "noopener,noreferrer");
+    statusText.value = "已尝试在浏览器中打开对应 Coding Plan 平台。";
+  }
 }
 
 async function syncLocalProxyServer() {
@@ -3805,10 +3967,14 @@ onBeforeUnmount(() => {
             ，这里已经扩展为平台、员工、记忆、文档、任务统一管理台。
           </p>
         </div>
-        <div v-else>
+        <div v-else-if="activePanelMode === 'logs'">
           <p class="desktop-console-panel__eyebrow">ClawPet Command Deck</p>
           <strong>日志分析</strong>
           <p class="desktop-console-panel__intro">集中查看时间线、会话视图和失败分析，不再混入控制台导航。</p>
+        </div>
+        <div v-else>
+          <p class="desktop-console-panel__eyebrow">ClawPet Command Deck</p>
+          <strong>订阅推荐</strong>
         </div>
         <div class="desktop-console-panel__actions">
           <button
@@ -3820,12 +3986,28 @@ onBeforeUnmount(() => {
             日志分析
           </button>
           <button
-            v-else
+            v-if="activePanelMode === 'console'"
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            @click="openSubscriptionRecommendations()"
+          >
+            订阅推荐
+          </button>
+          <button
+            v-if="activePanelMode !== 'console'"
             class="desktop-console-panel__action desktop-console-panel__action--ghost"
             type="button"
             @click="openConsole('platforms')"
           >
             平台管理
+          </button>
+          <button
+            v-if="activePanelMode === 'subscriptions'"
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            @click="openLogAnalysis()"
+          >
+            日志分析
           </button>
           <button class="desktop-console-panel__action" type="button" @click="toggleConsolePanel(false)">收起</button>
         </div>
@@ -3844,7 +4026,7 @@ onBeforeUnmount(() => {
         </button>
       </nav>
 
-      <nav v-else class="desktop-console-nav">
+      <nav v-else-if="activePanelMode === 'logs'" class="desktop-console-nav">
         <button
           class="desktop-console-nav__item"
           :class="{ active: activeLogAnalysisView === 'timeline' }"
@@ -4363,6 +4545,102 @@ onBeforeUnmount(() => {
         </template>
       </div>
 
+      <div v-else-if="activePanelMode === 'subscriptions'" class="desktop-console-body desktop-console-body--overview">
+        <section class="section-block overview-section">
+          <div class="coding-plan-section">
+            <div class="coding-plan-section__header">
+              <strong>云厂商平台</strong>
+              <span class="coding-plan-section__count">{{ cloudCodingPlans.length }} 项</span>
+            </div>
+
+            <div class="coding-plan-grid">
+              <article
+                v-for="plan in cloudCodingPlans"
+                :key="plan.id"
+                class="coding-plan-card"
+                :class="`coding-plan-card--${plan.accent}`"
+                role="button"
+                tabindex="0"
+                :aria-label="`打开 ${plan.name}`"
+                @click="openCodingPlanPlatform(plan.platformUrl)"
+                @keydown.enter.prevent="openCodingPlanPlatform(plan.platformUrl)"
+                @keydown.space.prevent="openCodingPlanPlatform(plan.platformUrl)"
+              >
+                <div class="coding-plan-card__topline">
+                  <div class="coding-plan-card__title">
+                    <strong>{{ plan.name }}</strong>
+                  </div>
+                  <span class="coding-plan-card__badge">云平台</span>
+                </div>
+
+                <p class="coding-plan-card__summary">{{ plan.summary }}</p>
+
+                <div class="coding-plan-card__spotlight">
+                  <span>最新动态</span>
+                  <p>{{ plan.latest }}</p>
+                </div>
+
+                <div class="preset-tags coding-plan-card__tags">
+                  <span v-for="highlight in plan.highlights" :key="highlight">{{ highlight }}</span>
+                </div>
+
+                <div class="coding-plan-card__price">
+                  <span>价格</span>
+                  <strong>{{ plan.pricing }}</strong>
+                  <small v-if="plan.pricingNote">{{ plan.pricingNote }}</small>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div class="coding-plan-section">
+            <div class="coding-plan-section__header">
+              <strong>模型厂商平台</strong>
+              <span class="coding-plan-section__count">{{ modelCodingPlans.length }} 项</span>
+            </div>
+
+            <div class="coding-plan-grid">
+              <article
+                v-for="plan in modelCodingPlans"
+                :key="plan.id"
+                class="coding-plan-card"
+                :class="`coding-plan-card--${plan.accent}`"
+                role="button"
+                tabindex="0"
+                :aria-label="`打开 ${plan.name}`"
+                @click="openCodingPlanPlatform(plan.platformUrl)"
+                @keydown.enter.prevent="openCodingPlanPlatform(plan.platformUrl)"
+                @keydown.space.prevent="openCodingPlanPlatform(plan.platformUrl)"
+              >
+                <div class="coding-plan-card__topline">
+                  <div class="coding-plan-card__title">
+                    <strong>{{ plan.name }}</strong>
+                  </div>
+                  <span class="coding-plan-card__badge coding-plan-card__badge--model">模型平台</span>
+                </div>
+
+                <p class="coding-plan-card__summary">{{ plan.summary }}</p>
+
+                <div class="coding-plan-card__spotlight">
+                  <span>最新动态</span>
+                  <p>{{ plan.latest }}</p>
+                </div>
+
+                <div class="preset-tags coding-plan-card__tags">
+                  <span v-for="highlight in plan.highlights" :key="highlight">{{ highlight }}</span>
+                </div>
+
+                <div class="coding-plan-card__price">
+                  <span>价格</span>
+                  <strong>{{ plan.pricing }}</strong>
+                  <small v-if="plan.pricingNote">{{ plan.pricingNote }}</small>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+      </div>
+
       <div v-else-if="activeSection === 'overview'" class="desktop-console-body desktop-console-body--overview">
         <section class="section-block overview-section">
           <header class="section-block__header">
@@ -4425,6 +4703,9 @@ onBeforeUnmount(() => {
             <div class="toolbar-actions">
               <button class="platform-tips-trigger" type="button" @click="showPlatformTips = !showPlatformTips">
                 {{ showPlatformTips ? "收起说明" : "接入说明" }}
+              </button>
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="openSubscriptionRecommendations">
+                订阅推荐
               </button>
               <button class="desktop-console-panel__action" type="button" @click="handleCreatePlatform">新增平台</button>
             </div>
@@ -5072,6 +5353,7 @@ onBeforeUnmount(() => {
       <button class="desktop-context-menu__item" type="button" @click="openChatPanel()">聊天</button>
       <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">平台管理</button>
       <button class="desktop-context-menu__item" type="button" @click="openLogAnalysis('timeline')">日志分析</button>
+      <button class="desktop-context-menu__item" type="button" @click="openSubscriptionRecommendations()">订阅推荐</button>
       <button class="desktop-context-menu__item desktop-context-menu__item--danger" type="button" @click="handleQuitClick">
         退出
       </button>
