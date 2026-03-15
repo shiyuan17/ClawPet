@@ -118,11 +118,20 @@ type AnimationDefinition = {
   config: AnimationConfig;
 };
 
+type ChatAttachment = {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  dataUrl: string;
+};
+
 type ChatMessage = {
   id: string;
   role: "assistant" | "user" | "system";
   text: string;
   status: "pending" | "done" | "error";
+  attachments?: ChatAttachment[];
 };
 
 type AudioFilePayload = {
@@ -494,8 +503,14 @@ const actionTips: Record<AnimationName, string> = {
   wink_quietly: "它在安静地眨着眼睛，默默陪着你。"
 };
 
-const chatStorageKey = "keai.desktop-pet.openclaw.chat-history";
-const sessionStorageKey = "keai.desktop-pet.openclaw.session-id";
+const CHAT_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-history";
+const SESSION_STORAGE_PREFIX = "keai.desktop-pet.openclaw.session-id";
+function chatStorageKeyFor(agentId: string | null) {
+  return agentId ? `${CHAT_STORAGE_PREFIX}.${agentId}` : CHAT_STORAGE_PREFIX;
+}
+function sessionStorageKeyFor(agentId: string | null) {
+  return agentId ? `${SESSION_STORAGE_PREFIX}.${agentId}` : SESSION_STORAGE_PREFIX;
+}
 const defaultChatMessages: ChatMessage[] = [
   {
     id: "welcome",
@@ -528,6 +543,11 @@ const activeLogAnalysisView = ref<LogAnalysisView>("timeline");
 const isSending = ref(false);
 const chatInput = ref("");
 const chatMessages = ref<ChatMessage[]>([...defaultChatMessages]);
+const chatAttachments = ref<ChatAttachment[]>([]);
+const isDragOver = ref(false);
+const fileInputRef = ref<HTMLInputElement | null>(null);
+const activeChatAgentId = ref<string | null>(null);
+const agentChatHistories = ref<Record<string, ChatMessage[]>>({});
 const chatMotionValue = ref(0);
 const panelMotionValue = ref(0);
 const bubbleMotionValue = ref(1);
@@ -774,6 +794,11 @@ const requestLogs = computed<RequestLog[]>(() =>
 );
 const enabledPlatformCount = computed(() => platforms.value.filter((platform) => platform.enabled).length);
 const configuredSubscriptionCount = computed(() => platforms.value.filter((platform) => platform.apiKey.trim()).length);
+const activeChatAgent = computed(() =>
+  activeChatAgentId.value
+    ? staffMembers.value.find((m) => m.agentId === activeChatAgentId.value) ?? null
+    : null
+);
 const openClawMessages = computed<OpenClawMessage[]>(() =>
   chatMessages.value
     .filter((message) => message.status !== "pending" && message.role !== "system")
@@ -1767,13 +1792,13 @@ function getStableChatMessages(messages: ChatMessage[]) {
   return messages.filter((message) => message.status !== "pending");
 }
 
-function loadChatHistory() {
+function loadChatHistory(agentId: string | null = null) {
   if (typeof window === "undefined" || !window.localStorage) {
     return [...defaultChatMessages];
   }
 
   try {
-    const raw = window.localStorage.getItem(chatStorageKey);
+    const raw = window.localStorage.getItem(chatStorageKeyFor(agentId));
     if (!raw) {
       return [...defaultChatMessages];
     }
@@ -1794,32 +1819,49 @@ function loadChatHistory() {
   }
 }
 
-function loadStoredSessionId() {
+function loadStoredSessionId(agentId: string | null = null) {
   if (typeof window === "undefined" || !window.localStorage) {
     return createSessionId();
   }
 
-  const value = window.localStorage.getItem(sessionStorageKey);
+  const value = window.localStorage.getItem(sessionStorageKeyFor(agentId));
   if (value) {
     return value;
   }
 
   const next = createSessionId();
-  window.localStorage.setItem(sessionStorageKey, next);
+  window.localStorage.setItem(sessionStorageKeyFor(agentId), next);
   return next;
 }
 
-function persistChatHistory() {
+function persistChatHistory(agentId: string | null = null) {
   if (typeof window === "undefined" || !window.localStorage) {
     return;
   }
 
   try {
-    window.localStorage.setItem(chatStorageKey, JSON.stringify(getStableChatMessages(chatMessages.value)));
-    window.localStorage.setItem(sessionStorageKey, currentSessionId.value);
+    window.localStorage.setItem(chatStorageKeyFor(agentId), JSON.stringify(getStableChatMessages(chatMessages.value)));
+    window.localStorage.setItem(sessionStorageKeyFor(agentId), currentSessionId.value);
   } catch {
     // Ignore storage errors so chat remains usable even in restricted environments.
   }
+}
+
+function stripRoleLabel(name: string) {
+  return name.replace(/[（(][^）)]*[）)]$/, "").trim();
+}
+
+function switchChatAgent(agentId: string | null) {
+  if (agentId === activeChatAgentId.value) return;
+  agentChatHistories.value[activeChatAgentId.value ?? "__main__"] = [...chatMessages.value];
+  persistChatHistory(activeChatAgentId.value);
+  activeChatAgentId.value = agentId;
+  const cached = agentChatHistories.value[agentId ?? "__main__"];
+  chatMessages.value = cached && cached.length > 0 ? [...cached] : loadChatHistory(agentId);
+  currentSessionId.value = loadStoredSessionId(agentId);
+  chatInput.value = "";
+  chatAttachments.value = [];
+  scrollMessagesToBottom();
 }
 
 function loadProxyPort() {
@@ -2829,22 +2871,31 @@ function handlePanelResizeStart(event: PointerEvent) {
 
 async function submitChat() {
   const text = chatInput.value.trim();
-  if (!text || isSending.value) {
+  const pendingAttachments = [...chatAttachments.value];
+  if ((!text && pendingAttachments.length === 0) || isSending.value) {
     return;
   }
 
   const platform = activePlatform.value;
   const pendingId = createMessageId("assistant");
   const conversationHistory = [...openClawMessages.value];
+  const agent = activeChatAgent.value;
+  const systemContent = agent
+    ? `你是 OpenClaw 团队中的「${agent.displayName}」，职责是${agent.roleLabel}。请以该角色身份，使用简洁自然的中文回复。`
+    : "你是桌宠里的 OpenClaw 助手，请使用简洁自然的中文回复。";
+  const attachmentSummary = pendingAttachments.length > 0
+    ? `\n\n[附件: ${pendingAttachments.map((a) => a.name).join(", ")}]`
+    : "";
+  const userContent = (text || "(附件)") + attachmentSummary;
   const messages: OpenClawMessage[] = [
     {
       role: "system",
-      content: "你是桌宠里的 OpenClaw 助手，请使用简洁自然的中文回复。"
+      content: systemContent
     },
     ...conversationHistory,
     {
       role: "user",
-      content: text
+      content: userContent
     }
   ];
   const effectivePlatform = platform?.enabled ? platform : null;
@@ -2863,16 +2914,18 @@ async function submitChat() {
   chatMessages.value.push({
     id: createMessageId("user"),
     role: "user",
-    text,
-    status: "done"
+    text: text || "(附件)",
+    status: "done",
+    attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
   });
   chatMessages.value.push({
     id: pendingId,
     role: "assistant",
-    text: "OpenClaw 正在思考中...",
+    text: agent ? `${stripRoleLabel(agent.displayName)} 正在思考中...` : "OpenClaw 正在思考中...",
     status: "pending"
   });
   chatInput.value = "";
+  chatAttachments.value = [];
   isSending.value = true;
   noteInteraction();
   applyBaseAnimation(true);
@@ -2971,6 +3024,123 @@ function handleComposerKeydown(event: KeyboardEvent) {
 
   event.preventDefault();
   void submitChat();
+}
+
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+const MAX_ATTACHMENT_COUNT = 5;
+
+function createAttachmentId() {
+  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error(`无法读取文件: ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addFiles(files: FileList | File[]) {
+  const remaining = MAX_ATTACHMENT_COUNT - chatAttachments.value.length;
+  if (remaining <= 0) {
+    statusText.value = `最多只能添加 ${MAX_ATTACHMENT_COUNT} 个附件。`;
+    return;
+  }
+
+  const toAdd = Array.from(files).slice(0, remaining);
+  for (const file of toAdd) {
+    if (file.size > MAX_ATTACHMENT_SIZE) {
+      statusText.value = `文件「${file.name}」超过 10 MB 限制，已跳过。`;
+      continue;
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      chatAttachments.value.push({
+        id: createAttachmentId(),
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        dataUrl
+      });
+    } catch {
+      statusText.value = `文件「${file.name}」读取失败。`;
+    }
+  }
+}
+
+function removeAttachment(id: string) {
+  chatAttachments.value = chatAttachments.value.filter((a) => a.id !== id);
+}
+
+function triggerFileInput() {
+  fileInputRef.value?.click();
+}
+
+function handleFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  if (input.files && input.files.length > 0) {
+    void addFiles(input.files);
+    input.value = "";
+  }
+}
+
+function handleComposerDragEnter(event: DragEvent) {
+  event.preventDefault();
+  isDragOver.value = true;
+}
+
+function handleComposerDragOver(event: DragEvent) {
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "copy";
+  }
+}
+
+function handleComposerDragLeave(event: DragEvent) {
+  const related = event.relatedTarget as Node | null;
+  const container = (event.currentTarget as HTMLElement);
+  if (!related || !container.contains(related)) {
+    isDragOver.value = false;
+  }
+}
+
+function handleComposerDrop(event: DragEvent) {
+  event.preventDefault();
+  isDragOver.value = false;
+  if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+    void addFiles(event.dataTransfer.files);
+  }
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isImageAttachment(attachment: ChatAttachment) {
+  return attachment.type.startsWith("image/");
+}
+
+async function handlePaste(event: ClipboardEvent) {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+
+  const files: File[] = [];
+  for (const item of items) {
+    if (item.kind === "file") {
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+  }
+
+  if (files.length > 0) {
+    event.preventDefault();
+    void addFiles(files);
+  }
 }
 
 async function handleQuitClick() {
@@ -3701,7 +3871,9 @@ function handleNewConversation() {
   currentSessionId.value = createSessionId();
   chatMessages.value = [...defaultChatMessages];
   chatInput.value = "";
-  persistChatHistory();
+  chatAttachments.value = [];
+  persistChatHistory(activeChatAgentId.value);
+  agentChatHistories.value[activeChatAgentId.value ?? "__main__"] = [...defaultChatMessages];
   statusText.value = "新会话已创建，后续调用会归档到新的会话视图里。";
   openChatPanel();
 }
@@ -4286,7 +4458,7 @@ watch(chatInput, () => {
 watch(
   chatMessages,
   () => {
-    persistChatHistory();
+    persistChatHistory(activeChatAgentId.value);
   },
   { deep: true }
 );
@@ -4567,38 +4739,59 @@ onBeforeUnmount(() => {
       :style="chatPanelStyle"
     >
       <header
-        class="desktop-console-panel__header desktop-console-panel__dragbar desktop-chat-window__header"
+        class="desktop-console-panel__dragbar chat-header"
         @pointerdown="handleChatDragStart"
       >
-        <div class="desktop-chat-window__title">
-          <p class="desktop-console-panel__eyebrow">OpenClaw</p>
-          <strong>对话</strong>
+        <div class="chat-header__bar">
+          <span class="chat-header__title">
+            {{ activeChatAgent ? stripRoleLabel(activeChatAgent.displayName) : 'OpenClaw' }}
+          </span>
+          <div class="chat-header__actions">
+            <button
+              class="chat-header__btn"
+              type="button"
+              aria-label="新建会话"
+              title="新会话"
+              @click="handleNewConversation"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+            </button>
+            <button
+              class="chat-header__btn"
+              type="button"
+              aria-label="收起对话窗口"
+              title="收起"
+              @click="toggleChatPanel(false)"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10h10" /></svg>
+            </button>
+          </div>
         </div>
-        <div class="desktop-console-panel__actions">
+        <nav class="chat-tags" @pointerdown.stop>
           <button
-            class="desktop-chat-window__icon-button desktop-chat-window__icon-button--ghost"
+            class="chat-tag"
+            :class="{ 'chat-tag--active': activeChatAgentId === null }"
             type="button"
-            aria-label="新建会话"
-            title="新会话"
-            @click="handleNewConversation"
+            @click="switchChatAgent(null)"
           >
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M10 4v12" />
-              <path d="M4 10h12" />
+            <svg class="chat-tag__icon" viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M3 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H8l-4 3v-3a2 2 0 0 1-1-1.73V5Z" />
             </svg>
+            主对话
           </button>
           <button
-            class="desktop-chat-window__icon-button desktop-chat-window__icon-button--ghost"
+            v-for="member in staffMembers"
+            :key="member.agentId"
+            class="chat-tag"
+            :class="{ 'chat-tag--active': activeChatAgentId === member.agentId }"
             type="button"
-            aria-label="收起对话窗口"
-            title="收起"
-            @click="toggleChatPanel(false)"
+            :title="member.roleLabel"
+            @click="switchChatAgent(member.agentId)"
           >
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M5 10h10" />
-            </svg>
+            <span class="chat-tag__dot" aria-hidden="true">{{ member.displayName.charAt(0) }}</span>
+            {{ stripRoleLabel(member.displayName) }}
           </button>
-        </div>
+        </nav>
       </header>
 
       <div class="desktop-console-body desktop-console-body--chat">
@@ -4632,30 +4825,103 @@ onBeforeUnmount(() => {
                   <small>{{ isAudioMessagePlaying(message.id) ? "点击停止播放" : "点击播放语音" }}</small>
                 </span>
               </button>
-              <p v-else>{{ message.text }}</p>
+              <template v-else>
+                <div v-if="message.attachments && message.attachments.length > 0" class="bubble-attachments">
+                  <div v-for="att in message.attachments" :key="att.id" class="bubble-attachment">
+                    <img v-if="isImageAttachment(att)" class="bubble-attachment__img" :src="att.dataUrl" :alt="att.name" />
+                    <span v-else class="bubble-attachment__file">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                      {{ att.name }}
+                    </span>
+                  </div>
+                </div>
+                <p v-if="message.text && message.text !== '(附件)'">{{ message.text }}</p>
+              </template>
             </article>
           </div>
 
-          <footer class="desktop-chat-panel__composer">
-            <textarea
-              v-model="chatInput"
-              class="desktop-chat-panel__input"
-              rows="3"
-              placeholder="输入你想让 OpenClaw 帮你做的事"
-              @keydown="handleComposerKeydown"
+          <footer
+            class="composer"
+            :class="{ 'is-dragover': isDragOver }"
+            @dragenter="handleComposerDragEnter"
+            @dragover="handleComposerDragOver"
+            @dragleave="handleComposerDragLeave"
+            @drop="handleComposerDrop"
+          >
+            <div v-if="isDragOver" class="composer__drop-overlay">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 18h16" /></svg>
+              <span>松开以添加附件</span>
+            </div>
+            <template v-else>
+              <div v-if="chatAttachments.length > 0" class="composer__attachments">
+                <div
+                  v-for="att in chatAttachments"
+                  :key="att.id"
+                  class="composer__chip"
+                  :title="att.name + ' (' + formatFileSize(att.size) + ')'"
+                >
+                  <img
+                    v-if="isImageAttachment(att)"
+                    class="composer__chip-thumb"
+                    :src="att.dataUrl"
+                    :alt="att.name"
+                  />
+                  <svg v-else class="composer__chip-file" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                  </svg>
+                  <span class="composer__chip-name">{{ att.name }}</span>
+                  <button
+                    class="composer__chip-remove"
+                    type="button"
+                    aria-label="移除附件"
+                    @click="removeAttachment(att.id)"
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                  </button>
+                </div>
+              </div>
+              <textarea
+                v-model="chatInput"
+                class="composer__input"
+                rows="2"
+                placeholder="输入你想让 OpenClaw 帮你做的事"
+                @keydown="handleComposerKeydown"
+                @paste="handlePaste"
+              />
+              <div class="composer__toolbar">
+                <button
+                  class="composer__tool-btn"
+                  type="button"
+                  aria-label="添加附件"
+                  title="添加附件"
+                  @click="triggerFileInput"
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M15.5 10l-5.5 5.5a4.24 4.24 0 0 1-6-6L10 3.5a2.83 2.83 0 0 1 4 4l-6 6a1.41 1.41 0 0 1-2-2l5.5-5.5" />
+                  </svg>
+                </button>
+                <button
+                  class="composer__send-btn"
+                  type="button"
+                  aria-label="发送消息"
+                  title="发送"
+                  :disabled="isSending || (!chatInput.trim() && chatAttachments.length === 0)"
+                  @click="submitChat"
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M5 10l8-5-2.5 5L13 15z" />
+                  </svg>
+                </button>
+              </div>
+            </template>
+            <input
+              ref="fileInputRef"
+              type="file"
+              multiple
+              class="composer__file-input"
+              @change="handleFileInputChange"
             />
-            <button
-              class="desktop-chat-window__icon-button"
-              type="button"
-              aria-label="发送消息"
-              title="发送"
-              :disabled="isSending || !chatInput.trim()"
-              @click="submitChat"
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M4 10.5 15.5 5l-3 10-2.5-3-3 2z" />
-              </svg>
-            </button>
           </footer>
         </section>
       </div>
