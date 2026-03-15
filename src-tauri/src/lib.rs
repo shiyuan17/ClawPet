@@ -143,6 +143,7 @@ struct SourceFileSnapshotItem {
     facet_label: String,
     category: String,
     updated_at_ms: i64,
+    exists: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,6 +152,47 @@ struct SourceFileSnapshotResponse {
     source_path: String,
     detail: String,
     items: Vec<SourceFileSnapshotItem>,
+}
+
+/// 已安装技能项：来自 ~/.openclaw/skills 与 workspace/skills，对应 openclaw 技能信息（非文档编辑）
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawSkillListItem {
+    id: String,
+    name: String,
+    description: String,
+    enabled: bool,
+    relative_path: String,
+    source_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawSkillsListResponse {
+    source_path: String,
+    /// 内置技能（来自 openclaw.json skills.allowBundled + entries）
+    built_in: Vec<OpenClawSkillListItem>,
+    /// 安装技能（来自 ~/.openclaw/skills 与 workspace/skills 下的 SKILL.md）
+    installed: Vec<OpenClawSkillListItem>,
+}
+
+/// 已配置工具项：来自 openclaw tools.profile / allow/deny，对应已安装工具信息（非 TOOLS.md 编辑）
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawToolListItem {
+    id: String,
+    name: String,
+    description: String,
+    category: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawToolsListResponse {
+    profile: String,
+    profile_label: String,
+    tools: Vec<OpenClawToolListItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -350,6 +392,49 @@ fn resolve_workspace_agents_root() -> PathBuf {
     resolve_openclaw_home_path().join("workspaces")
 }
 
+fn expand_home_path(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return resolve_openclaw_home_path();
+    }
+
+    if trimmed == "~" {
+        return std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(trimmed));
+    }
+
+    if let Some(suffix) = trimmed.strip_prefix("~/") {
+        return std::env::var("HOME")
+            .map(|home| PathBuf::from(home).join(suffix))
+            .unwrap_or_else(|_| PathBuf::from(trimmed));
+    }
+
+    PathBuf::from(trimmed)
+}
+
+fn resolve_workspace_root_for_agent(agent_id: &str, configured_workspace: Option<&str>) -> PathBuf {
+    if let Some(workspace) = configured_workspace {
+        let expanded = expand_home_path(workspace);
+        if expanded.is_absolute() {
+            return expanded;
+        }
+        return resolve_openclaw_home_path().join(expanded);
+    }
+
+    let preferred = resolve_openclaw_home_path().join(format!("workspace-{agent_id}"));
+    if preferred.exists() {
+        return preferred;
+    }
+
+    let legacy = resolve_workspace_agents_root().join(agent_id);
+    if legacy.exists() {
+        return legacy;
+    }
+
+    preferred
+}
+
 fn load_staff_mission_statement() -> String {
     let fallback = "构建可持续自治的 AI 员工体系，持续完成高价值任务。".to_string();
     let current_dir = match std::env::current_dir() {
@@ -372,6 +457,14 @@ fn load_staff_mission_statement() -> String {
 
 fn value_as_object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
     value.as_object()
+}
+
+fn read_string_or_primary<'a>(value: &'a Value) -> Option<&'a str> {
+    value
+        .as_str()
+        .or_else(|| value_as_object(value).and_then(|obj| obj.get("primary")).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn load_staff_from_runtime_dirs(
@@ -934,15 +1027,15 @@ fn load_editable_scopes() -> Vec<EditableScope> {
                     if seen.contains(&facet_key) {
                         continue;
                     }
+                    let configured_workspace = obj
+                        .get("workspace")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty());
                     let workspace_root = if facet_key == "main" {
                         main_root.clone()
                     } else {
-                        obj.get("workspace")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(PathBuf::from)
-                            .unwrap_or_else(|| resolve_workspace_agents_root().join(agent_id))
+                        resolve_workspace_root_for_agent(agent_id, configured_workspace)
                     };
                     scopes.push(EditableScope {
                         facet_key: facet_key.clone(),
@@ -1043,26 +1136,32 @@ fn build_source_file_item(
     facet_label: &str,
     category: &str,
 ) -> Option<SourceFileSnapshotItem> {
-    let content = safe_read_source_file(path)?;
-    let meta = std::fs::metadata(path).ok()?;
-    if !meta.is_file() {
-        return None;
-    }
+    let meta = std::fs::metadata(path).ok();
+    let exists = meta.as_ref().map(|value| value.is_file()).unwrap_or(false);
+    let content = if exists {
+        safe_read_source_file(path)?
+    } else {
+        String::new()
+    };
     let updated_at_ms = meta
-        .modified()
-        .ok()
+        .as_ref()
+        .and_then(|value| value.modified().ok())
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
         .map(|value| value.as_millis() as i64)
         .unwrap_or(0);
     let title = build_source_file_title(path, &content);
-    let summary = build_source_file_summary(&content);
+    let summary = if exists {
+        build_source_file_summary(&content)
+    } else {
+        "文件缺失，保存时会自动创建。".to_string()
+    };
     let source_path = path.display().to_string();
     let relative_path = path
         .strip_prefix(relative_base)
         .ok()
         .map(|value| value.display().to_string())
         .unwrap_or_else(|| source_path.clone());
-    let id = relative_path.replace(['/', '\\', ' '], "-").to_lowercase();
+    let id = format!("{facet_key}-{}", relative_path.replace(['/', '\\', ' '], "-").to_lowercase());
 
     Some(SourceFileSnapshotItem {
         id,
@@ -1075,6 +1174,7 @@ fn build_source_file_item(
         facet_label: facet_label.to_string(),
         category: category.to_string(),
         updated_at_ms,
+        exists,
     })
 }
 
@@ -1083,6 +1183,16 @@ fn load_memory_file_items() -> Vec<SourceFileSnapshotItem> {
     let mut seen = std::collections::HashSet::new();
     let main_root = resolve_workspace_main_root();
     let scopes = load_editable_scopes();
+    let memory_candidates = [
+        "MEMORY.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "IDENTITY.md",
+        "USER.md",
+        "HEARTBEAT.md",
+        "BOOTSTRAP.md",
+        "AGENTS.md",
+    ];
 
     let append = |output: &mut Vec<SourceFileSnapshotItem>,
                   seen: &mut std::collections::HashSet<String>,
@@ -1094,17 +1204,19 @@ fn load_memory_file_items() -> Vec<SourceFileSnapshotItem> {
         }
     };
 
-    append(
-        &mut output,
-        &mut seen,
-        build_source_file_item(
-            &main_root.join("MEMORY.md"),
-            &main_root,
-            "main",
-            "Main",
-            "Main 长期记忆",
-        ),
-    );
+    for file_name in memory_candidates {
+        append(
+            &mut output,
+            &mut seen,
+            build_source_file_item(
+                &main_root.join(file_name),
+                &main_root,
+                "main",
+                "Main",
+                "Main",
+            ),
+        );
+    }
 
     if let Ok(entries) = std::fs::read_dir(main_root.join("memory")) {
         for entry in entries.flatten() {
@@ -1126,17 +1238,19 @@ fn load_memory_file_items() -> Vec<SourceFileSnapshotItem> {
     }
 
     for scope in scopes.iter().filter(|scope| scope.facet_key != "main") {
-        append(
-            &mut output,
-            &mut seen,
-            build_source_file_item(
-                &scope.workspace_root.join("MEMORY.md"),
-                &scope.workspace_root,
-                &scope.facet_key,
-                &scope.facet_label,
-                &format!("{} 长期记忆", scope.facet_label),
-            ),
-        );
+        for file_name in memory_candidates {
+            append(
+                &mut output,
+                &mut seen,
+                build_source_file_item(
+                    &scope.workspace_root.join(file_name),
+                    &scope.workspace_root,
+                    &scope.facet_key,
+                    &scope.facet_label,
+                    &scope.facet_label,
+                ),
+            );
+        }
 
         if let Ok(entries) = std::fs::read_dir(scope.workspace_root.join("memory")) {
             for entry in entries.flatten() {
@@ -1172,6 +1286,55 @@ fn load_memory_file_items() -> Vec<SourceFileSnapshotItem> {
             .then_with(|| left.relative_path.cmp(&right.relative_path))
     });
     output
+}
+
+fn resolve_memory_db_path(scope: &EditableScope) -> PathBuf {
+    let file_name = if scope.facet_key == "main" {
+        "main.sqlite".to_string()
+    } else {
+        format!("{}.sqlite", scope.facet_key)
+    };
+    resolve_openclaw_home_path().join("memory").join(file_name)
+}
+
+fn query_sqlite_count(db_path: &Path, table_name: &str) -> Option<usize> {
+    if !db_path.exists() {
+        return None;
+    }
+
+    let output = Command::new("sqlite3")
+        .arg(db_path)
+        .arg(format!("select count(*) from {table_name};"))
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()?
+        .trim()
+        .parse::<usize>()
+        .ok()
+}
+
+fn summarize_memory_store(scopes: &[EditableScope]) -> (usize, usize, usize) {
+    let mut db_count = 0;
+    let mut file_count = 0;
+    let mut chunk_count = 0;
+
+    for scope in scopes {
+        let db_path = resolve_memory_db_path(scope);
+        if !db_path.exists() {
+            continue;
+        }
+        db_count += 1;
+        file_count += query_sqlite_count(&db_path, "files").unwrap_or(0);
+        chunk_count += query_sqlite_count(&db_path, "chunks").unwrap_or(0);
+    }
+
+    (db_count, file_count, chunk_count)
 }
 
 fn load_document_file_items() -> Vec<SourceFileSnapshotItem> {
@@ -1254,12 +1417,602 @@ fn load_document_file_items() -> Vec<SourceFileSnapshotItem> {
     output
 }
 
+fn load_skill_file_items() -> Vec<SourceFileSnapshotItem> {
+    let mut output = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let candidates = [
+        resolve_openclaw_home_path().join("workspace").join("skills"),
+        resolve_openclaw_home_path().join("skills"),
+    ];
+
+    for root in candidates {
+        let entries = match std::fs::read_dir(&root) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let skill_file = path.join("SKILL.md");
+            let key = skill_file.display().to_string();
+            if seen.contains(&key) {
+                continue;
+            }
+
+            if let Some(item) = build_source_file_item(
+                &skill_file,
+                &root,
+                "openclaw-skills",
+                "OpenClaw",
+                "OpenClaw Skills",
+            ) {
+                seen.insert(key);
+                output.push(item);
+            }
+        }
+    }
+
+    output.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    output
+}
+
+fn load_tool_file_items(agent_id: Option<&str>) -> Vec<SourceFileSnapshotItem> {
+    let scopes = load_editable_scopes();
+    let filtered_scopes = scopes.into_iter().filter(|scope| {
+        if scope.facet_key == "main" {
+            return false;
+        }
+
+        match agent_id {
+            Some(value) => scope.facet_key.eq_ignore_ascii_case(value.trim()),
+            None => true,
+        }
+    });
+
+    let mut output = Vec::new();
+    for scope in filtered_scopes {
+        if let Some(item) = build_source_file_item(
+            &scope.workspace_root.join("TOOLS.md"),
+            &scope.workspace_root,
+            &scope.facet_key,
+            &scope.facet_label,
+            &format!("{} Tools", scope.facet_label),
+        ) {
+            output.push(item);
+        }
+    }
+
+    output.sort_by(|left, right| left.facet_label.cmp(&right.facet_label));
+    output
+}
+
+/// 从 relative_path（如 "transcribe/SKILL.md"）得到技能 id（如 "transcribe"），用于匹配 openclaw.json skills.entries
+fn openclaw_skill_id_from_path(relative_path: &str) -> String {
+    let path = relative_path.trim().replace('\\', "/");
+    path.split('/')
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// OpenClaw 完整内置技能清单 (id, 描述)
+static OPENCLAW_BUILTIN_SKILLS: &[(&str, &str)] = &[
+    ("1password", "1Password 密码管理，设置并使用 1Password CLI 来管理密码"),
+    ("apple-notes", "通过 macOS 上的「备忘录」CLI 管理 Apple Notes"),
+    ("apple-reminders", "通过 remindctl 的 CLI 管理苹果提醒事项"),
+    ("bear-notes", "通过 grizzly CLI 搜索和管理 Bear 笔记"),
+    ("blogwatcher", "博客监控，定期监听博客更新"),
+    ("blucli", "BlueBubbles CLI 操作"),
+    ("bluebubbles", "BlueBubbles iMessage 收发消息"),
+    ("camsnap", "RTSP/ONVIF 摄像头截图"),
+    ("canvas", "Canvas 画布操作"),
+    ("clawhub", "ClawHub CLI - 技能市场，安装/管理技能"),
+    ("coding-agent", "编程代理，辅助代码编写与调试"),
+    ("discord", "Discord 消息收发与频道管理"),
+    ("eightctl", "Eight Sleep 智能床控制"),
+    ("gemini", "Gemini CLI 问答与推理"),
+    ("gh-issues", "GitHub Issues 自动处理"),
+    ("gifgrep", "GIF 搜索与下载"),
+    ("github", "GitHub CLI 仓库与 PR 操作"),
+    ("gog", "Google Workspace（Gmail / Calendar / Drive）"),
+    ("goplaces", "地点搜索与导航"),
+    ("healthcheck", "安全审计与系统健康检查"),
+    ("himalaya", "邮件客户端，收发管理邮件"),
+    ("imsg", "iMessage / SMS 收发消息"),
+    ("mcporter", "Minecraft 相关操作"),
+    ("model-usage", "模型使用统计与费用追踪"),
+    ("nano-banana-pro", "Banana Pro 设备管理"),
+    ("nano-pdf", "PDF 生成与读取操作"),
+    ("notion", "Notion 笔记与数据库操作"),
+    ("obsidian", "Obsidian 笔记管理"),
+    ("openai-image-gen", "OpenAI DALL·E 图像生成"),
+    ("openai-whisper", "本地 Whisper 语音识别"),
+    ("openai-whisper-api", "OpenAI Whisper API 语音识别"),
+    ("openhue", "Philips Hue 智能灯控制"),
+    ("oracle", "Oracle 数据库查询与管理"),
+    ("ordercli", "订单管理 CLI"),
+    ("peekaboo", "macOS UI 自动化截图工具"),
+    ("sag", "ElevenLabs TTS 语音合成"),
+    ("session-logs", "会话日志查看与管理"),
+    ("sherpa-onnx-tts", "本地 Sherpa-ONNX TTS 语音合成"),
+    ("skill-creator", "创建和编辑 Skills"),
+    ("slack", "Slack 消息与频道操作"),
+    ("songsee", "歌曲识别"),
+    ("sonoscli", "Sonos 音响控制"),
+    ("spotify-player", "Spotify 播放器控制"),
+    ("summarize", "内容摘要与转录"),
+    ("things-mac", "Things 3 任务管理"),
+    ("tmux", "Tmux 会话管理"),
+    ("trello", "Trello 看板任务管理"),
+    ("video-frames", "视频帧提取与分析"),
+    ("voice-call", "语音通话"),
+    ("wacli", "WhatsApp CLI 消息收发"),
+    ("weather", "天气查询"),
+    ("xurl", "URL 处理与内容抓取"),
+];
+
+#[tauri::command]
+fn load_openclaw_skills_list() -> Result<OpenClawSkillsListResponse, String> {
+    let items = load_skill_file_items();
+    let config_path = resolve_openclaw_config_path();
+    let mut entries_enabled: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    if let Ok(raw) = std::fs::read_to_string(&config_path) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+            if let Some(skills_root) = parsed.get("skills").and_then(Value::as_object) {
+                if let Some(entries) = skills_root.get("entries").and_then(Value::as_object) {
+                    for (key, val) in entries {
+                        let enabled = val
+                            .get("enabled")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true);
+                        entries_enabled.insert(key.trim().to_lowercase(), enabled);
+                    }
+                }
+            }
+        }
+    }
+
+    let source_path = resolve_openclaw_home_path().join("skills").display().to_string();
+
+    // 内置技能：使用完整硬编码清单，从 entries_enabled 读取启用状态
+    let built_in: Vec<OpenClawSkillListItem> = OPENCLAW_BUILTIN_SKILLS
+        .iter()
+        .map(|(id, desc)| {
+            let key_lower = id.to_lowercase();
+            let enabled = entries_enabled.get(&key_lower).copied().unwrap_or(true);
+            OpenClawSkillListItem {
+                id: id.to_string(),
+                name: id.to_string(),
+                description: desc.to_string(),
+                enabled,
+                relative_path: String::new(),
+                source_path: String::new(),
+            }
+        })
+        .collect();
+
+    // 内置技能 ID 集合，用于排除
+    let builtin_ids: std::collections::HashSet<String> = OPENCLAW_BUILTIN_SKILLS
+        .iter()
+        .map(|(id, _)| id.to_lowercase())
+        .collect();
+
+    // 扫描插件目录里的额外技能（~/.openclaw/openclaw-*/skills/）
+    let openclaw_home = resolve_openclaw_home_path();
+    let mut plugin_items: Vec<SourceFileSnapshotItem> = Vec::new();
+    if let Ok(home_entries) = std::fs::read_dir(&openclaw_home) {
+        for entry in home_entries.flatten() {
+            let dir_name = entry.file_name();
+            let dir_str = dir_name.to_string_lossy();
+            if !dir_str.starts_with("openclaw-") {
+                continue;
+            }
+            let plugin_skills_dir = entry.path().join("skills");
+            if let Ok(skill_dirs) = std::fs::read_dir(&plugin_skills_dir) {
+                for skill_entry in skill_dirs.flatten() {
+                    let skill_path = skill_entry.path();
+                    let Ok(ft) = skill_entry.file_type() else { continue };
+                    if !ft.is_dir() { continue }
+                    let skill_file = skill_path.join("SKILL.md");
+                    if let Some(item) = build_source_file_item(
+                        &skill_file,
+                        &plugin_skills_dir,
+                        "openclaw-skills",
+                        "OpenClaw",
+                        "OpenClaw Skills",
+                    ) {
+                        plugin_items.push(item);
+                    }
+                }
+            }
+        }
+    }
+
+    fn make_skill_item(
+        skill_id: String,
+        item_id: String,
+        title: String,
+        content: String,
+        relative_path: String,
+        source_path: String,
+        entries_enabled: &std::collections::HashMap<String, bool>,
+    ) -> OpenClawSkillListItem {
+        let key_lower = skill_id.to_lowercase();
+        let enabled = entries_enabled.get(&key_lower).copied().unwrap_or(true);
+        let title_is_filename = title.eq_ignore_ascii_case("SKILL.md") || title.trim().is_empty();
+        let display_name = if title_is_filename { skill_id.clone() } else { title };
+        let description = {
+            let clean: String = content
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let truncated = if clean.chars().count() > 180 {
+                clean.chars().take(180).collect::<String>()
+            } else {
+                clean
+            };
+            if truncated.is_empty() { "暂无描述。".to_string() } else { truncated }
+        };
+        OpenClawSkillListItem { id: item_id, name: display_name, description, enabled, relative_path, source_path }
+    }
+
+    // 用户安装技能：~/.openclaw/skills/ 下不在内置清单里的技能
+    let installed: Vec<OpenClawSkillListItem> = items
+        .into_iter()
+        .filter(|item| {
+            let skill_id = openclaw_skill_id_from_path(&item.relative_path);
+            !builtin_ids.contains(&skill_id.to_lowercase())
+        })
+        .map(|item| {
+            let skill_id = openclaw_skill_id_from_path(&item.relative_path);
+            make_skill_item(skill_id, item.id, item.title, item.content, item.relative_path, item.source_path, &entries_enabled)
+        })
+        .chain(
+            // 插件技能（openclaw-lark 等）
+            plugin_items.into_iter().map(|item| {
+                let skill_id = openclaw_skill_id_from_path(&item.relative_path);
+                make_skill_item(skill_id, item.id, item.title, item.content, item.relative_path, item.source_path, &entries_enabled)
+            })
+        )
+        .collect();
+
+    Ok(OpenClawSkillsListResponse {
+        source_path,
+        built_in,
+        installed,
+    })
+}
+
+/// 更新 openclaw.json 中某技能的启用状态（skills.entries[skill_id].enabled）
+#[tauri::command]
+fn save_openclaw_skill_enabled(skill_id: String, enabled: bool) -> Result<(), String> {
+    let config_path = resolve_openclaw_config_path();
+    let raw = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
+    let mut parsed: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let root = parsed.as_object_mut().ok_or("openclaw.json 根节点不是对象")?;
+    let skills = root
+        .entry("skills")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("skills 不是对象")?;
+    let entries = skills
+        .entry("entries")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("skills.entries 不是对象")?;
+    let skill_key = skill_id.trim();
+    if skill_key.is_empty() {
+        return Err("技能 id 不能为空".to_string());
+    }
+    let entry = entries
+        .entry(skill_key.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let entry_obj = entry.as_object_mut().ok_or("skills.entries 项不是对象")?;
+    entry_obj.insert("enabled".to_string(), Value::Bool(enabled));
+    let new_raw = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
+    std::fs::write(&config_path, new_raw).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// OpenClaw 内置工具清单（与 docs 一致）：id, 名称, 描述, 分类
+const OPENCLAW_TOOL_INVENTORY: &[(&str, &str, &str)] = &[
+    // group:fs
+    ("read", "read", "读取文件内容"),
+    ("write", "write", "创建或覆盖文件"),
+    ("edit", "edit", "精确编辑文件"),
+    ("apply_patch", "apply_patch", "应用补丁（多块编辑）"),
+    // group:runtime
+    ("exec", "exec", "执行 shell 命令"),
+    ("bash", "bash", "Bash 执行"),
+    ("process", "process", "管理后台进程"),
+    // group:web
+    ("web_search", "web_search", "网页搜索"),
+    ("web_fetch", "web_fetch", "抓取网页内容"),
+    // group:memory
+    ("memory_search", "memory_search", "记忆语义搜索"),
+    ("memory_get", "memory_get", "读取记忆文件"),
+    // group:sessions
+    ("sessions_list", "sessions_list", "会话列表"),
+    ("sessions_history", "sessions_history", "会话历史"),
+    ("sessions_send", "sessions_send", "发送会话消息"),
+    ("sessions_spawn", "sessions_spawn", "创建会话"),
+    ("session_status", "session_status", "会话状态"),
+    // group:messaging
+    ("message", "message", "消息发送"),
+    // group:ui
+    ("browser", "browser", "浏览器控制"),
+    ("canvas", "canvas", "Canvas 节点"),
+    // group:automation
+    ("cron", "cron", "定时任务"),
+    ("gateway", "gateway", "网关"),
+    // group:nodes
+    ("nodes", "nodes", "节点发现与配对"),
+    // other
+    ("image", "image", "图像生成/处理"),
+];
+
+fn openclaw_tool_category(tool_id: &str) -> &'static str {
+    match tool_id {
+        "read" | "write" | "edit" | "apply_patch" => "Files",
+        "exec" | "bash" | "process" => "Runtime",
+        "web_search" | "web_fetch" => "Web",
+        "memory_search" | "memory_get" => "Memory",
+        "sessions_list" | "sessions_history" | "sessions_send" | "sessions_spawn" | "session_status" => "Sessions",
+        "message" => "Messaging",
+        "browser" | "canvas" => "UI",
+        "cron" | "gateway" => "Automation",
+        "nodes" => "Nodes",
+        _ => "Other",
+    }
+}
+
+/// 解析 profile 得到基础允许的工具 id 集合；full = 全部
+fn openclaw_profile_tool_ids(profile: &str) -> std::collections::HashSet<String> {
+    let profile = profile.trim().to_ascii_lowercase();
+    let mut set = std::collections::HashSet::new();
+    match profile.as_str() {
+        "full" | "default" | "" => {
+            for (id, _, _) in OPENCLAW_TOOL_INVENTORY {
+                set.insert((*id).to_string());
+            }
+            return set;
+        }
+        "minimal" => {
+            set.insert("session_status".to_string());
+            return set;
+        }
+        "coding" => {
+            for id in &["read", "write", "edit", "apply_patch", "exec", "bash", "process", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status", "memory_search", "memory_get", "image"] {
+                set.insert((*id).to_string());
+            }
+            return set;
+        }
+        "messaging" => {
+            for id in &["message", "sessions_list", "sessions_history", "sessions_send", "session_status"] {
+                set.insert((*id).to_string());
+            }
+            return set;
+        }
+        _ => {}
+    }
+    set
+}
+
+/// 从 config 的 allow/deny 数组解析出允许的工具 id（* 表示全部）；deny 优先
+fn openclaw_resolve_tools_from_config(
+    root: &serde_json::Map<String, Value>,
+    agent_obj: Option<&serde_json::Map<String, Value>>,
+) -> (String, String, std::collections::HashSet<String>) {
+    let tools_root = root.get("tools").and_then(value_as_object);
+    let _agents_list = root.get("agents").and_then(value_as_object).and_then(|o| o.get("list")).and_then(Value::as_array);
+    let default_profile = tools_root
+        .and_then(|t| t.get("profile").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default");
+    let mut profile = default_profile.to_string();
+    let mut allow: Option<Vec<String>> = tools_root.and_then(|t| t.get("allow")).and_then(Value::as_array).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+            .collect()
+    });
+    let mut deny: Vec<String> = tools_root
+        .and_then(|t| t.get("deny"))
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_ascii_lowercase())).collect())
+        .unwrap_or_default();
+
+    if let Some(agent) = agent_obj {
+        if let Some(tools) = agent.get("tools").and_then(value_as_object) {
+            if let Some(p) = tools.get("profile").and_then(Value::as_str) {
+                let p = p.trim();
+                if !p.is_empty() {
+                    profile = p.to_string();
+                }
+            }
+            if let Some(a) = tools.get("allow").and_then(Value::as_array) {
+                allow = Some(a.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).collect());
+            }
+            if let Some(d) = tools.get("deny").and_then(Value::as_array) {
+                deny = d.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_ascii_lowercase().to_string())).collect();
+            }
+        }
+    }
+
+    let profile_label = match profile.to_ascii_lowercase().as_str() {
+        "full" | "default" | "" => "Full",
+        "minimal" => "Minimal",
+        "coding" => "Coding",
+        "messaging" => "Messaging",
+        _ => profile.as_str(),
+    }
+    .to_string();
+
+    let mut allowed_ids = openclaw_profile_tool_ids(&profile);
+    if let Some(ref allow_list) = allow {
+        if !allow_list.is_empty() && !allow_list.iter().any(|s| s.eq_ignore_ascii_case("*")) {
+            let mut from_allow = std::collections::HashSet::new();
+            for entry in allow_list {
+                let e = entry.trim().to_ascii_lowercase();
+                if e == "*" {
+                    for (id, _, _) in OPENCLAW_TOOL_INVENTORY {
+                        from_allow.insert((*id).to_string());
+                    }
+                    break;
+                }
+                if e.starts_with("group:") {
+                    let group = e.strip_prefix("group:").unwrap_or("").trim();
+                    for (id, _, _) in OPENCLAW_TOOL_INVENTORY {
+                        let in_group = match group {
+                            "fs" => matches!(*id, "read" | "write" | "edit" | "apply_patch"),
+                            "runtime" => matches!(*id, "exec" | "bash" | "process"),
+                            "web" => matches!(*id, "web_search" | "web_fetch"),
+                            "memory" => matches!(*id, "memory_search" | "memory_get"),
+                            "sessions" => id.starts_with("session"),
+                            "messaging" => *id == "message",
+                            "ui" => matches!(*id, "browser" | "canvas"),
+                            "automation" => matches!(*id, "cron" | "gateway"),
+                            "nodes" => *id == "nodes",
+                            "openclaw" => true,
+                            _ => false,
+                        };
+                        if in_group {
+                            from_allow.insert((*id).to_string());
+                        }
+                    }
+                } else {
+                    from_allow.insert(entry.trim().to_string());
+                }
+            }
+            if !from_allow.is_empty() {
+                allowed_ids = from_allow;
+            }
+        }
+    }
+    for d in &deny {
+        if d == "*" {
+            allowed_ids.clear();
+            break;
+        }
+        if d.starts_with("group:") {
+            let group = d.strip_prefix("group:").unwrap_or("").trim();
+            let in_deny_group = |id: &str| -> bool {
+                matches!(
+                    (group, id),
+                    ("fs", "read" | "write" | "edit" | "apply_patch")
+                        | ("runtime", "exec" | "bash" | "process")
+                        | ("web", "web_search" | "web_fetch")
+                        | ("memory", "memory_search" | "memory_get")
+                        | ("messaging", "message")
+                        | ("ui", "browser" | "canvas")
+                        | ("automation", "cron" | "gateway")
+                        | ("nodes", "nodes")
+                ) || (group == "sessions" && id.starts_with("session"))
+                  || (group == "openclaw")
+            };
+            allowed_ids.retain(|id| !in_deny_group(id.as_str()));
+        } else {
+            allowed_ids.retain(|id| !id.eq_ignore_ascii_case(d));
+        }
+    }
+
+    (profile, profile_label, allowed_ids)
+}
+
+#[tauri::command]
+fn load_openclaw_tools_list(agent_id: Option<String>) -> Result<OpenClawToolsListResponse, String> {
+    let config_path = resolve_openclaw_config_path();
+    let raw = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let root = value_as_object(&parsed).ok_or("openclaw.json 根节点不是对象")?;
+
+    let agent_obj = if let Some(ref id) = agent_id {
+        let id_trim = id.trim();
+        if id_trim.is_empty() {
+            None
+        } else {
+            root.get("agents")
+                .and_then(Value::as_object)
+                .and_then(|a| a.get("list"))
+                .and_then(Value::as_array)
+                .and_then(|list| {
+                    list.iter().find_map(|item| {
+                        let obj = value_as_object(item)?;
+                        let aid = obj.get("id").and_then(Value::as_str).map(str::trim).unwrap_or("");
+                        if aid.eq_ignore_ascii_case(id_trim) {
+                            Some(obj)
+                        } else {
+                            None
+                        }
+                    })
+                })
+        }
+    } else {
+        None
+    };
+
+    let (profile, profile_label, allowed_ids) = openclaw_resolve_tools_from_config(root, agent_obj);
+
+    let tools: Vec<OpenClawToolListItem> = OPENCLAW_TOOL_INVENTORY
+        .iter()
+        .map(|(id, name, desc)| {
+            let enabled = allowed_ids.contains(&id.to_ascii_lowercase());
+            OpenClawToolListItem {
+                id: (*id).to_string(),
+                name: (*name).to_string(),
+                description: (*desc).to_string(),
+                category: openclaw_tool_category(id).to_string(),
+                enabled,
+            }
+        })
+        .collect();
+
+    Ok(OpenClawToolsListResponse {
+        profile,
+        profile_label,
+        tools,
+    })
+}
+
 #[tauri::command]
 fn load_memory_file_snapshot() -> Result<SourceFileSnapshotResponse, String> {
+    let scopes = load_editable_scopes();
     let items = load_memory_file_items();
+    let (db_count, db_file_count, db_chunk_count) = summarize_memory_store(&scopes);
+    let scope_count = scopes.len();
+    let source_path = format!(
+        "{} | {}",
+        resolve_workspace_main_root().display(),
+        resolve_openclaw_home_path().join("memory").display()
+    );
+    let existing_count = items.iter().filter(|item| item.exists).count();
+    let missing_count = items.len().saturating_sub(existing_count);
+    let detail = if items.is_empty() {
+        format!(
+            "已扫描 {} 个工作区与 {} 个记忆库，当前未发现可展示的文件型记忆。memory-core 状态：{} files / {} chunks。",
+            scope_count, db_count, db_file_count, db_chunk_count
+        )
+    } else {
+        format!(
+            "已整理 {} 个记忆文件槽位（存在 {}，缺失 {}），并检查了 {} 个记忆库（{} files / {} chunks）。",
+            items.len(), existing_count, missing_count, db_count, db_file_count, db_chunk_count
+        )
+    };
     Ok(SourceFileSnapshotResponse {
-        source_path: resolve_workspace_main_root().display().to_string(),
-        detail: format!("已从 OpenClaw 记忆文件读取 {} 条记录。", items.len()),
+        source_path,
+        detail,
         items,
     })
 }
@@ -1267,11 +2020,61 @@ fn load_memory_file_snapshot() -> Result<SourceFileSnapshotResponse, String> {
 #[tauri::command]
 fn load_document_file_snapshot() -> Result<SourceFileSnapshotResponse, String> {
     let items = load_document_file_items();
+    let existing_count = items.iter().filter(|item| item.exists).count();
+    let missing_count = items.len().saturating_sub(existing_count);
     Ok(SourceFileSnapshotResponse {
         source_path: resolve_workspace_main_root().display().to_string(),
-        detail: format!("已从 OpenClaw 核心文档读取 {} 份文件。", items.len()),
+        detail: format!("已整理 {} 份核心文件（存在 {}，缺失 {}）。", items.len(), existing_count, missing_count),
         items,
     })
+}
+
+#[tauri::command]
+fn load_openclaw_resource_snapshot(
+    kind: String,
+    agent_id: Option<String>,
+) -> Result<SourceFileSnapshotResponse, String> {
+    let normalized_kind = kind.trim().to_ascii_lowercase();
+
+    if normalized_kind == "skill" {
+        let items = load_skill_file_items();
+        let existing_count = items.iter().filter(|item| item.exists).count();
+        let missing_count = items.len().saturating_sub(existing_count);
+        return Ok(SourceFileSnapshotResponse {
+            source_path: resolve_openclaw_home_path().join("skills").display().to_string(),
+            detail: format!(
+                "已整理 {} 份 OpenClaw skills（存在 {}，缺失 {}）。",
+                items.len(),
+                existing_count,
+                missing_count
+            ),
+            items,
+        });
+    }
+
+    if normalized_kind == "tool" {
+        let items = load_tool_file_items(agent_id.as_deref());
+        let existing_count = items.iter().filter(|item| item.exists).count();
+        let missing_count = items.len().saturating_sub(existing_count);
+        let label = agent_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("全部员工");
+        return Ok(SourceFileSnapshotResponse {
+            source_path: resolve_openclaw_home_path().display().to_string(),
+            detail: format!(
+                "已整理 {} 的 {} 份工具文件（存在 {}，缺失 {}）。",
+                label,
+                items.len(),
+                existing_count,
+                missing_count
+            ),
+            items,
+        });
+    }
+
+    Err("不支持的资源类型。".to_string())
 }
 
 fn guess_audio_mime_type(path: &Path) -> &'static str {
@@ -1326,6 +2129,10 @@ fn save_source_file(kind: String, source_path: String, content: String) -> Resul
         load_memory_file_items()
     } else if kind == "document" {
         load_document_file_items()
+    } else if kind == "skill" {
+        load_skill_file_items()
+    } else if kind == "tool" {
+        load_tool_file_items(None)
     } else {
         return Err("不支持的文件类型。".to_string());
     };
@@ -1337,6 +2144,9 @@ fn save_source_file(kind: String, source_path: String, content: String) -> Resul
         return Err("目标文件不在允许编辑范围内。".to_string());
     };
 
+    if let Some(parent) = Path::new(&target.source_path).parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
     std::fs::write(&target.source_path, content).map_err(|error| error.to_string())?;
     Ok(target.source_path)
 }
@@ -1750,12 +2560,16 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
         .and_then(value_as_object);
     let default_model = defaults
         .and_then(|obj| obj.get("model"))
+        .and_then(read_string_or_primary)
+        .unwrap_or("未标注");
+    let default_tools_profile = root
+        .and_then(|obj| obj.get("tools"))
         .and_then(value_as_object)
-        .and_then(|obj| obj.get("primary"))
+        .and_then(|tools| tools.get("profile"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("未标注");
+        .unwrap_or("default");
 
     let mut members = Vec::new();
     if let Some(list) = agents_root
@@ -1784,9 +2598,7 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
                 .unwrap_or(agent_id);
             let model = obj
                 .get("model")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
+                .and_then(read_string_or_primary)
                 .unwrap_or(default_model);
             let workspace = obj
                 .get("workspace")
@@ -1801,7 +2613,7 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or("default");
+                .unwrap_or(default_tools_profile);
             let runtime_summary = load_runtime_session_summary(agent_id);
             let status_label = runtime_summary
                 .latest_updated_at_ms
@@ -2286,6 +3098,83 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[derive(Debug, Serialize)]
+struct MonitorInfo {
+    /// Logical position (physical / scale_factor) for comparison with screenX/screenY
+    position: (f64, f64),
+    /// Logical size (physical / scale_factor)
+    size: (f64, f64),
+    #[serde(rename = "scaleFactor")]
+    scale_factor: f64,
+}
+
+#[tauri::command]
+fn get_available_monitors(app: tauri::AppHandle) -> Result<Vec<MonitorInfo>, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let monitors = window
+        .available_monitors()
+        .map_err(|e| e.to_string())?;
+    let list: Vec<MonitorInfo> = monitors
+        .into_iter()
+        .map(|m| {
+            let pos = m.position();
+            let size = m.size();
+            let scale = m.scale_factor();
+            MonitorInfo {
+                position: (pos.x as f64 / scale, pos.y as f64 / scale),
+                size: (size.width as f64 / scale, size.height as f64 / scale),
+                scale_factor: scale,
+            }
+        })
+        .collect();
+    Ok(list)
+}
+
+#[tauri::command]
+fn move_window_to_monitor(app: tauri::AppHandle, index: usize) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let monitors = window
+        .available_monitors()
+        .map_err(|e| e.to_string())?;
+    let monitor = monitors
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| format!("monitor index out of range: {}", index))?;
+    let position = monitor.position();
+    let size = monitor.size();
+    window
+        .set_position(tauri::Position::Physical(*position))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_size(tauri::Size::Physical(*size))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct WindowInnerPosition {
+    x: f64,
+    y: f64,
+}
+
+#[tauri::command]
+fn get_window_inner_position(app: tauri::AppHandle) -> Result<WindowInnerPosition, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let pos = window
+        .inner_position()
+        .map_err(|e| e.to_string())?;
+    Ok(WindowInnerPosition {
+        x: pos.x as f64,
+        y: pos.y as f64,
+    })
+}
+
 fn toggle_main_window_visibility(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -2585,6 +3474,9 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             quit_app,
+            get_available_monitors,
+            get_window_inner_position,
+            move_window_to_monitor,
             openclaw_chat,
             sync_local_proxy,
             check_openclaw_gateway,
@@ -2594,6 +3486,10 @@ pub fn run() {
             load_task_snapshot,
             load_memory_file_snapshot,
             load_document_file_snapshot,
+            load_openclaw_resource_snapshot,
+            load_openclaw_skills_list,
+            save_openclaw_skill_enabled,
+            load_openclaw_tools_list,
             save_source_file,
             open_external_url
         ])

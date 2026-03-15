@@ -19,6 +19,19 @@ import stretchYawnConfig from "../images/animate/stretch_yawn_and_rub_your_eyes/
 import stretchYawnSprite from "../images/animate/stretch_yawn_and_rub_your_eyes/sprite.png";
 import thinkConfig from "../images/animate/think/index.json";
 import thinkSprite from "../images/animate/think/sprite.png";
+import applauseToCelebrateConfig from "../images/animate/applause_to_celebrate/index.json";
+import applauseToCelebrateSprite from "../images/animate/applause_to_celebrate/sprite.png";
+import confusionConfig from "../images/animate/confusion/index.json";
+import confusionSprite from "../images/animate/confusion/sprite.png";
+import rubYourEyesConfig from "../images/animate/rub_your_eyes/index.json";
+import rubYourEyesSprite from "../images/animate/rub_your_eyes/sprite.png";
+import stretchBodyConfig from "../images/animate/stretch_body/index.json";
+import stretchBodySprite from "../images/animate/stretch_body/sprite.png";
+import theBodyRisesAndFallsConfig from "../images/animate/the_body_rises_and_falls/index.json";
+import theBodyRisesAndFallsSprite from "../images/animate/the_body_rises_and_falls/sprite.png";
+import winkQuietlyConfig from "../images/animate/wink_quietly/index.json";
+import winkQuietlySprite from "../images/animate/wink_quietly/sprite.png";
+import { usePetSound } from "../composables/usePetSound";
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
 import {
   appendRequestLog,
@@ -58,21 +71,27 @@ type AnimationConfig = {
 
 type AnimationName =
   | "act_cute_rotation"
+  | "applause_to_celebrate"
   | "chat_typing"
+  | "confusion"
   | "have_meal"
+  | "rub_your_eyes"
   | "sleep"
   | "smile_and_blink"
   | "smile_blink"
   | "stomp_feet"
+  | "stretch_body"
   | "stretch_yawn_and_rub_your_eyes"
-  | "think";
+  | "the_body_rises_and_falls"
+  | "think"
+  | "wink_quietly";
 type ConsoleSection =
   | "overview"
   | "platforms"
   | "staff"
-  | "memory"
-  | "docs"
   | "tasks";
+
+type ResourceModalKind = "memory" | "skill" | "tool";
 
 type LogAnalysisView = "timeline" | "sessions" | "failures";
 type PanelMode = "console" | "logs" | "subscriptions";
@@ -135,6 +154,7 @@ type SourceFileSnapshotItem = {
   facetLabel: string;
   category: string;
   updatedAtMs: number;
+  exists: boolean;
 };
 
 type SourceFileSnapshotResponse = {
@@ -153,6 +173,7 @@ type MemoryRecord = {
   sourcePath: string;
   relativePath: string;
   updatedAt: number;
+  exists: boolean;
 };
 
 type DocumentRecord = {
@@ -165,6 +186,7 @@ type DocumentRecord = {
   summary: string;
   content: string;
   updatedAt: number;
+  exists: boolean;
 };
 
 type MemoryDraft = {
@@ -208,6 +230,25 @@ type StaffSnapshotResponse = {
   sourcePath: string;
   detail: string;
   members: StaffMemberSnapshot[];
+};
+
+/** OpenClaw 已安装技能项（来自 ~/.openclaw/skills），非文档编辑 */
+type OpenClawSkillListItem = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  relativePath: string;
+  sourcePath: string;
+};
+
+/** OpenClaw 工具配置项（来自 tools.profile/allow/deny），非 TOOLS.md 编辑 */
+type OpenClawToolListItem = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  enabled: boolean;
 };
 
 type TaskSnapshotItem = {
@@ -321,6 +362,14 @@ const animations: Record<AnimationName, AnimationDefinition> = {
     sprite: actCuteRotationSprite,
     config: actCuteRotationConfig as AnimationConfig
   },
+  applause_to_celebrate: {
+    name: "applause_to_celebrate",
+    label: "鼓掌庆祝",
+    description: "任务完成或收到好消息时会兴奋鼓掌。",
+    loop: false,
+    sprite: applauseToCelebrateSprite,
+    config: applauseToCelebrateConfig as AnimationConfig
+  },
   chat_typing: {
     name: "chat_typing",
     label: "打字回复",
@@ -329,6 +378,14 @@ const animations: Record<AnimationName, AnimationDefinition> = {
     sprite: chatTypingSprite,
     config: chatTypingConfig as AnimationConfig
   },
+  confusion: {
+    name: "confusion",
+    label: "困惑疑问",
+    description: "遇到无法理解的指令时会露出困惑表情。",
+    loop: false,
+    sprite: confusionSprite,
+    config: confusionConfig as AnimationConfig
+  },
   have_meal: {
     name: "have_meal",
     label: "开心进食",
@@ -336,6 +393,14 @@ const animations: Record<AnimationName, AnimationDefinition> = {
     loop: false,
     sprite: haveMealSprite,
     config: haveMealConfig as AnimationConfig
+  },
+  rub_your_eyes: {
+    name: "rub_your_eyes",
+    label: "揉眼睛",
+    description: "长时间工作后会揉揉眼睛，提醒你也该休息了。",
+    loop: false,
+    sprite: rubYourEyesSprite,
+    config: rubYourEyesConfig as AnimationConfig
   },
   sleep: {
     name: "sleep",
@@ -369,6 +434,14 @@ const animations: Record<AnimationName, AnimationDefinition> = {
     sprite: stompFeetSprite,
     config: stompFeetConfig as AnimationConfig
   },
+  stretch_body: {
+    name: "stretch_body",
+    label: "伸展身体",
+    description: "久坐之后会站起来伸展一下筋骨。",
+    loop: false,
+    sprite: stretchBodySprite,
+    config: stretchBodyConfig as AnimationConfig
+  },
   stretch_yawn_and_rub_your_eyes: {
     name: "stretch_yawn_and_rub_your_eyes",
     label: "伸懒腰醒神",
@@ -377,6 +450,14 @@ const animations: Record<AnimationName, AnimationDefinition> = {
     sprite: stretchYawnSprite,
     config: stretchYawnConfig as AnimationConfig
   },
+  the_body_rises_and_falls: {
+    name: "the_body_rises_and_falls",
+    label: "身体起伏",
+    description: "安静待机时身体会轻轻起伏，像在呼吸一样。",
+    loop: true,
+    sprite: theBodyRisesAndFallsSprite,
+    config: theBodyRisesAndFallsConfig as AnimationConfig
+  },
   think: {
     name: "think",
     label: "歪头思考",
@@ -384,19 +465,33 @@ const animations: Record<AnimationName, AnimationDefinition> = {
     loop: true,
     sprite: thinkSprite,
     config: thinkConfig as AnimationConfig
+  },
+  wink_quietly: {
+    name: "wink_quietly",
+    label: "安静眨眼",
+    description: "静静地眨眨眼，适合安静陪伴的时刻。",
+    loop: true,
+    sprite: winkQuietlySprite,
+    config: winkQuietlyConfig as AnimationConfig
   }
 };
 
 const actionTips: Record<AnimationName, string> = {
   act_cute_rotation: "被你拖起来后，它开始原地转圈卖萌。",
+  applause_to_celebrate: "太棒了！它正在为你鼓掌庆祝呢。",
   chat_typing: "正在替你盯着回复，等 OpenClaw 把字打完。",
+  confusion: "它有点困惑，歪着头不太理解刚才发生了什么。",
   have_meal: "像被投喂到一样，收到回应后会满足地吃一口。",
+  rub_your_eyes: "它在揉眼睛，也许你也该休息一下了。",
   sleep: "太久没有新互动，它已经安心睡着了。",
   smile_and_blink: "聊天窗口打开时，它会保持更专注的陪伴表情。",
   smile_blink: "今天状态不错，适合放在页面右下角陪你工作。",
   stomp_feet: "你刚刚戳到它了，它正在跺脚表达情绪。",
+  stretch_body: "坐太久了，它站起来伸展了一下身体。",
   stretch_yawn_and_rub_your_eyes: "刚被你叫醒，先伸个懒腰再继续营业。",
-  think: "它在认真琢磨眼前的信息，像在陪你一起排查。"
+  the_body_rises_and_falls: "它在安静地呼吸，陪你度过平静的时光。",
+  think: "它在认真琢磨眼前的信息，像在陪你一起排查。",
+  wink_quietly: "它在安静地眨着眼睛，默默陪着你。"
 };
 
 const chatStorageKey = "keai.desktop-pet.openclaw.chat-history";
@@ -412,6 +507,7 @@ const defaultChatMessages: ChatMessage[] = [
 
 const stage = ref<HTMLDivElement | null>(null);
 const pet = ref<HTMLButtonElement | null>(null);
+const sound = usePetSound();
 const contextMenuRef = ref<HTMLDivElement | null>(null);
 const consolePanelRef = ref<HTMLDivElement | null>(null);
 const chatPanelRef = ref<HTMLDivElement | null>(null);
@@ -441,6 +537,12 @@ const platforms = ref<PlatformConfig[]>([]);
 const staffMembers = ref<StaffMemberSnapshot[]>([]);
 const memoryRecords = ref<MemoryRecord[]>([]);
 const documentRecords = ref<DocumentRecord[]>([]);
+const openClawSkillRecords = ref<DocumentRecord[]>([]);
+const resourceDocumentRecords = ref<DocumentRecord[]>([]);
+/** OpenClaw 技能库：内置 + 安装（用于技能弹窗展示） */
+const openClawSkillsList = ref<{ builtIn: OpenClawSkillListItem[]; installed: OpenClawSkillListItem[] }>({ builtIn: [], installed: [] });
+/** OpenClaw 当前员工的工具配置（用于工具弹窗展示，非 TOOLS.md 编辑） */
+const openClawToolsList = ref<{ profile: string; profileLabel: string; tools: OpenClawToolListItem[] }>({ profile: "", profileLabel: "", tools: [] });
 const taskRecords = ref<TaskSnapshotItem[]>([]);
 const activePlatformId = ref<string | null>(null);
 const isEditingPlatform = ref(false);
@@ -448,6 +550,27 @@ const editingPlatformId = ref<string | null>(null);
 const platformForm = ref<PlatformDraft>(createPlatformDraft());
 const showPlatformTips = ref(false);
 const isPlatformModalOpen = ref(false);
+const isSystemSettingsOpen = ref(false);
+
+type PetSizeLevel = "small" | "medium" | "large";
+const PET_SIZE_MAP: Record<PetSizeLevel, number> = { small: 180, medium: 280, large: 380 };
+
+function loadPetSizeLevel(): PetSizeLevel {
+  const raw = globalThis.localStorage?.getItem("keai.desktop-pet.size-level");
+  if (raw === "small" || raw === "medium" || raw === "large") return raw;
+  return "medium";
+}
+function loadAlwaysOnTop(): boolean {
+  const raw = globalThis.localStorage?.getItem("keai.desktop-pet.always-on-top");
+  return raw === "true";
+}
+
+const petSizeLevel = ref<PetSizeLevel>(loadPetSizeLevel());
+const petAlwaysOnTop = ref<boolean>(loadAlwaysOnTop());
+
+// 系统设置弹窗草稿（弹窗打开时初始化，保存时才写入真实状态）
+const draftSizeLevel = ref<PetSizeLevel>(petSizeLevel.value);
+const draftAlwaysOnTop = ref<boolean>(petAlwaysOnTop.value);
 const selectedPresetKey = ref("");
 const selectedLogId = ref<string | null>(null);
 const selectedSessionId = ref<string | null>(null);
@@ -466,6 +589,9 @@ const memoryFilterText = ref("");
 const documentFilterText = ref("");
 const activeMemoryScope = ref("all");
 const activeDocumentCategory = ref("all");
+const activeResourceModal = ref<ResourceModalKind | null>(null);
+const activeResourceMemberId = ref<string | null>(null);
+const resourceModalFilterText = ref("");
 const staffSnapshotDetail = ref("正在读取员工配置...");
 const staffSnapshotSourcePath = ref("");
 const staffMissionStatement = ref("构建可持续自治的 AI 员工体系，持续完成高价值任务。");
@@ -497,11 +623,11 @@ const panelPlacement = ref({
   height: 0
 });
 
-const viewportSize = 280;
+const viewportSize = computed(() => PET_SIZE_MAP[petSizeLevel.value]);
 const autoplayDelayMs = 9000;
 const playbackRate = 3;
 const sleepDelayMs = 24000;
-const idleShowcaseSequence: AnimationName[] = ["think", "smile_and_blink", "have_meal", "act_cute_rotation"];
+const idleShowcaseSequence: AnimationName[] = ["think", "smile_and_blink", "have_meal", "act_cute_rotation", "wink_quietly", "the_body_rises_and_falls", "stretch_body", "rub_your_eyes", "confusion", "applause_to_celebrate"];
 const platformPresets = getPlatformPresets();
 const globalPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "global"));
 const chinaPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "china"));
@@ -510,8 +636,6 @@ const consoleSections: Array<{ id: ConsoleSection; label: string }> = [
   { id: "overview", label: "总览" },
   { id: "platforms", label: "平台管理" },
   { id: "staff", label: "员工管理" },
-  { id: "memory", label: "记忆管理" },
-  { id: "docs", label: "文档管理" },
   { id: "tasks", label: "任务管理" }
 ];
 const codingPlanRecommendations: CodingPlanRecommendation[] = [
@@ -662,11 +786,11 @@ const hintStyle = computed(() => {
   const viewportWidth = typeof window === "undefined" ? 360 : window.innerWidth;
   const viewportHeight = typeof window === "undefined" ? 640 : window.innerHeight;
   const bubbleWidth = Math.min(340, viewportWidth - 40);
-  const petCenterX = petPosition.value.x + viewportSize / 2;
+  const petCenterX = petPosition.value.x + viewportSize.value / 2;
   const preferredLeft = petCenterX - bubbleWidth / 2;
   const left = Math.min(Math.max(16, preferredLeft), Math.max(16, viewportWidth - bubbleWidth - 16));
   const topAbovePet = petPosition.value.y - 108;
-  const topBelowPet = petPosition.value.y + viewportSize + 14;
+  const topBelowPet = petPosition.value.y + viewportSize.value + 14;
   const top = topAbovePet >= 16 ? topAbovePet : Math.min(topBelowPet, Math.max(16, viewportHeight - 96));
 
   return {
@@ -678,11 +802,11 @@ const hintStyle = computed(() => {
 const petStyle = computed(() => {
   const animation = activeAnimation.value;
   const frame = currentFrame.value;
-  const scale = viewportSize / animation.config.frame_size.w;
+  const scale = viewportSize.value / animation.config.frame_size.w;
 
   return {
-    width: `${viewportSize}px`,
-    height: `${viewportSize}px`,
+    width: `${viewportSize.value}px`,
+    height: `${viewportSize.value}px`,
     left: `${petPosition.value.x}px`,
     top: `${petPosition.value.y}px`,
     backgroundImage: `url(${animation.sprite})`,
@@ -707,8 +831,8 @@ const chatPanelStyle = computed(() => {
       : defaultHeight;
   const gap = 18;
   const petLeft = petPosition.value.x;
-  const petRight = petPosition.value.x + viewportSize;
-  const petCenterY = petPosition.value.y + viewportSize / 2;
+  const petRight = petPosition.value.x + viewportSize.value;
+  const petCenterY = petPosition.value.y + viewportSize.value / 2;
   const leftSpace = petLeft - gap - 16;
   const rightSpace = viewportWidth - petRight - gap - 16;
   const canPlaceLeft = leftSpace >= panelWidth;
@@ -764,12 +888,12 @@ const consolePanelStyle = computed(() => {
   const margin = 16;
   const gap = 18;
   const petClearance = 18;
-  const petCenterX = petPosition.value.x + viewportSize / 2;
-  const petCenterY = petPosition.value.y + viewportSize / 2;
+  const petCenterX = petPosition.value.x + viewportSize.value / 2;
+  const petCenterY = petPosition.value.y + viewportSize.value / 2;
   const petSafeLeft = Math.max(0, petPosition.value.x - petClearance);
   const petSafeTop = Math.max(0, petPosition.value.y - petClearance);
-  const petSafeRight = Math.min(viewportWidth, petPosition.value.x + viewportSize + petClearance);
-  const petSafeBottom = Math.min(viewportHeight, petPosition.value.y + viewportSize + petClearance);
+  const petSafeRight = Math.min(viewportWidth, petPosition.value.x + viewportSize.value + petClearance);
+  const petSafeBottom = Math.min(viewportHeight, petPosition.value.y + viewportSize.value + petClearance);
   const clampAutoPosition = (nextLeft: number, nextTop: number) => ({
     left: Math.min(Math.max(margin, nextLeft), Math.max(margin, viewportWidth - panelWidth - margin)),
     top: Math.min(Math.max(margin, nextTop), Math.max(margin, viewportHeight - panelHeight - margin))
@@ -783,9 +907,9 @@ const consolePanelStyle = computed(() => {
     );
   const autoCandidates = [
     clampAutoPosition(petPosition.value.x - panelWidth - gap, petCenterY - panelHeight / 2),
-    clampAutoPosition(petPosition.value.x + viewportSize + gap, petCenterY - panelHeight / 2),
+    clampAutoPosition(petPosition.value.x + viewportSize.value + gap, petCenterY - panelHeight / 2),
     clampAutoPosition(petCenterX - panelWidth / 2, petPosition.value.y - panelHeight - gap),
-    clampAutoPosition(petCenterX - panelWidth / 2, petPosition.value.y + viewportSize + gap),
+    clampAutoPosition(petCenterX - panelWidth / 2, petPosition.value.y + viewportSize.value + gap),
     clampAutoPosition(margin, margin),
     clampAutoPosition(viewportWidth - panelWidth - margin, margin),
     clampAutoPosition(margin, viewportHeight - panelHeight - margin),
@@ -875,13 +999,12 @@ const documentStatusSummary = computed(() => ({
   main: documentRecords.value.filter((item) => item.owner === "Main").length,
   agents: documentRecords.value.filter((item) => item.owner !== "Main").length
 }));
-const memoryScopeOptions = computed(() => [
-  { key: "all", label: "全部范围" },
-  ...Array.from(new Set(memoryRecords.value.map((item) => item.scope.trim()).filter(Boolean))).map((scope) => ({
+const memoryScopeOptions = computed(() =>
+  Array.from(new Set(memoryRecords.value.map((item) => item.scope.trim()).filter(Boolean))).map((scope) => ({
     key: scope,
     label: scope
   }))
-]);
+);
 const documentCategoryOptions = computed(() => [
   { key: "all", label: "全部分类" },
   ...Array.from(new Set(documentRecords.value.map((item) => item.category.trim()).filter(Boolean))).map((category) => ({
@@ -891,9 +1014,11 @@ const documentCategoryOptions = computed(() => [
 ]);
 const filteredMemoryRecords = computed(() => {
   const keyword = memoryFilterText.value.trim().toLowerCase();
+  const fallbackScope = memoryScopeOptions.value[0]?.key ?? "";
+  const activeScope = activeMemoryScope.value || fallbackScope;
 
   return memoryRecords.value.filter((record) => {
-    const matchesScope = activeMemoryScope.value === "all" || record.scope === activeMemoryScope.value;
+    const matchesScope = !activeScope || record.scope === activeScope;
     if (!matchesScope) {
       return false;
     }
@@ -923,19 +1048,197 @@ const filteredDocumentRecords = computed(() => {
     return haystack.includes(keyword);
   });
 });
+const activeMemorySelectionRecords = computed(() =>
+  activeResourceModal.value === "memory" ? filteredMemberMemoryRecords.value : filteredMemoryRecords.value
+);
+const activeDocumentSelectionRecords = computed(() =>
+  activeResourceModal.value && activeResourceModal.value !== "memory" ? filteredMemberDocumentRecords.value : filteredDocumentRecords.value
+);
 const selectedMemoryRecord = computed(
-  () => filteredMemoryRecords.value.find((record) => record.id === selectedMemoryId.value) ?? filteredMemoryRecords.value[0] ?? null
+  () =>
+    activeMemorySelectionRecords.value.find((record) => record.id === selectedMemoryId.value) ?? activeMemorySelectionRecords.value[0] ?? null
 );
 const selectedDocumentRecord = computed(
   () =>
-    filteredDocumentRecords.value.find((record) => record.id === selectedDocumentId.value) ?? filteredDocumentRecords.value[0] ?? null
+    activeDocumentSelectionRecords.value.find((record) => record.id === selectedDocumentId.value) ?? activeDocumentSelectionRecords.value[0] ?? null
 );
+const activeResourceMember = computed(
+  () => staffMembers.value.find((member) => member.agentId === activeResourceMemberId.value) ?? null
+);
+const activeResourceModalTitle = computed(() => {
+  if (activeResourceModal.value === "memory") return "记忆";
+  if (activeResourceModal.value === "skill") return "技能";
+  if (activeResourceModal.value === "tool") return "工具";
+  return "";
+});
+/** 弹窗主标题：技能为 OpenClaw 技能库（全员共享），工具为该员工的 TOOLS.md */
+const resourceModalHeaderTitle = computed(() => {
+  const member = activeResourceMember.value;
+  if (activeResourceModal.value === "memory") {
+    return `${member?.displayName ?? "员工"} · 记忆`;
+  }
+  if (activeResourceModal.value === "skill") {
+    return "OpenClaw 技能库";
+  }
+  if (activeResourceModal.value === "tool") {
+    return `${member?.displayName ?? "员工"} 的工具文档（TOOLS.md）`;
+  }
+  return "";
+});
+const activeResourceModalDescription = computed(() => {
+  const member = activeResourceMember.value;
+  const name = member?.displayName ?? "当前员工";
+  if (activeResourceModal.value === "memory") {
+    return `${name} 的真实记忆文件，可直接查看与编辑。`;
+  }
+  if (activeResourceModal.value === "skill") {
+    return "来自 ~/.openclaw/skills 与 workspace/skills，每个子目录的 SKILL.md 为一项技能，全员共享。可查看与编辑。";
+  }
+  if (activeResourceModal.value === "tool") {
+    return "该员工工作区内的 TOOLS.md，记录可调用工具及使用约束。每名员工一份。";
+  }
+  return "";
+});
+/** 侧边栏标题：技能列表 / 工具文档 / 记忆 */
+const resourceSidebarHeadline = computed(() => {
+  if (activeResourceModal.value === "memory") return "记忆文件";
+  if (activeResourceModal.value === "skill") return "技能列表";
+  if (activeResourceModal.value === "tool") return "工具文档";
+  return "";
+});
+/** 技能弹窗内按关键词筛选的内置技能列表 */
+const filteredOpenClawBuiltInSkills = computed(() => {
+  if (activeResourceModal.value !== "skill") return [];
+  const keyword = resourceModalFilterText.value.trim().toLowerCase();
+  const list = openClawSkillsList.value.builtIn ?? [];
+  if (!keyword) return list;
+  return list.filter(
+    (s) =>
+      s.name.toLowerCase().includes(keyword) ||
+      s.description.toLowerCase().includes(keyword)
+  );
+});
+/** 技能弹窗内按关键词筛选的安装技能列表 */
+const filteredOpenClawInstalledSkills = computed(() => {
+  if (activeResourceModal.value !== "skill") return [];
+  const keyword = resourceModalFilterText.value.trim().toLowerCase();
+  const list = openClawSkillsList.value.installed ?? [];
+  if (!keyword) return list;
+  return list.filter(
+    (s) =>
+      s.name.toLowerCase().includes(keyword) ||
+      s.description.toLowerCase().includes(keyword) ||
+      (s.relativePath && s.relativePath.toLowerCase().includes(keyword))
+  );
+});
+/** 技能总数（内置 + 安装） */
+const openClawSkillsTotalCount = computed(
+  () => (openClawSkillsList.value.builtIn?.length ?? 0) + (openClawSkillsList.value.installed?.length ?? 0)
+);
+/** 工具弹窗内按分类分组的工具列表 */
+const openClawToolsByCategory = computed(() => {
+  const tools = openClawToolsList.value.tools;
+  const map = new Map<string, OpenClawToolListItem[]>();
+  for (const t of tools) {
+    const cat = t.category || "Other";
+    if (!map.has(cat)) map.set(cat, []);
+    map.get(cat)!.push(t);
+  }
+  const order = ["Files", "Runtime", "Web", "Memory", "Sessions", "Messaging", "UI", "Automation", "Nodes", "Other"];
+  return order.filter((c) => map.has(c)).map((c) => ({ category: c, tools: map.get(c)! }));
+});
+const filteredMemberMemoryRecords = computed(() => {
+  const member = activeResourceMember.value;
+  if (!member || activeResourceModal.value !== "memory") {
+    return [];
+  }
+
+  const keyword = resourceModalFilterText.value.trim().toLowerCase();
+  return getMemberMemoryRecords(member).filter((record) => {
+    if (!keyword) {
+      return true;
+    }
+
+    return [record.title, record.owner, record.scope, record.summary, record.relativePath].join(" ").toLowerCase().includes(keyword);
+  });
+});
+const filteredMemberDocumentRecords = computed(() => {
+  if (!activeResourceModal.value || activeResourceModal.value === "memory") {
+    return [];
+  }
+
+  const keyword = resourceModalFilterText.value.trim().toLowerCase();
+  const records = resourceDocumentRecords.value;
+
+  return records.filter((record) => {
+    if (!keyword) {
+      return true;
+    }
+
+    return [record.title, record.owner, record.category, record.summary, record.relativePath].join(" ").toLowerCase().includes(keyword);
+  });
+});
+const activeResourceTotalCount = computed(() =>
+  activeResourceModal.value === "memory" ? filteredMemberMemoryRecords.value.length : filteredMemberDocumentRecords.value.length
+);
+const activeResourceSelectedLabel = computed(() => {
+  if (activeResourceModal.value === "memory") {
+    return selectedMemoryId.value ? "编辑记忆文件" : "选择记忆文件";
+  }
+  if (activeResourceModal.value === "skill") {
+    return selectedDocumentId.value ? "编辑 SKILL.md" : "选择技能";
+  }
+  if (activeResourceModal.value === "tool") {
+    return selectedDocumentId.value ? "编辑 TOOLS.md" : "选择或创建 TOOLS.md";
+  }
+  return "选择资源";
+});
+const selectedMemoryPurposeDescription = computed(() => {
+  const record = selectedMemoryRecord.value;
+  if (!record) {
+    return "这里按员工维度展示真实记忆文件，可在选中后查看该文件承载的角色与作用。";
+  }
+
+  const fileName = record.relativePath.split("/").pop()?.toUpperCase() ?? "";
+  const suffix = record.exists ? "当前文件已存在，修改后会直接影响该员工后续的行为与上下文。" : "当前文件缺失，保存后会创建并作为该员工后续记忆的一部分。";
+
+  if (fileName === "AGENTS.MD") {
+    return `用于描述该员工的角色定位、协作边界与执行准则，帮助它明确“该怎么工作”。${suffix}`;
+  }
+  if (fileName === "MEMORY.MD") {
+    return `用于沉淀该员工需要长期记住的背景信息、偏好和稳定事实，帮助它持续保持上下文一致。${suffix}`;
+  }
+  if (fileName === "IDENTITY.MD") {
+    return `用于定义该员工的身份、职责和表达风格，帮助它在多轮任务中维持稳定人设与职责感。${suffix}`;
+  }
+  if (fileName === "SOUL.MD") {
+    return `用于记录该员工更偏长期的价值观、行为倾向和判断基调，帮助它在复杂任务中保持一致决策风格。${suffix}`;
+  }
+  if (fileName === "BOOTSTRAP.MD") {
+    return `用于存放该员工启动时需要先读取的基础说明，帮助它快速进入正确的工作状态。${suffix}`;
+  }
+  if (fileName === "HEARTBEAT.MD") {
+    return `用于记录该员工的运行节奏、巡检点或持续关注事项，帮助它维持稳定执行节拍。${suffix}`;
+  }
+  if (fileName === "TOOLS.MD") {
+    return `用于记录该员工可调用工具及使用约束，帮助它知道“能用什么、该怎么用”。${suffix}`;
+  }
+  if (record.scope.includes("记忆记录")) {
+    return `用于补充该员工的具体记忆条目或历史沉淀，帮助它保留更细粒度的长期信息。${suffix}`;
+  }
+
+  return `该文件用于补充 ${record.owner} 的长期工作记忆与上下文设定，帮助它在后续任务中保持连续性。${suffix}`;
+});
 const memoryEditorModeLabel = computed(() =>
-  memoryDraft.value.sourcePath ? "保存记忆文件" : "选择记忆文件"
+  !memoryDraft.value.sourcePath ? "选择记忆文件" : selectedMemoryRecord.value?.exists === false ? "创建并保存记忆文件" : "保存记忆文件"
 );
-const documentEditorModeLabel = computed(() =>
-  documentDraft.value.source ? "保存文档文件" : "选择文档文件"
-);
+const documentEditorModeLabel = computed(() => {
+  if (!documentDraft.value.source) return "选择文档文件";
+  const exists = selectedDocumentRecord.value?.exists === false;
+  if (activeResourceModal.value === "skill") return exists ? "创建并保存 SKILL.md" : "保存 SKILL.md";
+  if (activeResourceModal.value === "tool") return exists ? "创建并保存 TOOLS.md" : "保存 TOOLS.md";
+  return exists ? "创建并保存文档文件" : "保存文档文件";
+});
 const taskStatusSummary = computed(() => ({
   scheduled: taskRecords.value.filter((item) => item.statusKind === "scheduled").length,
   late: taskRecords.value.filter((item) => item.statusKind === "late").length,
@@ -1241,6 +1544,12 @@ let lastInteractionAt = 0;
 let idleShowcaseIndex = 0;
 let dragPointerId: number | null = null;
 let dragStart = { x: 0, y: 0, petX: 0, petY: 0 };
+/** 多显示器：当前窗口所在显示器索引 */
+let currentMonitorIndex = 0;
+/** 多显示器：窗口刚切到另一屏后，下一帧用此偏移校正宠物位置 */
+let pendingDragOffset: { x: number; y: number } | null = null;
+/** 可用显示器列表（逻辑坐标，与 screenX/screenY 一致） */
+let availableMonitors: Array<{ position: [number, number]; size: [number, number] }> = [];
 let windowPointerMoveListener: ((event: PointerEvent) => void) | null = null;
 let windowPointerUpListener: ((event: PointerEvent) => void) | null = null;
 let cursorPassThroughTimer = 0;
@@ -1261,9 +1570,15 @@ let panelMoveStart = { x: 0, y: 0, panelX: 0, panelY: 0 };
 let panelResizeStart = { x: 0, y: 0, width: 0, height: 0 };
 let gatewayMonitorTimer = 0;
 let runtimeLogTimer = 0;
+let runtimeLogFollowTimer = 0;
+let runtimeLogRefreshTask: Promise<RequestLog[]> | null = null;
+let runtimeLogLastFingerprint = "";
+let runtimeLogFollowActiveUntil = 0;
 let activeVoiceAudio: HTMLAudioElement | null = null;
 const activeVoiceMessageId = ref<string | null>(null);
 const audioPayloadCache = new Map<string, AudioFilePayload>();
+const runtimeLogPollIntervalMs = 2500;
+const runtimeLogFollowWindowMs = 4000;
 
 type TauriWindowApi = {
   close: () => Promise<void> | void;
@@ -1560,8 +1875,16 @@ function shouldSleep(now = performance.now()) {
   return getIdleElapsed(now) >= sleepDelayMs;
 }
 
+function shouldFollowRuntimeLogAnimation(now = performance.now()) {
+  return runtimeLogFollowActiveUntil > now;
+}
+
 function resolveBaseAnimationName(now = performance.now()): AnimationName {
   if (isSending.value) {
+    return "think";
+  }
+
+  if (shouldFollowRuntimeLogAnimation(now)) {
     return "think";
   }
 
@@ -1599,6 +1922,7 @@ function setAnimation(name: AnimationName, nextName?: AnimationName | null) {
   queuedAnimationName = nextName ?? null;
   statusText.value = actionTips[name];
   window.clearTimeout(idleTimer);
+  sound.animation(name, animations[name].loop);
 
   if (animations[name].loop) {
     if (queuedAnimationName && queuedAnimationName !== name) {
@@ -1843,12 +2167,8 @@ function openConsole(section: ConsoleSection) {
   } else if (section === "staff") {
     statusText.value = "员工管理已展开，适合维护角色、职责和轮值状态。";
     void refreshStaffSnapshot();
-  } else if (section === "memory") {
-    statusText.value = "记忆管理已展开，当前读取的是 OpenClaw 真实记忆文件。";
-    void refreshMemorySnapshot();
-  } else if (section === "docs") {
-    statusText.value = "文档管理已展开，当前读取的是 OpenClaw 核心文档文件。";
-    void refreshDocumentSnapshot();
+    void refreshOpenClawSkillSnapshot();
+    void refreshOpenClawSkillsList();
   } else if (section === "tasks") {
     statusText.value = "任务管理已展开，当前展示的是 openclaw cron 的真实调度快照。";
     void refreshTaskSnapshot();
@@ -1949,8 +2269,8 @@ function clampPetPosition(nextX: number, nextY: number) {
     return { x: nextX, y: nextY };
   }
 
-  const maxX = Math.max(0, bounds.width - viewportSize);
-  const maxY = Math.max(0, bounds.height - viewportSize);
+  const maxX = Math.max(0, bounds.width - viewportSize.value);
+  const maxY = Math.max(0, bounds.height - viewportSize.value);
 
   return {
     x: Math.min(Math.max(0, nextX), maxX),
@@ -1966,8 +2286,8 @@ function centerPet() {
   }
 
   petPosition.value = {
-    x: Math.max(0, bounds.width - viewportSize - 48),
-    y: Math.max(0, bounds.height - viewportSize - 56)
+    x: Math.max(0, bounds.width - viewportSize.value - 48),
+    y: Math.max(0, bounds.height - viewportSize.value - 56)
   };
 }
 
@@ -2010,11 +2330,17 @@ function handlePetClick() {
   wakeThenAnimate("stomp_feet", "smile_and_blink");
 }
 
-function handlePointerDown(event: PointerEvent) {
+async function handlePointerDown(event: PointerEvent) {
   const petEl = pet.value;
   if (!petEl) {
     return;
   }
+
+  if (availableMonitors.length === 0) {
+    await loadAvailableMonitors();
+  }
+  currentMonitorIndex = getMonitorIndexAtScreenPoint(event.screenX, event.screenY);
+  pendingDragOffset = null;
 
   dragPointerId = event.pointerId;
   isDragging.value = true;
@@ -2031,9 +2357,46 @@ function handlePointerDown(event: PointerEvent) {
   statusText.value = "拖着我走吧，我会老老实实待在舞台里。";
 }
 
-function handlePointerMove(event: PointerEvent) {
+async function handlePointerMove(event: PointerEvent) {
   if (!isDragging.value || dragPointerId !== event.pointerId) {
     return;
+  }
+
+  if (pendingDragOffset) {
+    const nextX = event.clientX - pendingDragOffset.x;
+    const nextY = event.clientY - pendingDragOffset.y;
+    petPosition.value = clampPetPosition(nextX, nextY);
+    dragStart = {
+      x: event.clientX,
+      y: event.clientY,
+      petX: petPosition.value.x,
+      petY: petPosition.value.y
+    };
+    pendingDragOffset = null;
+    noteInteraction();
+    return;
+  }
+
+  const monitorIndex = getMonitorIndexAtScreenPoint(event.screenX, event.screenY);
+  if (
+    availableMonitors.length > 1 &&
+    monitorIndex !== currentMonitorIndex
+  ) {
+    const invoke = getTauriApi()?.core?.invoke;
+    if (invoke) {
+      try {
+        await invoke("move_window_to_monitor", { index: monitorIndex });
+        currentMonitorIndex = monitorIndex;
+        pendingDragOffset = {
+          x: event.clientX - petPosition.value.x,
+          y: event.clientY - petPosition.value.y
+        };
+        noteInteraction();
+        return;
+      } catch {
+        // 跨屏移动失败时继续在当前屏内拖拽
+      }
+    }
   }
 
   const nextX = dragStart.petX + event.clientX - dragStart.x;
@@ -2055,6 +2418,7 @@ function finishDrag(event?: PointerEvent) {
     pet.value.releasePointerCapture(event.pointerId);
   }
 
+  pendingDragOffset = null;
   isDragging.value = false;
   dragPointerId = null;
   noteInteraction();
@@ -2107,6 +2471,39 @@ function hideContextMenu() {
 
 function getTauriApi() {
   return (window as Window & { __TAURI__?: TauriNamespace }).__TAURI__;
+}
+
+type MonitorInfoFromBackend = {
+  position: [number, number];
+  size: [number, number];
+  scaleFactor?: number;
+};
+
+async function loadAvailableMonitors(): Promise<void> {
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke) return;
+  try {
+    const list = (await invoke("get_available_monitors")) as MonitorInfoFromBackend[];
+    availableMonitors = list.map((m) => ({
+      position: m.position,
+      size: m.size
+    }));
+  } catch {
+    availableMonitors = [];
+  }
+}
+
+/** 返回包含 (screenX, screenY) 的显示器索引，未找到返回 0 */
+function getMonitorIndexAtScreenPoint(screenX: number, screenY: number): number {
+  for (let i = 0; i < availableMonitors.length; i++) {
+    const m = availableMonitors[i];
+    const [px, py] = m.position;
+    const [w, h] = m.size;
+    if (screenX >= px && screenX < px + w && screenY >= py && screenY < py + h) {
+      return i;
+    }
+  }
+  return 0;
 }
 
 async function openCodingPlanPlatform(url: string) {
@@ -2212,6 +2609,38 @@ async function setWindowIgnoreCursorEvents(nextValue: boolean) {
 
   await currentWindow.setIgnoreCursorEvents(nextValue, nextValue ? { forward: true } : undefined);
   ignoreCursorEvents = nextValue;
+}
+
+async function applyAlwaysOnTop(value: boolean) {
+  const tauriApi = getTauriApi();
+  const currentWindow = tauriApi?.window?.getCurrentWindow?.();
+  const win = currentWindow as (typeof currentWindow & { setAlwaysOnTop?: (v: boolean) => Promise<void> }) | undefined;
+  if (win?.setAlwaysOnTop) {
+    await win.setAlwaysOnTop(value);
+  }
+}
+
+function openSystemSettings() {
+  // 打开时用当前真实值初始化草稿
+  draftSizeLevel.value = petSizeLevel.value;
+  draftAlwaysOnTop.value = petAlwaysOnTop.value;
+  isSystemSettingsOpen.value = true;
+  void syncCursorPassThrough();
+}
+
+function closeSystemSettings() {
+  isSystemSettingsOpen.value = false;
+  void syncCursorPassThrough();
+}
+
+async function handleSystemSettingsSave() {
+  petSizeLevel.value = draftSizeLevel.value;
+  petAlwaysOnTop.value = draftAlwaysOnTop.value;
+  globalThis.localStorage?.setItem("keai.desktop-pet.size-level", petSizeLevel.value);
+  globalThis.localStorage?.setItem("keai.desktop-pet.always-on-top", String(petAlwaysOnTop.value));
+  await applyAlwaysOnTop(petAlwaysOnTop.value);
+  closeSystemSettings();
+  statusText.value = "系统设置已保存。";
 }
 
 async function closeDesktopPet() {
@@ -2556,6 +2985,7 @@ function handleOpenSessionLog(log: RequestLog) {
 
 function closeSessionLogOverlay() {
   sessionOverlayLogId.value = null;
+  void syncCursorPassThrough();
 }
 
 function handleUsePreset(preset: Omit<PlatformDraft, "id">) {
@@ -2614,6 +3044,7 @@ function handleCancelPlatformEdit() {
   isPlatformModalOpen.value = false;
   platformForm.value = createPlatformDraft();
   resetPresetSelection();
+  void syncCursorPassThrough();
 }
 
 function handleSavePlatform() {
@@ -2699,13 +3130,21 @@ async function handleSaveDocument() {
     window.alert("当前环境不支持保存文档文件。");
     return;
   }
+  const documentKind = activeResourceModal.value === "skill" ? "skill" : activeResourceModal.value === "tool" ? "tool" : "document";
   await invoke("save_source_file", {
-    kind: "document",
+    kind: documentKind,
     sourcePath: documentDraft.value.source,
     content: documentDraft.value.content
   });
   statusText.value = `文档文件“${documentDraft.value.title}”已保存。`;
-  await refreshDocumentSnapshot();
+  if (activeResourceModal.value === "skill") {
+    await refreshOpenClawSkillSnapshot();
+    await refreshOpenClawResourceDocuments("skill", null);
+  } else if (activeResourceModal.value === "tool" && activeResourceMemberId.value) {
+    await refreshOpenClawResourceDocuments("tool", activeResourceMemberId.value);
+  } else {
+    await refreshDocumentSnapshot();
+  }
 }
 
 function createMemoryDraftFromRecord(record: MemoryRecord): MemoryDraft {
@@ -2753,6 +3192,25 @@ function getStaffInitials(name: string) {
   return trimmed.slice(0, 2).toUpperCase();
 }
 
+const STAFF_AVATAR_COLORS = [
+  "avatar-color-0",
+  "avatar-color-1",
+  "avatar-color-2",
+  "avatar-color-3",
+  "avatar-color-4",
+  "avatar-color-5",
+  "avatar-color-6",
+  "avatar-color-7",
+] as const;
+
+function getStaffAvatarColorClass(agentId: string): string {
+  let hash = 0;
+  for (let i = 0; i < agentId.length; i++) {
+    hash = (hash * 31 + (agentId.codePointAt(i) ?? 0)) >>> 0;
+  }
+  return STAFF_AVATAR_COLORS[hash % STAFF_AVATAR_COLORS.length];
+}
+
 function getStaffStatusClass(member: StaffMemberSnapshot) {
   const normalized = member.statusLabel.trim();
   if (normalized === "待命") return "is-active";
@@ -2763,6 +3221,95 @@ function getStaffStatusClass(member: StaffMemberSnapshot) {
 
 function getStaffRoleLabel(member: StaffMemberSnapshot) {
   return member.roleLabel || member.agentId;
+}
+
+function normalizeStaffFacet(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function isRecordOwnedByMember(owner: string, member: StaffMemberSnapshot) {
+  const normalizedOwner = normalizeStaffFacet(owner);
+  if (!normalizedOwner) {
+    return false;
+  }
+
+  return (
+    normalizedOwner === normalizeStaffFacet(member.agentId) ||
+    normalizedOwner === normalizeStaffFacet(member.displayName) ||
+    normalizedOwner === normalizeStaffFacet(getStaffRoleLabel(member))
+  );
+}
+
+function getMemberMemoryRecords(member: StaffMemberSnapshot) {
+  return memoryRecords.value.filter((record) => isRecordOwnedByMember(record.owner, member));
+}
+
+function getMemberDocumentRecords(member: StaffMemberSnapshot) {
+  return documentRecords.value.filter((record) => isRecordOwnedByMember(record.owner, member));
+}
+
+function getStaffLinkedResourceCounts(member: StaffMemberSnapshot) {
+  return {
+    memory: getMemberMemoryRecords(member).length,
+    skill: openClawSkillsTotalCount.value,
+    tool: member.toolsProfile.trim() || member.workspace.trim() ? 1 : 0
+  };
+}
+
+function closeResourceModal() {
+  activeResourceModal.value = null;
+  activeResourceMemberId.value = null;
+  resourceModalFilterText.value = "";
+  resourceDocumentRecords.value = [];
+  void syncCursorPassThrough();
+}
+
+async function openMemberResourceModal(member: StaffMemberSnapshot, kind: ResourceModalKind) {
+  activeResourceMemberId.value = member.agentId;
+  activeResourceModal.value = kind;
+  resourceModalFilterText.value = "";
+
+  if (kind === "memory") {
+    await refreshMemorySnapshot();
+    const records = getMemberMemoryRecords(member);
+    if (records[0]) {
+      handleSelectMemory(records[0]);
+      statusText.value = `已打开 ${member.displayName} 的记忆弹窗，可直接查看或编辑。`;
+    } else {
+      selectedMemoryId.value = null;
+      memoryDraft.value = createEmptyMemoryDraft();
+      statusText.value = `${member.displayName} 暂未发现可编辑记忆文件。`;
+    }
+    void syncCursorPassThrough();
+    return;
+  }
+
+  if (kind === "skill") {
+    await refreshOpenClawSkillsList();
+    statusText.value = `已打开 OpenClaw 技能库，内置 ${openClawSkillsList.value.builtIn?.length ?? 0} 项、安装 ${openClawSkillsList.value.installed?.length ?? 0} 项。`;
+    void syncCursorPassThrough();
+    return;
+  }
+
+  if (kind === "tool") {
+    await refreshOpenClawToolsList(member.agentId);
+    const enabledCount = openClawToolsList.value.tools.filter((t) => t.enabled).length;
+    statusText.value = `已打开 ${member.displayName} 的工具配置，当前 Profile：${openClawToolsList.value.profileLabel}，${enabledCount} 项已启用。`;
+    void syncCursorPassThrough();
+    return;
+  }
+}
+
+async function handleOpenMemberMemory(member: StaffMemberSnapshot) {
+  await openMemberResourceModal(member, "memory");
+}
+
+async function handleOpenMemberSkill(member: StaffMemberSnapshot) {
+  await openMemberResourceModal(member, "skill");
+}
+
+async function handleOpenMemberTool(member: StaffMemberSnapshot) {
+  await openMemberResourceModal(member, "tool");
 }
 
 async function refreshStaffSnapshot() {
@@ -2799,7 +3346,8 @@ function mapMemorySnapshotItem(item: SourceFileSnapshotItem): MemoryRecord {
     content: item.content,
     sourcePath: item.sourcePath,
     relativePath: item.relativePath,
-    updatedAt: item.updatedAtMs
+    updatedAt: item.updatedAtMs,
+    exists: item.exists
   };
 }
 
@@ -2813,7 +3361,8 @@ function mapDocumentSnapshotItem(item: SourceFileSnapshotItem): DocumentRecord {
     relativePath: item.relativePath,
     summary: item.summary,
     content: item.content,
-    updatedAt: item.updatedAtMs
+    updatedAt: item.updatedAtMs,
+    exists: item.exists
   };
 }
 
@@ -2833,10 +3382,14 @@ async function refreshMemorySnapshot() {
     memoryRecords.value = Array.isArray(result.items) ? result.items.map(mapMemorySnapshotItem) : [];
     memorySnapshotSourcePath.value = result.sourcePath ?? "";
     memorySnapshotDetail.value = result.detail ?? "记忆文件读取完成。";
+    if (!memoryScopeOptions.value.some((scope) => scope.key === activeMemoryScope.value)) {
+      activeMemoryScope.value = memoryScopeOptions.value[0]?.key ?? "";
+    }
   } catch (error) {
     memoryRecords.value = [];
     memorySnapshotSourcePath.value = "";
     memorySnapshotDetail.value = error instanceof Error ? error.message : "记忆文件读取失败。";
+    activeMemoryScope.value = "";
   }
 }
 
@@ -2860,6 +3413,112 @@ async function refreshDocumentSnapshot() {
     documentRecords.value = [];
     documentSnapshotSourcePath.value = "";
     documentSnapshotDetail.value = error instanceof Error ? error.message : "核心文档读取失败。";
+  }
+}
+
+async function refreshOpenClawSkillSnapshot() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+
+  if (!invoke) {
+    openClawSkillRecords.value = [];
+    return;
+  }
+
+  try {
+    const result = (await invoke("load_openclaw_resource_snapshot", {
+      kind: "skill",
+      agentId: null
+    })) as SourceFileSnapshotResponse;
+    openClawSkillRecords.value = Array.isArray(result.items) ? result.items.map(mapDocumentSnapshotItem) : [];
+  } catch {
+    openClawSkillRecords.value = [];
+  }
+}
+
+async function refreshOpenClawResourceDocuments(kind: Exclude<ResourceModalKind, "memory">, agentId: string | null) {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+
+  if (!invoke) {
+    resourceDocumentRecords.value = [];
+    return;
+  }
+
+  try {
+    const result = (await invoke("load_openclaw_resource_snapshot", {
+      kind,
+      agentId: kind === "tool" && agentId ? agentId : null
+    })) as SourceFileSnapshotResponse;
+    resourceDocumentRecords.value = Array.isArray(result.items) ? result.items.map(mapDocumentSnapshotItem) : [];
+  } catch {
+    resourceDocumentRecords.value = [];
+  }
+}
+
+/** 加载 OpenClaw 技能库（内置 + 安装） */
+async function refreshOpenClawSkillsList() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    openClawSkillsList.value = { builtIn: [], installed: [] };
+    return;
+  }
+  try {
+    const result = (await invoke("load_openclaw_skills_list")) as {
+      builtIn: OpenClawSkillListItem[];
+      installed: OpenClawSkillListItem[];
+    };
+    openClawSkillsList.value = {
+      builtIn: Array.isArray(result?.builtIn) ? result.builtIn : [],
+      installed: Array.isArray(result?.installed) ? result.installed : []
+    };
+  } catch {
+    openClawSkillsList.value = { builtIn: [], installed: [] };
+  }
+}
+
+/** 切换技能启用状态并写回 openclaw.json */
+async function setOpenClawSkillEnabled(skillId: string, enabled: boolean) {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) return;
+  try {
+    await invoke("save_openclaw_skill_enabled", { skillId, enabled });
+    const list = openClawSkillsList.value;
+    const update = (arr: OpenClawSkillListItem[]) =>
+      arr.map((s) => (s.id === skillId ? { ...s, enabled } : s));
+    openClawSkillsList.value = {
+      builtIn: update(list.builtIn ?? []),
+      installed: update(list.installed ?? [])
+    };
+    statusText.value = `技能「${skillId}」已${enabled ? "启用" : "禁用"}。`;
+  } catch (e) {
+    statusText.value = (e instanceof Error ? e.message : "保存失败") + "";
+  }
+}
+
+/** 加载当前员工的 OpenClaw 工具配置列表（用于工具弹窗，非 TOOLS.md 编辑） */
+async function refreshOpenClawToolsList(agentId: string | null) {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    openClawToolsList.value = { profile: "", profileLabel: "", tools: [] };
+    return;
+  }
+  try {
+    const result = (await invoke("load_openclaw_tools_list", { agentId })) as {
+      profile: string;
+      profileLabel: string;
+      tools: OpenClawToolListItem[];
+    };
+    openClawToolsList.value = {
+      profile: result?.profile ?? "",
+      profileLabel: result?.profileLabel ?? "",
+      tools: Array.isArray(result?.tools) ? result.tools : []
+    };
+  } catch {
+    openClawToolsList.value = { profile: "", profileLabel: "", tools: [] };
   }
 }
 
@@ -2887,6 +3546,11 @@ async function refreshTaskSnapshot() {
 }
 
 async function refreshOpenClawMessageLogs() {
+  if (runtimeLogRefreshTask) {
+    return runtimeLogRefreshTask;
+  }
+
+  runtimeLogRefreshTask = (async () => {
   const tauriApi = getTauriApi();
   const invoke = tauriApi?.core?.invoke;
 
@@ -2898,22 +3562,41 @@ async function refreshOpenClawMessageLogs() {
 
   try {
     const result = (await invoke("load_openclaw_message_logs")) as OpenClawMessageLogResponse;
-    runtimeRequestLogs.value = Array.isArray(result.logs) ? result.logs : [];
+    const nextLogs = Array.isArray(result.logs) ? result.logs : [];
+    const nextFingerprint = nextLogs
+      .slice(0, 8)
+      .map((log) => `${log.id}:${log.createdAt}:${log.responseStatus}`)
+      .join("|");
+    const hasRuntimeLogUpdate = nextFingerprint !== runtimeLogLastFingerprint;
+
+    runtimeRequestLogs.value = nextLogs;
+    runtimeLogLastFingerprint = nextFingerprint;
     runtimeLogDetail.value = result.detail ?? "OpenClaw 运行时消息读取完成。";
+
+    if (hasRuntimeLogUpdate && nextLogs.length > 0) {
+      runtimeLogFollowActiveUntil = performance.now() + runtimeLogFollowWindowMs;
+      window.clearTimeout(runtimeLogFollowTimer);
+      runtimeLogFollowTimer = window.setTimeout(() => {
+        applyBaseAnimation(true);
+      }, runtimeLogFollowWindowMs + 80);
+      applyBaseAnimation(true);
+    }
+
     return runtimeRequestLogs.value;
   } catch (error) {
     runtimeRequestLogs.value = [];
     runtimeLogDetail.value = error instanceof Error ? error.message : "OpenClaw 运行时消息读取失败。";
     return [];
+  } finally {
+    runtimeLogRefreshTask = null;
   }
+  })();
+
+  return runtimeLogRefreshTask;
 }
 
-function formatMemoryStatus(_: string) {
-  return "源文件";
-}
-
-function formatDocumentStatus(_: string) {
-  return "源文件";
+function formatDocumentStatus(exists: boolean) {
+  return exists ? "源文件" : "缺失";
 }
 
 function formatTaskStatus(status: TaskSnapshotItem["statusKind"]) {
@@ -3050,20 +3733,36 @@ function handleExportLogs() {
 async function syncCursorPassThrough() {
   const tauriApi = getTauriApi();
   const cursorPosition = tauriApi?.window?.cursorPosition;
+  const invoke = tauriApi?.core?.invoke;
 
   if (!cursorPosition) {
     return;
   }
 
-  if (isDragging.value || contextMenu.value.visible) {
+  const isAnyModalOpen =
+    (activeResourceModal.value && activeResourceMember.value) ||
+    !!sessionOverlayLog.value ||
+    isPlatformModalOpen.value ||
+    isSystemSettingsOpen.value;
+
+  if (isDragging.value || contextMenu.value.visible || isAnyModalOpen) {
     await setWindowIgnoreCursorEvents(false);
-    return;
+    if (isAnyModalOpen) return;
   }
 
   const cursor = await cursorPosition();
   const scale = window.devicePixelRatio || 1;
-  const cursorX = cursor.x / scale;
-  const cursorY = cursor.y / scale;
+  let cursorX = cursor.x / scale;
+  let cursorY = cursor.y / scale;
+  if (invoke) {
+    try {
+      const winPos = (await invoke("get_window_inner_position")) as { x: number; y: number };
+      cursorX = (cursor.x - winPos.x) / scale;
+      cursorY = (cursor.y - winPos.y) / scale;
+    } catch {
+      // 降级：不转换坐标（单屏或主屏时可能仍正确）
+    }
+  }
   const petRect = pet.value?.getBoundingClientRect();
   const menuRect = contextMenuRef.value?.getBoundingClientRect();
   const chatRect = chatPanelRef.value?.getBoundingClientRect();
@@ -3656,8 +4355,12 @@ watch(
 );
 
 watch(
-  filteredMemoryRecords,
+  activeMemorySelectionRecords,
   (records) => {
+    if (activeResourceModal.value !== "memory") {
+      return;
+    }
+
     if (!records.length) {
       if (selectedMemoryId.value && !memoryRecords.value.some((record) => record.id === selectedMemoryId.value)) {
         resetMemoryDraft();
@@ -3673,8 +4376,12 @@ watch(
 );
 
 watch(
-  filteredDocumentRecords,
+  activeDocumentSelectionRecords,
   (records) => {
+    if (!activeResourceModal.value || activeResourceModal.value === "memory") {
+      return;
+    }
+
     if (!records.length) {
       if (selectedDocumentId.value && !documentRecords.value.some((record) => record.id === selectedDocumentId.value)) {
         resetDocumentDraft();
@@ -3744,11 +4451,15 @@ onMounted(() => {
   proxyPort.value = loadProxyPort();
   platforms.value = loadPlatforms();
   localRequestLogs.value = loadRequestLogs(platforms.value);
+  void loadAvailableMonitors();
   void refreshOpenClawMessageLogs();
   void refreshStaffSnapshot();
   void refreshMemorySnapshot();
   void refreshDocumentSnapshot();
+  void refreshOpenClawSkillSnapshot();
+  void refreshOpenClawSkillsList();
   void refreshTaskSnapshot();
+  void applyAlwaysOnTop(petAlwaysOnTop.value);
   const storedActivePlatformId = loadActivePlatformId();
   const storedActivePlatform =
     platforms.value.find((platform) => platform.id === storedActivePlatformId) ?? null;
@@ -3772,7 +4483,7 @@ onMounted(() => {
   }, 30000);
   runtimeLogTimer = window.setInterval(() => {
     void refreshOpenClawMessageLogs();
-  }, 15000);
+  }, runtimeLogPollIntervalMs);
   windowPointerMoveListener = (event: PointerEvent) => {
     handlePointerMove(event);
   };
@@ -3804,6 +4515,7 @@ onBeforeUnmount(() => {
   window.cancelAnimationFrame(panelAnimationFrame);
   window.cancelAnimationFrame(bubbleAnimationFrame);
   window.clearTimeout(idleTimer);
+  window.clearTimeout(runtimeLogFollowTimer);
   window.clearInterval(cursorPassThroughTimer);
   window.clearInterval(gatewayMonitorTimer);
   window.clearInterval(runtimeLogTimer);
@@ -3964,7 +4676,7 @@ onBeforeUnmount(() => {
           <p class="desktop-console-panel__intro">
             当前默认平台
             <span class="desktop-console-panel__platform">{{ activePlatform?.name ?? openClawDefaultPlatformName }}</span>
-            ，这里已经扩展为平台、员工、记忆、文档、任务统一管理台。
+            ，这里已经扩展为平台、员工与任务统一管理台。
           </p>
         </div>
         <div v-else-if="activePanelMode === 'logs'">
@@ -3992,6 +4704,14 @@ onBeforeUnmount(() => {
             @click="openSubscriptionRecommendations()"
           >
             订阅推荐
+          </button>
+          <button
+            v-if="activePanelMode === 'console'"
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            @click="openSystemSettings()"
+          >
+            系统设置
           </button>
           <button
             v-if="activePanelMode !== 'console'"
@@ -4778,7 +5498,7 @@ onBeforeUnmount(() => {
             <article v-for="member in staffMembers" :key="member.agentId" class="staff-brief-card">
               <div class="staff-brief-head">
                 <div class="staff-avatar">
-                  <div class="staff-avatar__badge" :class="getStaffStatusClass(member)">
+                  <div class="staff-avatar__badge" :class="[getStaffStatusClass(member), getStaffAvatarColorClass(member.agentId)]">
                     {{ getStaffInitials(member.displayName) }}
                   </div>
                 </div>
@@ -4799,15 +5519,34 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="staff-brief-row">
                   <dt>{{ member.currentWorkLabel }}</dt>
-                  <dd>{{ member.currentWork }}</dd>
+                  <dd class="staff-brief-row__current-work">{{ member.currentWork }}</dd>
                 </div>
                 <div class="staff-brief-row">
                   <dt>最近产出</dt>
-                  <dd>{{ member.recentOutput }}</dd>
+                  <dd class="staff-brief-row__recent-output">{{ member.recentOutput }}</dd>
                 </div>
                 <div class="staff-brief-row">
                   <dt>是否在排班里</dt>
                   <dd>{{ member.scheduledLabel }}</dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>关联资源</dt>
+                  <dd>
+                    <div class="staff-linked-actions staff-linked-actions--compact">
+                      <button class="staff-linked-actions__button" type="button" title="该员工的记忆文件" @click="handleOpenMemberMemory(member)">
+                        <span>记忆</span>
+                        <strong>{{ getStaffLinkedResourceCounts(member).memory }}</strong>
+                      </button>
+                      <button class="staff-linked-actions__button" type="button" title="OpenClaw 技能库（全员共享），~/.openclaw/skills 下各 SKILL.md" @click="handleOpenMemberSkill(member)">
+                        <span>技能库</span>
+                        <strong>{{ getStaffLinkedResourceCounts(member).skill }}</strong>
+                      </button>
+                      <button class="staff-linked-actions__button" type="button" title="该员工工作区内的 TOOLS.md" @click="handleOpenMemberTool(member)">
+                        <span>TOOLS</span>
+                        <strong>{{ getStaffLinkedResourceCounts(member).tool }}</strong>
+                      </button>
+                    </div>
+                  </dd>
                 </div>
               </dl>
             </article>
@@ -4837,6 +5576,7 @@ onBeforeUnmount(() => {
                     <th>职责焦点</th>
                     <th>模型</th>
                     <th>工具权限</th>
+                    <th>关联资源</th>
                     <th>状态</th>
                   </tr>
                 </thead>
@@ -4848,219 +5588,27 @@ onBeforeUnmount(() => {
                     <td>{{ getStaffRoleLabel(member) }}</td>
                     <td>{{ member.model }}</td>
                     <td>{{ member.toolsProfile }}</td>
+                    <td>
+                      <div class="staff-linked-actions staff-linked-actions--table">
+                        <button class="staff-linked-actions__button" type="button" title="该员工的记忆文件" @click="handleOpenMemberMemory(member)">
+                          <span>记忆</span>
+                          <strong>{{ getStaffLinkedResourceCounts(member).memory }}</strong>
+                        </button>
+                        <button class="staff-linked-actions__button" type="button" title="OpenClaw 技能库（全员共享）" @click="handleOpenMemberSkill(member)">
+                          <span>技能库</span>
+                          <strong>{{ getStaffLinkedResourceCounts(member).skill }}</strong>
+                        </button>
+                        <button class="staff-linked-actions__button" type="button" title="该员工工作区 TOOLS.md" @click="handleOpenMemberTool(member)">
+                          <span>TOOLS</span>
+                          <strong>{{ getStaffLinkedResourceCounts(member).tool }}</strong>
+                        </button>
+                      </div>
+                    </td>
                     <td>{{ member.statusLabel }}</td>
                   </tr>
                 </tbody>
               </table>
             </div>
-          </div>
-        </section>
-      </div>
-
-      <div v-else-if="activeSection === 'memory'" class="desktop-console-body desktop-console-body--overview">
-        <section class="section-block overview-section">
-          <header class="section-block__header section-block__header--compact">
-            <div>
-              <h3>记忆管理</h3>
-              <p>参照 openclaw-control-center，直接浏览和编辑 OpenClaw 的真实记忆文件。</p>
-            </div>
-            <div class="toolbar-actions">
-              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshMemorySnapshot">
-                刷新
-              </button>
-            </div>
-          </header>
-
-          <div class="platform-inline-note">
-            <p>{{ memorySnapshotDetail }}</p>
-            <p>来源：{{ memorySnapshotSourcePath || "未定位记忆工作区" }}</p>
-          </div>
-
-          <div class="management-workbench management-workbench--dense">
-            <aside class="management-sidebar">
-              <div class="management-sidebar__tools">
-                <div class="management-sidebar__headline">
-                  <strong>记忆目录</strong>
-                  <small>{{ filteredMemoryRecords.length }} / {{ memoryRecords.length }} 条</small>
-                </div>
-                <div class="management-segmented">
-                  <button
-                    v-for="scope in memoryScopeOptions"
-                    :key="scope.key"
-                    class="management-segmented__item"
-                    :class="{ active: activeMemoryScope === scope.key }"
-                    type="button"
-                    @click="activeMemoryScope = scope.key"
-                  >
-                    {{ scope.label }}
-                  </button>
-                </div>
-                <input v-model="memoryFilterText" class="management-filter-input" type="text" placeholder="筛选标题、归属人、范围或摘要" />
-              </div>
-
-              <div class="management-nav">
-                <button
-                  v-for="record in filteredMemoryRecords"
-                  :key="record.id"
-                  class="management-nav-item"
-                  :class="{ active: selectedMemoryRecord?.id === record.id }"
-                  type="button"
-                  @click="handleSelectMemory(record)"
-                >
-                  <div class="management-nav-item__topline">
-                    <strong>{{ record.title }}</strong>
-                    <span>{{ formatMemoryStatus(record.scope) }}</span>
-                  </div>
-                  <p>{{ record.summary }}</p>
-                  <small>{{ record.scope }} · {{ record.relativePath }} · {{ formatTime(record.updatedAt) }}</small>
-                </button>
-                <div v-if="filteredMemoryRecords.length === 0" class="empty-state management-empty-state">当前筛选下没有记忆条目。</div>
-              </div>
-            </aside>
-
-            <section class="management-editor">
-              <div class="management-editor__header">
-                <div>
-                  <strong>{{ selectedMemoryId ? "编辑记忆文件" : "选择记忆文件" }}</strong>
-                  <p>
-                    {{
-                      selectedMemoryRecord
-                        ? `${selectedMemoryRecord.scope} · ${selectedMemoryRecord.relativePath} · 最近更新 ${formatTime(selectedMemoryRecord.updatedAt)}`
-                        : "这里只展示 Main 和记忆工作区里的真实源文件。"
-                    }}
-                  </p>
-                </div>
-                <div class="management-editor__actions">
-                  <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshMemorySnapshot">
-                    重新读取
-                  </button>
-                </div>
-              </div>
-
-              <form class="management-editor__form" @submit.prevent="handleSaveMemory">
-                <div class="management-form-grid management-form-grid--workbench">
-                  <input v-model="memoryDraft.title" type="text" placeholder="记忆标题" readonly />
-                  <input v-model="memoryDraft.owner" type="text" placeholder="归属员工" readonly />
-                  <input v-model="memoryDraft.scope" type="text" placeholder="记忆分类" readonly />
-                  <input v-model="memoryDraft.relativePath" type="text" placeholder="相对路径" readonly />
-                  <input v-model="memoryDraft.sourcePath" type="text" placeholder="源文件路径" readonly />
-                  <div class="management-editor__meta-card">
-                    <span>当前来源</span>
-                    <strong>{{ memoryEditorModeLabel }}</strong>
-                    <small>{{ selectedMemoryId ? "保存会直接写回 OpenClaw 真实记忆文件" : "先从左侧选择记忆文件" }}</small>
-                  </div>
-                  <textarea v-model="memoryDraft.content" rows="12" placeholder="记忆文件内容" />
-                </div>
-
-                <div class="management-form-grid__actions management-form-grid__actions--editor">
-                  <button class="desktop-console-panel__action" type="submit" :disabled="!memoryDraft.sourcePath">{{ memoryEditorModeLabel }}</button>
-                </div>
-              </form>
-            </section>
-          </div>
-        </section>
-      </div>
-
-      <div v-else-if="activeSection === 'docs'" class="desktop-console-body desktop-console-body--overview">
-        <section class="section-block overview-section">
-          <header class="section-block__header section-block__header--compact">
-            <div>
-              <h3>文档管理</h3>
-              <p>参照 openclaw-control-center，直接读取 Main 和各 agent 工作区里的核心文档。</p>
-            </div>
-            <div class="toolbar-actions">
-              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshDocumentSnapshot">
-                刷新
-              </button>
-            </div>
-          </header>
-
-          <div class="management-workbench management-workbench--dense">
-            <aside class="management-sidebar">
-              <div class="management-sidebar__tools">
-                <div class="management-sidebar__headline">
-                  <strong>文档目录</strong>
-                  <small>{{ filteredDocumentRecords.length }} / {{ documentRecords.length }} 份</small>
-                </div>
-                <div class="management-segmented">
-                  <button
-                    v-for="category in documentCategoryOptions"
-                    :key="category.key"
-                    class="management-segmented__item"
-                    :class="{ active: activeDocumentCategory === category.key }"
-                    type="button"
-                    @click="activeDocumentCategory = category.key"
-                  >
-                    {{ category.label }}
-                  </button>
-                </div>
-                <input
-                  v-model="documentFilterText"
-                  class="management-filter-input"
-                  type="text"
-                  placeholder="筛选标题、分类、负责人、来源或摘要"
-                />
-              </div>
-
-              <div class="management-nav">
-                <button
-                  v-for="record in filteredDocumentRecords"
-                  :key="record.id"
-                  class="management-nav-item management-nav-item--document"
-                  :class="{ active: selectedDocumentRecord?.id === record.id }"
-                  type="button"
-                  @click="handleSelectDocument(record)"
-                >
-                  <div class="management-nav-item__topline">
-                    <strong>{{ record.title }}</strong>
-                    <span class="management-nav-item__badge">{{ formatDocumentStatus(record.category) }}</span>
-                  </div>
-                  <p>{{ record.summary }}</p>
-                  <small>{{ record.category }} · {{ record.relativePath }} · {{ formatTime(record.updatedAt) }}</small>
-                </button>
-                <div v-if="filteredDocumentRecords.length === 0" class="empty-state management-empty-state">当前筛选下没有文档。</div>
-              </div>
-            </aside>
-
-            <section class="management-editor">
-              <div class="management-editor__header">
-                <div>
-                  <strong>{{ selectedDocumentId ? "编辑核心文档" : "选择核心文档" }}</strong>
-                  <p>
-                    {{
-                      selectedDocumentRecord
-                        ? `${selectedDocumentRecord.category} · ${selectedDocumentRecord.relativePath} · 最近更新 ${formatTime(selectedDocumentRecord.updatedAt)}`
-                        : "这里只展示 Main 和各 agent 工作区的核心文档文件。"
-                    }}
-                  </p>
-                </div>
-                <div class="management-editor__actions">
-                  <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshDocumentSnapshot">
-                    重新读取
-                  </button>
-                </div>
-              </div>
-
-              <form class="management-editor__form" @submit.prevent="handleSaveDocument">
-                <div class="management-form-grid management-form-grid--workbench">
-                  <input v-model="documentDraft.title" type="text" placeholder="文档标题" readonly />
-                  <input v-model="documentDraft.category" type="text" placeholder="文档分类" readonly />
-                  <input v-model="documentDraft.owner" type="text" placeholder="负责人" readonly />
-                  <input v-model="documentDraft.relativePath" type="text" placeholder="相对路径" readonly />
-                  <input v-model="documentDraft.source" type="text" placeholder="来源路径" readonly />
-                  <div class="management-editor__meta-card">
-                    <span>当前来源</span>
-                    <strong>{{ documentEditorModeLabel }}</strong>
-                    <small>{{ selectedDocumentId ? "保存会直接写回 OpenClaw 真实文档文件" : "先从左侧选择文档文件" }}</small>
-                  </div>
-                  <textarea v-model="documentDraft.content" rows="12" placeholder="文档内容" />
-                </div>
-
-                <div class="management-form-grid__actions management-form-grid__actions--editor">
-                  <button class="desktop-console-panel__action" type="submit" :disabled="!documentDraft.source">{{ documentEditorModeLabel }}</button>
-                </div>
-              </form>
-            </section>
           </div>
         </section>
       </div>
@@ -5193,7 +5741,7 @@ onBeforeUnmount(() => {
             <strong>会话请求详情</strong>
             <p>{{ sessionOverlayLog.platformName }} · {{ sessionOverlayLog.method }} {{ sessionOverlayLog.path || sessionOverlayLog.endpoint }}</p>
           </div>
-          <button class="platform-modal__close" type="button" @click="closeSessionLogOverlay">×</button>
+          <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop="closeSessionLogOverlay">×</button>
         </header>
 
         <div class="platform-modal__form">
@@ -5269,6 +5817,226 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
+    <div v-if="activeResourceModal && activeResourceMember" class="platform-modal-backdrop" @click.self="closeResourceModal">
+      <section class="platform-modal resource-modal">
+        <header class="platform-modal__header">
+          <div>
+            <strong>{{ resourceModalHeaderTitle }}</strong>
+            <p>{{ activeResourceModalDescription }}</p>
+          </div>
+          <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop.prevent="closeResourceModal">×</button>
+        </header>
+
+        <div class="resource-modal__content" :class="{ 'resource-modal__content--full': activeResourceModal === 'skill' || activeResourceModal === 'tool' }">
+          <!-- 技能：内置 + 安装，可单独开启/禁用 -->
+          <template v-if="activeResourceModal === 'skill'">
+            <section class="openclaw-list-panel">
+              <div class="openclaw-list-panel__toolbar">
+                <input
+                  v-model="resourceModalFilterText"
+                  class="management-filter-input"
+                  type="text"
+                  placeholder="筛选技能名称或描述"
+                />
+                <span class="openclaw-list-panel__count">{{ openClawSkillsTotalCount }} 项（内置 {{ openClawSkillsList.builtIn?.length ?? 0 }} + 安装 {{ openClawSkillsList.installed?.length ?? 0 }}）</span>
+                <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshOpenClawSkillsList()">重新读取</button>
+              </div>
+
+              <div class="openclaw-skills-sections">
+                <section class="openclaw-skills-section">
+                  <h5 class="openclaw-tools-category__title">内置技能</h5>
+                  <div v-if="filteredOpenClawBuiltInSkills.length === 0" class="empty-state management-empty-state empty-state--small">
+                    暂无内置技能。
+                  </div>
+                  <ul v-else class="openclaw-skill-cards">
+                    <li v-for="skill in filteredOpenClawBuiltInSkills" :key="skill.id" class="openclaw-skill-card">
+                      <div class="openclaw-skill-card__head">
+                        <strong>{{ skill.name }}</strong>
+                        <label class="openclaw-skill-card__toggle" :aria-label="`${skill.enabled ? '禁用' : '启用'}技能 ${skill.name}`">
+                          <input type="checkbox" :checked="skill.enabled" @change="setOpenClawSkillEnabled(skill.id, ($event.target as HTMLInputElement).checked)" />
+                          <span class="openclaw-skill-card__toggle-slider" />
+                        </label>
+                      </div>
+                      <p class="openclaw-skill-card__desc">{{ skill.description }}</p>
+                    </li>
+                  </ul>
+                </section>
+
+                <section class="openclaw-skills-section">
+                  <h5 class="openclaw-tools-category__title">安装技能</h5>
+                  <div v-if="filteredOpenClawInstalledSkills.length === 0" class="empty-state management-empty-state empty-state--small">
+                    暂无安装技能。在 ~/.openclaw/skills 或 workspace/skills 下为每个技能建子目录并放入 SKILL.md。
+                  </div>
+                  <ul v-else class="openclaw-skill-cards">
+                    <li v-for="skill in filteredOpenClawInstalledSkills" :key="skill.id" class="openclaw-skill-card">
+                      <div class="openclaw-skill-card__head">
+                        <strong>{{ skill.name }}</strong>
+                        <label class="openclaw-skill-card__toggle" :aria-label="`${skill.enabled ? '禁用' : '启用'}技能 ${skill.name}`">
+                          <input type="checkbox" :checked="skill.enabled" @change="setOpenClawSkillEnabled(skill.id, ($event.target as HTMLInputElement).checked)" />
+                          <span class="openclaw-skill-card__toggle-slider" />
+                        </label>
+                      </div>
+                      <p class="openclaw-skill-card__desc">{{ skill.description }}</p>
+                      <small v-if="skill.relativePath" class="openclaw-skill-card__path">{{ skill.relativePath }}</small>
+                    </li>
+                  </ul>
+                </section>
+              </div>
+            </section>
+          </template>
+
+          <!-- 工具：展示 Profile 与按分类的工具列表，非 TOOLS.md 编辑 -->
+          <template v-else-if="activeResourceModal === 'tool'">
+            <section class="openclaw-list-panel">
+              <div class="openclaw-list-panel__toolbar">
+                <span class="openclaw-tools-profile">Profile: <strong>{{ openClawToolsList.profileLabel || openClawToolsList.profile || '—' }}</strong></span>
+                <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshOpenClawToolsList(activeResourceMember?.agentId ?? null)">重新读取</button>
+              </div>
+              <p class="openclaw-list-panel__hint">工具开关与配置请在 openclaw.json 的 tools / agents.list[].tools 中修改（profile、allow、deny）。</p>
+              <div v-for="group in openClawToolsByCategory" :key="group.category" class="openclaw-tools-category">
+                <h5 class="openclaw-tools-category__title">{{ group.category }}</h5>
+                <ul class="openclaw-tool-cards">
+                  <li v-for="tool in group.tools" :key="tool.id" class="openclaw-tool-card">
+                    <div class="openclaw-tool-card__head">
+                      <code class="openclaw-tool-card__id">{{ tool.id }}</code>
+                      <span class="openclaw-tool-card__badge" :class="{ 'openclaw-tool-card__badge--on': tool.enabled }">{{ tool.enabled ? '已启用' : '未启用' }}</span>
+                    </div>
+                    <p class="openclaw-tool-card__desc">{{ tool.description }}</p>
+                  </li>
+                </ul>
+              </div>
+            </section>
+          </template>
+
+          <!-- 记忆：保留原有侧边栏 + 编辑区 -->
+          <template v-else>
+            <aside class="management-sidebar">
+              <div class="management-sidebar__tools">
+                <div class="management-sidebar__headline">
+                  <strong>{{ resourceSidebarHeadline }}</strong>
+                  <small>{{ activeResourceTotalCount }} 条</small>
+                </div>
+                <input
+                  v-model="resourceModalFilterText"
+                  class="management-filter-input"
+                  type="text"
+                  placeholder="筛选标题、摘要或路径"
+                />
+              </div>
+              <div class="management-nav">
+                <button
+                  v-for="record in filteredMemberMemoryRecords"
+                  :key="record.id"
+                  class="management-nav-item"
+                  :class="{ active: selectedMemoryRecord?.id === record.id }"
+                  type="button"
+                  @click="handleSelectMemory(record)"
+                >
+                  <div class="management-nav-item__topline">
+                    <strong>{{ record.title }}</strong>
+                  </div>
+                  <p>{{ record.summary }}</p>
+                  <small>{{ record.scope }} · {{ record.relativePath }} · {{ formatTime(record.updatedAt) }}</small>
+                </button>
+                <div v-if="filteredMemberMemoryRecords.length === 0" class="empty-state management-empty-state">当前员工暂无可显示的记忆资料。</div>
+              </div>
+            </aside>
+            <section class="management-editor">
+              <div class="management-editor__header">
+                <div>
+                  <strong>{{ activeResourceSelectedLabel }}</strong>
+                  <p>{{ selectedMemoryPurposeDescription }}</p>
+                </div>
+                <div class="management-editor__actions">
+                  <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshMemorySnapshot()">重新读取</button>
+                </div>
+              </div>
+              <form class="management-editor__form" @submit.prevent="handleSaveMemory">
+              <div class="management-form-grid management-form-grid--workbench">
+                <input v-model="memoryDraft.title" type="text" placeholder="记忆标题" readonly />
+                <input v-model="memoryDraft.owner" type="text" placeholder="归属员工" readonly />
+                <input v-model="memoryDraft.scope" type="text" placeholder="记忆分类" readonly />
+                <input v-model="memoryDraft.relativePath" type="text" placeholder="相对路径" readonly />
+                <input v-model="memoryDraft.sourcePath" type="text" placeholder="源文件路径" readonly />
+                <div class="management-editor__meta-card">
+                  <span>当前来源</span>
+                  <strong>{{ memoryEditorModeLabel }}</strong>
+                  <small>{{ selectedMemoryId ? (selectedMemoryRecord?.exists === false ? "保存会在 OpenClaw 工作区中创建该记忆文件" : "保存会直接写回 OpenClaw 真实记忆文件") : "先从左侧选择记忆文件" }}</small>
+                </div>
+                <textarea v-model="memoryDraft.content" rows="12" placeholder="记忆文件内容" />
+              </div>
+
+              <div class="management-form-grid__actions management-form-grid__actions--editor">
+                <button class="desktop-console-panel__action" type="submit" :disabled="!memoryDraft.sourcePath">{{ memoryEditorModeLabel }}</button>
+              </div>
+            </form>
+            </section>
+          </template>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="isSystemSettingsOpen" class="platform-modal-backdrop" @click.self="closeSystemSettings">
+      <div class="platform-modal system-settings-modal" role="dialog" aria-modal="true" aria-label="系统设置">
+        <header class="platform-modal__header">
+          <h3>系统设置</h3>
+          <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop="closeSystemSettings">×</button>
+        </header>
+        <div class="system-settings-body">
+          <section class="system-settings-section">
+            <h4 class="system-settings-section__title">宠物大小</h4>
+            <div class="system-settings-size-options">
+              <label
+                v-for="opt in ([{ value: 'small', label: '小', px: 28 }, { value: 'medium', label: '中', px: 44 }, { value: 'large', label: '大', px: 60 }] as const)"
+                :key="opt.value"
+                class="system-settings-size-option"
+                :class="{ 'is-selected': draftSizeLevel === opt.value }"
+              >
+                <input
+                  type="radio"
+                  name="pet-size"
+                  :value="opt.value"
+                  :checked="draftSizeLevel === opt.value"
+                  class="system-settings-size-option__radio"
+                  @change="draftSizeLevel = opt.value"
+                />
+                <div class="system-settings-size-option__preview">
+                  <div class="system-settings-size-option__dot" :style="{ width: `${opt.px}px`, height: `${opt.px}px` }" />
+                </div>
+                <span class="system-settings-size-option__label">{{ opt.label }}</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="system-settings-section">
+            <h4 class="system-settings-section__title">窗口行为</h4>
+            <div class="system-settings-toggle-row" @click="draftAlwaysOnTop = !draftAlwaysOnTop">
+              <div class="system-settings-toggle-row__label">
+                <strong>始终置顶</strong>
+                <span>宠物窗口保持在所有应用上方</span>
+              </div>
+              <div
+                class="sys-toggle"
+                :class="{ 'sys-toggle--on': draftAlwaysOnTop }"
+                role="switch"
+                :aria-label="draftAlwaysOnTop ? '置顶已开启' : '置顶已关闭'"
+                :aria-checked="draftAlwaysOnTop"
+                tabindex="0"
+                @click.stop="draftAlwaysOnTop = !draftAlwaysOnTop"
+                @keydown.enter.space.prevent="draftAlwaysOnTop = !draftAlwaysOnTop"
+              >
+                <div class="sys-toggle__thumb" />
+              </div>
+            </div>
+          </section>
+        </div>
+        <footer class="system-settings-footer">
+          <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="closeSystemSettings">取消</button>
+          <button class="desktop-console-panel__action" type="button" @click="handleSystemSettingsSave">保存</button>
+        </footer>
+      </div>
+    </div>
+
     <div v-if="isPlatformModalOpen" class="platform-modal-backdrop" @click.self="handleCancelPlatformEdit">
       <section class="platform-modal">
         <header class="platform-modal__header">
@@ -5276,7 +6044,7 @@ onBeforeUnmount(() => {
             <strong>{{ editingPlatformId ? "编辑平台" : "新增平台" }}</strong>
             <p>可先从预设平台快速填充，再补全基础协议和 URL。</p>
           </div>
-          <button class="platform-modal__close" type="button" @click="handleCancelPlatformEdit">×</button>
+          <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop="handleCancelPlatformEdit">×</button>
         </header>
 
         <form class="platform-modal__form" @submit.prevent="handleSavePlatform">
@@ -5354,6 +6122,7 @@ onBeforeUnmount(() => {
       <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">平台管理</button>
       <button class="desktop-context-menu__item" type="button" @click="openLogAnalysis('timeline')">日志分析</button>
       <button class="desktop-context-menu__item" type="button" @click="openSubscriptionRecommendations()">订阅推荐</button>
+      <button class="desktop-context-menu__item" type="button" @click="openSystemSettings()">系统设置</button>
       <button class="desktop-context-menu__item desktop-context-menu__item--danger" type="button" @click="handleQuitClick">
         退出
       </button>
