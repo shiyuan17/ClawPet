@@ -3252,8 +3252,6 @@ fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result
         tauri::WebviewUrl::App(url.into()),
     )
     .title("ClawPet Platform Console")
-    .title_bar_style(tauri::TitleBarStyle::Overlay)
-    .hidden_title(true)
     .inner_size(1200.0, 820.0)
     .min_inner_size(960.0, 640.0)
     .resizable(true)
