@@ -22,6 +22,8 @@ struct OpenClawMessage {
 #[derive(Debug, Serialize)]
 struct OpenClawRequest {
     messages: Vec<OpenClawMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -255,6 +257,8 @@ struct OpenAiChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     messages: Vec<OpenClawMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3190,6 +3194,96 @@ fn toggle_main_window_visibility(app: &tauri::AppHandle) {
     let _ = window.set_always_on_top(true);
 }
 
+fn load_agent_context_messages(agent_id: &str) -> Vec<OpenClawMessage> {
+    let config_path = resolve_openclaw_config_path();
+    let configured_workspace = std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|parsed| {
+            parsed
+                .get("agents")
+                .and_then(Value::as_object)
+                .and_then(|agents| agents.get("list"))
+                .and_then(Value::as_array)
+                .and_then(|list| {
+                    list.iter().find(|item| {
+                        item.as_object()
+                            .and_then(|obj| obj.get("id").and_then(Value::as_str))
+                            .map(|id| id.eq_ignore_ascii_case(agent_id))
+                            .unwrap_or(false)
+                    })
+                })
+                .and_then(|item| {
+                    item.as_object()
+                        .and_then(|obj| obj.get("workspace").and_then(Value::as_str))
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                })
+        });
+    let workspace_root =
+        resolve_workspace_root_for_agent(agent_id, configured_workspace.as_deref());
+
+    let context_files = [
+        "SOUL.md",
+        "IDENTITY.md",
+        "MEMORY.md",
+        "BOOTSTRAP.md",
+        "HEARTBEAT.md",
+        "AGENTS.md",
+    ];
+
+    let mut sections = Vec::new();
+    for file_name in context_files {
+        let path = workspace_root.join(file_name);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                let tag = file_name.trim_end_matches(".md");
+                sections.push(format!("<{tag}>\n{trimmed}\n</{tag}>"));
+            }
+        }
+    }
+
+    if sections.is_empty() {
+        return Vec::new();
+    }
+
+    vec![OpenClawMessage {
+        role: "system".to_string(),
+        content: sections.join("\n\n"),
+    }]
+}
+
+fn resolve_agent_model_from_config(agent_id: &str) -> Option<String> {
+    let config_path = resolve_openclaw_config_path();
+    let raw = std::fs::read_to_string(config_path).ok()?;
+    let parsed: Value = serde_json::from_str(&raw).ok()?;
+    let agents = parsed.get("agents")?.as_object()?;
+    let list = agents.get("list")?.as_array()?;
+    let agent = list.iter().find(|item| {
+        item.as_object()
+            .and_then(|obj| obj.get("id").and_then(Value::as_str))
+            .map(|id| id.eq_ignore_ascii_case(agent_id))
+            .unwrap_or(false)
+    })?;
+    let model = agent
+        .as_object()?
+        .get("model")
+        .and_then(read_string_or_primary)
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
+
+    model.or_else(|| {
+        agents
+            .get("defaults")
+            .and_then(Value::as_object)
+            .and_then(|d| d.get("model"))
+            .and_then(read_string_or_primary)
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+    })
+}
+
 #[tauri::command]
 async fn openclaw_chat(
     messages: Vec<OpenClawMessage>,
@@ -3197,7 +3291,19 @@ async fn openclaw_chat(
     api_key: Option<String>,
     model: Option<String>,
     protocol: Option<String>,
+    agent_id: Option<String>,
 ) -> Result<OpenClawResponse, String> {
+    let effective_agent_id = agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+
+    let mut final_messages = Vec::new();
+    if let Some(aid) = effective_agent_id {
+        final_messages.extend(load_agent_context_messages(aid));
+    }
+    final_messages.extend(messages);
+
     let endpoint = endpoint
         .filter(|value| !value.trim().is_empty())
         .or_else(|| std::env::var("OPENCLAW_API_URL").ok())
@@ -3211,12 +3317,21 @@ async fn openclaw_chat(
     let api_key = api_key.filter(|value| !value.trim().is_empty());
     let model = model
         .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            effective_agent_id.and_then(resolve_agent_model_from_config)
+        })
         .or_else(|| std::env::var("OPENCLAW_MODEL").ok());
+
+    let agent_id_owned = effective_agent_id.map(|s| s.to_string());
 
     let client = reqwest::Client::new();
     let mut request = client
         .post(endpoint)
         .header(CONTENT_TYPE, "application/json");
+
+    if let Some(aid) = agent_id_owned.as_deref() {
+        request = request.header("X-OpenClaw-Agent-Id", aid);
+    }
 
     if request_protocol == "anthropic" {
         if let Some(api_key) = api_key.as_deref().filter(|value| !value.trim().is_empty()) {
@@ -3237,13 +3352,13 @@ async fn openclaw_chat(
 
     request = if request_protocol == "anthropic" {
         let model = model.ok_or_else(|| "Anthropic 协议需要模型配置。".to_string())?;
-        let system = messages
+        let system = final_messages
             .iter()
             .filter(|message| message.role == "system")
             .map(|message| message.content.clone())
             .collect::<Vec<_>>()
             .join("\n\n");
-        let anthropic_messages = messages
+        let anthropic_messages = final_messages
             .into_iter()
             .filter(|message| message.role != "system")
             .map(|message| AnthropicMessage {
@@ -3267,9 +3382,9 @@ async fn openclaw_chat(
             messages: anthropic_messages,
         })
     } else if is_openai_compatible {
-        request.json(&OpenAiChatRequest { model, messages })
+        request.json(&OpenAiChatRequest { model, messages: final_messages, agent_id: agent_id_owned.clone() })
     } else {
-        request.json(&OpenClawRequest { messages })
+        request.json(&OpenClawRequest { messages: final_messages, agent_id: agent_id_owned.clone() })
     };
 
     let response = request

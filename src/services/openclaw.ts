@@ -22,6 +22,7 @@ export type OpenClawRequestOptions = {
   apiKey?: string | null;
   model?: string | null;
   protocol?: "openai" | "anthropic" | null;
+  agentId?: string | null;
 };
 
 type OpenAIChatCompletionResponse = {
@@ -97,7 +98,7 @@ function extractUsage(result: unknown) {
 }
 
 type OpenClawWindowBridge = {
-  chat?: (payload: { messages: OpenClawMessage[] }) => Promise<OpenClawResponse | string>;
+  chat?: (payload: { messages: OpenClawMessage[]; agentId?: string | null }) => Promise<OpenClawResponse | string>;
   endpoint?: string;
 };
 
@@ -228,7 +229,9 @@ export async function sendOpenClawChat(messages: OpenClawMessage[], options: Ope
   const runtime = getRuntimeBridge();
   const protocol = options.protocol ?? "openai";
 
-  if (!options.endpoint && !options.apiKey && !options.model && !options.protocol && runtime?.__OPENCLAW__?.chat) {
+  const agentId = options.agentId ?? null;
+
+  if (!agentId && !options.endpoint && !options.apiKey && !options.model && !options.protocol && runtime?.__OPENCLAW__?.chat) {
     const result = await runtime.__OPENCLAW__.chat({ messages });
     return normalizeResponse(result);
   }
@@ -240,7 +243,8 @@ export async function sendOpenClawChat(messages: OpenClawMessage[], options: Ope
         endpoint: options.endpoint ?? null,
         apiKey: options.apiKey ?? null,
         model: options.model ?? null,
-        protocol
+        protocol,
+        agentId
       });
       return normalizeResponse(result);
     } catch (error) {

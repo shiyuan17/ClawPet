@@ -599,6 +599,8 @@ const selectedFailureKey = ref<string | null>(null);
 const timelinePreviewSection = ref<PreviewSection>("request");
 const sessionPreviewSection = ref<PreviewSection>("response");
 const sessionOverlayLogId = ref<string | null>(null);
+const logFilterPlatform = ref<string | null>(null);
+const logFilterAgent = ref<string | null>(null);
 const currentSessionId = ref("");
 const proxyPort = ref(5005);
 const memoryDraft = ref<MemoryDraft>(createEmptyMemoryDraft());
@@ -1014,7 +1016,53 @@ const metrics = computed(() => {
     { label: "失败请求", value: `${failures}` }
   ];
 });
-const timelineEntries = computed(() => requestLogs.value);
+const availableLogPlatformGroups = computed(() => {
+  const groups = new Set<string>();
+  for (const log of requestLogs.value) {
+    groups.add(getLogPlatformGroup(log));
+  }
+  return Array.from(groups).sort();
+});
+const availableLogAgentOptions = computed(() => {
+  const agents = new Map<string, string>();
+  for (const log of requestLogs.value) {
+    const agentId = getLogAgentId(log);
+    if (agentId && !agents.has(agentId)) {
+      agents.set(agentId, getLogAgentDisplayName(log));
+    }
+  }
+  for (const member of staffMembers.value) {
+    if (!agents.has(member.agentId)) {
+      agents.set(member.agentId, member.displayName);
+    }
+  }
+  const options: { id: string; name: string }[] = [{ id: "__main__", name: "主控台" }];
+  for (const [id, name] of agents) {
+    options.push({ id, name });
+  }
+  return options;
+});
+const filteredRequestLogs = computed(() => {
+  if (!logFilterPlatform.value && !logFilterAgent.value) {
+    return requestLogs.value;
+  }
+  return requestLogs.value.filter((log) => {
+    if (logFilterPlatform.value && getLogPlatformGroup(log) !== logFilterPlatform.value) {
+      return false;
+    }
+    if (logFilterAgent.value) {
+      const agentId = getLogAgentId(log);
+      if (logFilterAgent.value === "__main__") {
+        if (agentId !== null) return false;
+      } else {
+        if (agentId !== logFilterAgent.value) return false;
+      }
+    }
+    return true;
+  });
+});
+const hasActiveLogFilter = computed(() => logFilterPlatform.value !== null || logFilterAgent.value !== null);
+const timelineEntries = computed(() => filteredRequestLogs.value);
 const scheduledTaskCount = computed(() => 0);
 const memoryStatusSummary = computed(() => ({
   main: memoryRecords.value.filter((item) => item.owner === "Main").length,
@@ -1398,7 +1446,7 @@ function getSessionSummaryGroupId(log: RequestLog) {
 const sessionSummaries = computed<SessionSummary[]>(() => {
   const map = new Map<string, SessionSummary>();
 
-  for (const log of requestLogs.value) {
+  for (const log of filteredRequestLogs.value) {
     const sessionGroupId = getSessionSummaryGroupId(log);
     const current = map.get(sessionGroupId);
     const preview = summarizeLogText(log);
@@ -1448,7 +1496,7 @@ const sessionSummaries = computed<SessionSummary[]>(() => {
 const failureSummaries = computed<FailureSummary[]>(() => {
   const map = new Map<string, FailureSummary>();
 
-  for (const log of requestLogs.value.filter((item) => isFailedLog(item))) {
+  for (const log of filteredRequestLogs.value.filter((item) => isFailedLog(item))) {
     const title = normalizeFailureTitle(log);
     const nextStep = getFailureNextStep(log);
     const key = `${log.responseStatus}:${title}`;
@@ -2229,6 +2277,11 @@ function updateLogAnalysisStatus(view = activeLogAnalysisView.value) {
   }
 }
 
+function clearLogFilters() {
+  logFilterPlatform.value = null;
+  logFilterAgent.value = null;
+}
+
 function openLogAnalysis(view: LogAnalysisView = "timeline") {
   activePanelMode.value = "logs";
   activeLogAnalysisView.value = view;
@@ -2880,18 +2933,11 @@ async function submitChat() {
   const pendingId = createMessageId("assistant");
   const conversationHistory = [...openClawMessages.value];
   const agent = activeChatAgent.value;
-  const systemContent = agent
-    ? `你是 OpenClaw 团队中的「${agent.displayName}」，职责是${agent.roleLabel}。请以该角色身份，使用简洁自然的中文回复。`
-    : "你是桌宠里的 OpenClaw 助手，请使用简洁自然的中文回复。";
   const attachmentSummary = pendingAttachments.length > 0
     ? `\n\n[附件: ${pendingAttachments.map((a) => a.name).join(", ")}]`
     : "";
   const userContent = (text || "(附件)") + attachmentSummary;
   const messages: OpenClawMessage[] = [
-    {
-      role: "system",
-      content: systemContent
-    },
     ...conversationHistory,
     {
       role: "user",
@@ -2899,15 +2945,16 @@ async function submitChat() {
     }
   ];
   const effectivePlatform = platform?.enabled ? platform : null;
-  const endpoint = "openclaw://default";
+  const agentId = agent?.agentId ?? null;
+  const endpoint = agentId ? `openclaw://agent/${agentId}` : "openclaw://default";
   const protocol = "openai";
   const payload = { messages };
   const requestBody = safeJson(payload);
   const requestHeaders = buildRequestHeaders(protocol);
-  const baseUrl = "openclaw://default";
+  const baseUrl = agentId ? `openclaw://agent/${agentId}` : "openclaw://default";
   const path = "";
-  const platformId = effectivePlatform?.id ?? "openclaw-default";
-  const platformName = effectivePlatform?.name ?? "OpenClaw 默认通道";
+  const platformId = agentId ? `openclaw-agent-${agentId}` : (effectivePlatform?.id ?? "openclaw-default");
+  const platformName = agent ? `OpenClaw / ${stripRoleLabel(agent.displayName)}` : (effectivePlatform?.name ?? "OpenClaw 默认通道");
   const startedAt = performance.now();
   const startedAtMs = Date.now();
 
@@ -2934,7 +2981,9 @@ async function submitChat() {
   scrollMessagesToBottom();
 
   try {
-    const response = await sendOpenClawChat(messages);
+    const response = await sendOpenClawChat(messages, {
+      agentId: agent?.agentId ?? null
+    });
     const completedAt = performance.now();
     const duration = Math.round(completedAt - startedAt);
     const promptTokens = response.usage?.promptTokens ?? estimateTokenCount(requestBody);
@@ -4136,6 +4185,32 @@ function getLogRequestUrl(log: RequestLog) {
   return log.endpoint;
 }
 
+function getLogPlatformGroup(log: RequestLog): string {
+  if (log.platformId === "openclaw-default" || log.platformId.startsWith("openclaw-agent-") || log.platformId.startsWith("openclaw-runtime-")) {
+    return "OpenClaw";
+  }
+  return log.platformName;
+}
+
+function getLogAgentId(log: RequestLog): string | null {
+  if (log.platformId.startsWith("openclaw-agent-")) {
+    return log.platformId.slice("openclaw-agent-".length);
+  }
+  if (log.platformId.startsWith("openclaw-runtime-")) {
+    const tail = log.platformId.slice("openclaw-runtime-".length);
+    const sep = tail.indexOf("-");
+    return sep > 0 ? tail.slice(0, sep) : tail;
+  }
+  return null;
+}
+
+function getLogAgentDisplayName(log: RequestLog): string {
+  if (log.platformName.includes(" / ")) {
+    return log.platformName.split(" / ").slice(1).join(" / ");
+  }
+  return getLogAgentId(log) ?? log.platformName;
+}
+
 function findPlatformById(platformId: string | null | undefined): PlatformConfig | null {
   if (!platformId) {
     return null;
@@ -4569,8 +4644,9 @@ watch(
 );
 
 watch(
-  selectedTimelineLog,
-  (log) => {
+  () => selectedTimelineLog.value?.id ?? null,
+  (logId) => {
+    const log = selectedTimelineLog.value;
     if (!log) {
       return;
     }
@@ -4581,22 +4657,26 @@ watch(
 );
 
 watch(
-  selectedSession,
-  (session) => {
-    if (!session) {
+  () => selectedSession.value?.id ?? null,
+  (sessionId, prevSessionId) => {
+    if (!sessionId) {
       sessionOverlayLogId.value = null;
       return;
     }
 
-    selectedSessionLogId.value = session.logs[0]?.id ?? null;
-    sessionOverlayLogId.value = null;
+    const session = selectedSession.value;
+    selectedSessionLogId.value = session?.logs[0]?.id ?? null;
+    if (sessionId !== prevSessionId) {
+      sessionOverlayLogId.value = null;
+    }
   },
   { immediate: true }
 );
 
 watch(
-  selectedSessionLog,
-  (log) => {
+  () => selectedSessionLog.value?.id ?? null,
+  (logId) => {
+    const log = selectedSessionLog.value;
     if (!log) {
       return;
     }
@@ -5039,6 +5119,25 @@ onBeforeUnmount(() => {
         </button>
       </nav>
 
+      <div v-if="activePanelMode === 'logs'" class="log-filter-bar">
+        <select v-model="logFilterPlatform" class="log-filter-select" aria-label="按平台筛选日志">
+          <option :value="null">全部平台</option>
+          <option v-for="name in availableLogPlatformGroups" :key="name" :value="name">{{ name }}</option>
+        </select>
+        <select v-model="logFilterAgent" class="log-filter-select" aria-label="按代理筛选日志">
+          <option :value="null">全部代理</option>
+          <option v-for="agent in availableLogAgentOptions" :key="agent.id" :value="agent.id">{{ agent.name }}</option>
+        </select>
+        <button
+          v-if="hasActiveLogFilter"
+          class="log-filter-clear"
+          type="button"
+          @click="clearLogFilters"
+        >
+          清除筛选
+        </button>
+      </div>
+
       <div v-if="activePanelMode === 'logs'" class="desktop-console-body desktop-console-body--split">
         <template v-if="activeLogAnalysisView === 'timeline'">
         <section class="section-block">
@@ -5070,19 +5169,11 @@ onBeforeUnmount(() => {
               @click="selectedLogId = log.id"
             >
               <div class="log-card__headline">
-                <div
-                  class="platform-identity"
-                  :class="[getPlatformPillClass(log.platformId), getPlatformIdentityToneClass(log.platformId, log.platformName)]"
-                >
-                  <span class="platform-identity__avatar">{{ getPlatformInitials(log.platformName) }}</span>
-                  <span class="platform-identity__body">
-                    <span class="platform-identity__eyebrow">
-                      <span>{{ getPlatformOriginLabel(log.platformId) }}</span>
-                      <span>{{ getPlatformMetaLabel(log.platformId, log.protocol) || "协议未知" }}</span>
-                    </span>
-                    <span class="platform-identity__name">{{ log.platformName }}</span>
-                  </span>
-                </div>
+                <span class="platform-compact" :class="getPlatformIdentityToneClass(log.platformId, log.platformName)">
+                  <span class="platform-compact__dot"></span>
+                  <span class="platform-compact__name">{{ log.platformName }}</span>
+                  <span class="platform-compact__meta">{{ getPlatformMetaLabel(log.platformId, log.protocol) }}</span>
+                </span>
                 <span>{{ formatTime(log.createdAt) }}</span>
               </div>
               <p>{{ summarizeLogText(log) }}</p>
@@ -5090,7 +5181,9 @@ onBeforeUnmount(() => {
                 {{ log.method }} · {{ isFailedLog(log) ? "失败" : "成功" }} · {{ formatDuration(log.duration) }}
               </small>
             </button>
-            <div v-if="timelineEntries.length === 0" class="empty-state">还没有调用记录，先去和桌宠聊两句吧。</div>
+            <div v-if="timelineEntries.length === 0" class="empty-state">
+              {{ hasActiveLogFilter ? "当前筛选条件下没有匹配的调用记录。" : "还没有调用记录，先去和桌宠聊两句吧。" }}
+            </div>
           </div>
         </section>
 
@@ -5225,22 +5318,11 @@ onBeforeUnmount(() => {
               @click="selectedSessionId = session.id"
             >
               <div class="session-card__headline">
-                <div
-                  class="platform-identity"
-                  :class="[
-                    getPlatformPillClass(session.logs[0]?.platformId ?? null),
-                    getPlatformIdentityToneClass(session.logs[0]?.platformId ?? null, session.platformName)
-                  ]"
-                >
-                  <span class="platform-identity__avatar">{{ getPlatformInitials(session.platformName) }}</span>
-                  <span class="platform-identity__body">
-                    <span class="platform-identity__eyebrow">
-                      <span>{{ getPlatformOriginLabel(session.logs[0]?.platformId ?? null) }}</span>
-                      <span>{{ getPlatformMetaLabel(session.logs[0]?.platformId ?? null, session.logs[0]?.protocol) || "协议未知" }}</span>
-                    </span>
-                    <span class="platform-identity__name">{{ session.platformName }}</span>
-                  </span>
-                </div>
+                <span class="platform-compact" :class="getPlatformIdentityToneClass(session.logs[0]?.platformId ?? null, session.platformName)">
+                  <span class="platform-compact__dot"></span>
+                  <span class="platform-compact__name">{{ session.platformName }}</span>
+                  <span class="platform-compact__meta">{{ getPlatformMetaLabel(session.logs[0]?.platformId ?? null, session.logs[0]?.protocol) }}</span>
+                </span>
                 <span>{{ formatTime(session.lastAt) }}</span>
               </div>
               <p>{{ session.previewText }}</p>
@@ -5248,7 +5330,9 @@ onBeforeUnmount(() => {
                 {{ session.requestCount }} 次调用 · {{ session.failureCount }} 次失败 · {{ formatDuration(session.totalDuration) }}
               </small>
             </button>
-            <div v-if="sessionSummaries.length === 0" class="empty-state">还没有形成会话记录。</div>
+            <div v-if="sessionSummaries.length === 0" class="empty-state">
+              {{ hasActiveLogFilter ? "当前筛选条件下没有匹配的会话记录。" : "还没有形成会话记录。" }}
+            </div>
           </div>
         </section>
 
