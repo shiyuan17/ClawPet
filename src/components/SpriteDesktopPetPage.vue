@@ -89,6 +89,7 @@ type ConsoleSection =
   | "overview"
   | "platforms"
   | "staff"
+  | "bindings"
   | "tasks";
 
 type ResourceModalKind = "memory" | "skill" | "tool";
@@ -132,6 +133,21 @@ type ChatMessage = {
   text: string;
   status: "pending" | "done" | "error";
   attachments?: ChatAttachment[];
+};
+
+type BoundPetAgentCapability = {
+  id: string;
+  label: string;
+  enabled: boolean;
+};
+
+type BoundPetConnection = {
+  id: string;
+  petName: string;
+  ownerLabel: string;
+  bindingCode: string;
+  linkedAt: number;
+  capabilities: BoundPetAgentCapability[];
 };
 
 type AudioFilePayload = {
@@ -505,6 +521,12 @@ const actionTips: Record<AnimationName, string> = {
 
 const CHAT_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-history";
 const SESSION_STORAGE_PREFIX = "keai.desktop-pet.openclaw.session-id";
+const PET_BIND_CODE_STORAGE_KEY = "keai.desktop-pet.binding.code";
+const BOUND_PETS_STORAGE_KEY = "keai.desktop-pet.binding.peers";
+const BOUND_PET_CHAT_PREFIX = "__bound_pet__:";
+const DEFAULT_BOUND_CAPABILITIES: Array<Omit<BoundPetAgentCapability, "enabled">> = [
+  { id: "__main__", label: "主对话 Agent" }
+];
 function chatStorageKeyFor(agentId: string | null) {
   return agentId ? `${CHAT_STORAGE_PREFIX}.${agentId}` : CHAT_STORAGE_PREFIX;
 }
@@ -555,6 +577,10 @@ const localRequestLogs = ref<RequestLog[]>([]);
 const runtimeRequestLogs = ref<RequestLog[]>([]);
 const platforms = ref<PlatformConfig[]>([]);
 const staffMembers = ref<StaffMemberSnapshot[]>([]);
+const petBindingCode = ref("");
+const bindingCodeDraft = ref("");
+const incomingBindingCode = ref("");
+const boundPets = ref<BoundPetConnection[]>([]);
 const memoryRecords = ref<MemoryRecord[]>([]);
 const documentRecords = ref<DocumentRecord[]>([]);
 const openClawSkillRecords = ref<DocumentRecord[]>([]);
@@ -564,6 +590,9 @@ const openClawSkillsList = ref<{ builtIn: OpenClawSkillListItem[]; installed: Op
 /** OpenClaw 当前员工的工具配置（用于工具弹窗展示，非 TOOLS.md 编辑） */
 const openClawToolsList = ref<{ profile: string; profileLabel: string; tools: OpenClawToolListItem[] }>({ profile: "", profileLabel: "", tools: [] });
 const taskRecords = ref<TaskSnapshotItem[]>([]);
+type CronTaskTab = "all" | "late" | "scheduled" | "disabled";
+const cronTaskTab = ref<CronTaskTab>("all");
+const cronTaskAgentFilter = ref<string>("all");
 const activePlatformId = ref<string | null>(null);
 const isEditingPlatform = ref(false);
 const editingPlatformId = ref<string | null>(null);
@@ -584,6 +613,91 @@ function loadAlwaysOnTop(): boolean {
   const raw = globalThis.localStorage?.getItem("keai.desktop-pet.always-on-top");
   return raw === "true";
 }
+
+function normalizeBindingCode(value: string) {
+  const raw = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return raw.replace(/(.{4})/g, "$1-").replace(/-$/, "").slice(0, 19);
+}
+
+function createBindingCode() {
+  const raw = Math.random().toString(36).slice(2, 10).toUpperCase();
+  return normalizeBindingCode(raw);
+}
+
+function loadPetBindingCode() {
+  const stored = globalThis.localStorage?.getItem(PET_BIND_CODE_STORAGE_KEY);
+  const normalized = stored ? normalizeBindingCode(stored) : "";
+  return normalized || createBindingCode();
+}
+
+function createBoundPetCapabilities(seed?: BoundPetAgentCapability[]) {
+  const presets: Array<Omit<BoundPetAgentCapability, "enabled">> = [
+    ...DEFAULT_BOUND_CAPABILITIES,
+    ...staffMembers.value.map((member) => ({
+      id: member.agentId,
+      label: `${stripRoleLabel(member.displayName)} Agent`
+    }))
+  ];
+  const enabledMap = new Map((seed ?? []).map((item) => [item.id, item.enabled]));
+  return presets.map((preset) => ({
+    id: preset.id,
+    label: preset.label,
+    enabled: enabledMap.get(preset.id) ?? false
+  }));
+}
+
+function normalizeBoundPetConnection(value: unknown): BoundPetConnection | null {
+  const item = value as Partial<BoundPetConnection>;
+  if (!item || typeof item.id !== "string" || typeof item.petName !== "string") {
+    return null;
+  }
+
+  const bindingCode = typeof item.bindingCode === "string" ? normalizeBindingCode(item.bindingCode) : "";
+  if (!bindingCode) {
+    return null;
+  }
+
+  const linkedAt = typeof item.linkedAt === "number" ? item.linkedAt : Date.now();
+  return {
+    id: item.id,
+    petName: item.petName,
+    ownerLabel: typeof item.ownerLabel === "string" ? item.ownerLabel : "远程用户",
+    bindingCode,
+    linkedAt,
+    capabilities: createBoundPetCapabilities(Array.isArray(item.capabilities) ? item.capabilities : [])
+  };
+}
+
+function loadBoundPets() {
+  const raw = globalThis.localStorage?.getItem(BOUND_PETS_STORAGE_KEY);
+  if (!raw) {
+    return [] as BoundPetConnection[];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [] as BoundPetConnection[];
+    }
+    return parsed
+      .map((item) => normalizeBoundPetConnection(item))
+      .filter((item): item is BoundPetConnection => item !== null);
+  } catch {
+    return [] as BoundPetConnection[];
+  }
+}
+
+function persistBoundPets() {
+  try {
+    globalThis.localStorage?.setItem(BOUND_PETS_STORAGE_KEY, JSON.stringify(boundPets.value));
+  } catch {
+    // Ignore storage write failures.
+  }
+}
+
+petBindingCode.value = loadPetBindingCode();
+bindingCodeDraft.value = petBindingCode.value;
+boundPets.value = loadBoundPets();
+globalThis.localStorage?.setItem(PET_BIND_CODE_STORAGE_KEY, petBindingCode.value);
 
 const petSizeLevel = ref<PetSizeLevel>(loadPetSizeLevel());
 const petAlwaysOnTop = ref<boolean>(loadAlwaysOnTop());
@@ -658,6 +772,7 @@ const consoleSections: Array<{ id: ConsoleSection; label: string }> = [
   { id: "overview", label: "总览" },
   { id: "platforms", label: "平台管理" },
   { id: "staff", label: "员工管理" },
+  { id: "bindings", label: "宠物绑定" },
   { id: "tasks", label: "任务管理" }
 ];
 const codingPlanRecommendations: CodingPlanRecommendation[] = [
@@ -785,6 +900,8 @@ function isImplicitSeededOpenAiPlatform(platform: PlatformConfig | null) {
 }
 
 const activeAnimation = computed(() => animations[currentAnimationName.value]);
+const actionTipValues = new Set(Object.values(actionTips));
+const shouldShowHint = computed(() => !actionTipValues.has(statusText.value));
 const currentFrame = computed(() => activeAnimation.value.config.frames[currentFrameIndex.value]);
 const activePlatform = computed(
   () => platforms.value.find((platform) => platform.id === activePlatformId.value && platform.enabled) || null
@@ -801,6 +918,20 @@ const activeChatAgent = computed(() =>
     ? staffMembers.value.find((m) => m.agentId === activeChatAgentId.value) ?? null
     : null
 );
+const activeBoundPet = computed(() => {
+  const key = activeChatAgentId.value;
+  if (!key || !key.startsWith(BOUND_PET_CHAT_PREFIX)) {
+    return null;
+  }
+  const petId = key.slice(BOUND_PET_CHAT_PREFIX.length);
+  return boundPets.value.find((petItem) => petItem.id === petId) ?? null;
+});
+const chatHeaderTitle = computed(() => {
+  if (activeBoundPet.value) {
+    return `${activeBoundPet.value.petName}（远程宠物）`;
+  }
+  return activeChatAgent.value ? stripRoleLabel(activeChatAgent.value.displayName) : "OpenClaw";
+});
 const openClawMessages = computed<OpenClawMessage[]>(() =>
   chatMessages.value
     .filter((message) => message.status !== "pending" && message.role !== "system")
@@ -1424,6 +1555,38 @@ const taskBoardGroups = computed(() => [
     records: sortedTaskRecords.value.filter((item) => item.statusKind === "disabled")
   }
 ]);
+const cronTaskAgents = computed(() => {
+  const agents = new Set<string>();
+  for (const task of taskRecords.value) {
+    const id = task.agentId.trim();
+    if (id && id !== "未标注") agents.add(id);
+  }
+  return Array.from(agents).sort();
+});
+const cronTaskStatusCounts = computed(() => {
+  const agentFilter = cronTaskAgentFilter.value;
+  const filtered = agentFilter === "all" ? taskRecords.value : taskRecords.value.filter((t) => t.agentId === agentFilter);
+  return {
+    all: filtered.length,
+    late: filtered.filter((t) => t.statusKind === "late").length,
+    scheduled: filtered.filter((t) => t.statusKind === "scheduled").length,
+    disabled: filtered.filter((t) => t.statusKind === "disabled").length
+  };
+});
+const filteredCronTasks = computed(() => {
+  let tasks = [...sortedTaskRecords.value];
+  if (cronTaskAgentFilter.value !== "all") {
+    tasks = tasks.filter((t) => t.agentId === cronTaskAgentFilter.value);
+  }
+  if (cronTaskTab.value === "late") {
+    tasks = tasks.filter((t) => t.statusKind === "late");
+  } else if (cronTaskTab.value === "scheduled") {
+    tasks = tasks.filter((t) => t.statusKind === "scheduled");
+  } else if (cronTaskTab.value === "disabled") {
+    tasks = tasks.filter((t) => t.statusKind === "disabled");
+  }
+  return tasks;
+});
 const controlCenterCards = computed(() => [
   {
     label: "员工编制",
@@ -1705,7 +1868,7 @@ type TauriNamespace = {
 };
 
 function parseConsoleSection(raw: string | null): ConsoleSection | null {
-  if (raw === "overview" || raw === "platforms" || raw === "staff" || raw === "tasks") {
+  if (raw === "overview" || raw === "platforms" || raw === "staff" || raw === "bindings" || raw === "tasks") {
     return raw;
   }
   return null;
@@ -1960,6 +2123,215 @@ function stripRoleLabel(name: string) {
   return name.replace(/[（(][^）)]*[）)]$/, "").trim();
 }
 
+function buildBoundPetChatAgentId(petId: string) {
+  return `${BOUND_PET_CHAT_PREFIX}${petId}`;
+}
+
+function isBoundPetChatAgentId(agentId: string | null) {
+  return Boolean(agentId && agentId.startsWith(BOUND_PET_CHAT_PREFIX));
+}
+
+function savePetBindingCode() {
+  const normalized = normalizeBindingCode(bindingCodeDraft.value);
+  if (!normalized) {
+    statusText.value = "绑定码不能为空。";
+    return;
+  }
+  petBindingCode.value = normalized;
+  bindingCodeDraft.value = normalized;
+  globalThis.localStorage?.setItem(PET_BIND_CODE_STORAGE_KEY, normalized);
+  statusText.value = "绑定码已保存。";
+}
+
+function regeneratePetBindingCode() {
+  const nextCode = createBindingCode();
+  petBindingCode.value = nextCode;
+  bindingCodeDraft.value = nextCode;
+  globalThis.localStorage?.setItem(PET_BIND_CODE_STORAGE_KEY, nextCode);
+  statusText.value = "已重新生成绑定码。";
+}
+
+async function copyPetBindingCode() {
+  const value = petBindingCode.value || normalizeBindingCode(bindingCodeDraft.value);
+  if (!value) {
+    statusText.value = "当前没有可复制的绑定码。";
+    return;
+  }
+  const clipboard = globalThis.navigator?.clipboard;
+  if (!clipboard?.writeText) {
+    statusText.value = "当前环境不支持自动复制，请手动复制绑定码。";
+    return;
+  }
+  try {
+    await clipboard.writeText(value);
+    statusText.value = "绑定码已复制。";
+  } catch {
+    statusText.value = "复制失败，请手动复制绑定码。";
+  }
+}
+
+function bindRemotePetByCode() {
+  const normalized = normalizeBindingCode(incomingBindingCode.value);
+  if (!normalized) {
+    statusText.value = "请输入有效绑定码。";
+    return;
+  }
+  if (normalized === petBindingCode.value) {
+    statusText.value = "不能绑定自己的宠物。";
+    return;
+  }
+  if (boundPets.value.some((pet) => pet.bindingCode === normalized)) {
+    statusText.value = "该绑定码已在绑定列表中。";
+    return;
+  }
+
+  const nextPet: BoundPetConnection = {
+    id: createMessageId("bound-pet"),
+    petName: `远程宠物 ${boundPets.value.length + 1}`,
+    ownerLabel: "远程用户",
+    bindingCode: normalized,
+    linkedAt: Date.now(),
+    capabilities: createBoundPetCapabilities()
+  };
+  boundPets.value = [nextPet, ...boundPets.value];
+  persistBoundPets();
+  incomingBindingCode.value = "";
+  statusText.value = `已绑定 ${nextPet.petName}，可在聊天窗口直接互聊。`;
+}
+
+function removeBoundPet(petId: string) {
+  const removed = boundPets.value.find((pet) => pet.id === petId);
+  boundPets.value = boundPets.value.filter((pet) => pet.id !== petId);
+  persistBoundPets();
+
+  const activeId = activeChatAgentId.value;
+  if (activeId === buildBoundPetChatAgentId(petId)) {
+    switchChatAgent(null);
+  }
+  statusText.value = removed ? `已解除 ${removed.petName} 的绑定。` : "已解除绑定。";
+}
+
+function openBoundPetChat(petId: string) {
+  switchChatAgent(buildBoundPetChatAgentId(petId));
+  toggleChatPanel(true);
+}
+
+function setBoundPetCapability(petId: string, capabilityId: string, enabled: boolean) {
+  const next = boundPets.value.map((pet) => {
+    if (pet.id !== petId) return pet;
+    return {
+      ...pet,
+      capabilities: pet.capabilities.map((capability) =>
+        capability.id === capabilityId ? { ...capability, enabled } : capability
+      )
+    };
+  });
+  boundPets.value = next;
+  persistBoundPets();
+}
+
+function updateBoundPetName(petId: string, name: string) {
+  const trimmed = name.trim();
+  const nextName = trimmed || "远程宠物";
+  boundPets.value = boundPets.value.map((pet) => (pet.id === petId ? { ...pet, petName: nextName } : pet));
+  persistBoundPets();
+}
+
+function canBoundPetUseAgent(pet: BoundPetConnection, agentId: string | null) {
+  const key = agentId ?? "__main__";
+  return pet.capabilities.some((capability) => capability.id === key && capability.enabled);
+}
+
+function resolveBoundPetResponseText(pet: BoundPetConnection, text: string) {
+  const commandMatch = text.match(/^\/agent\s+(\S+)\s+([\s\S]+)$/i);
+  if (!commandMatch) {
+    const presets = [
+      "收到，我这边已经同步到远程宠物频道。",
+      "这条消息我看到了，我们可以继续跨设备协作。",
+      "我在远程端已记录，下一步可以直接派发给 agent。"
+    ];
+    return presets[Math.floor(Math.random() * presets.length)];
+  }
+
+  const targetToken = commandMatch[1].trim();
+  const prompt = commandMatch[2].trim();
+  if (!prompt) {
+    return "请在 /agent 指令后补充具体任务。";
+  }
+
+  const targetAgentId =
+    targetToken === "main" || targetToken === "default" || targetToken === "主对话"
+      ? null
+      : staffMembers.value.find((member) => member.agentId === targetToken)?.agentId ?? targetToken;
+  const allowed = canBoundPetUseAgent(pet, targetAgentId);
+  if (!allowed) {
+    return `当前未授权 ${targetToken}，请在绑定列表里开启对应 Agent 能力。`;
+  }
+
+  return `已收到指令，准备通过 ${targetToken} 执行：${prompt}`;
+}
+
+async function submitBoundPetChat(pet: BoundPetConnection, text: string, pendingAttachments: ChatAttachment[]) {
+  const pendingId = createMessageId("assistant");
+  chatMessages.value.push({
+    id: createMessageId("user"),
+    role: "user",
+    text: text || "(附件)",
+    status: "done",
+    attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
+  });
+  chatMessages.value.push({
+    id: pendingId,
+    role: "assistant",
+    text: `${pet.petName} 正在同步中...`,
+    status: "pending"
+  });
+
+  chatInput.value = "";
+  chatAttachments.value = [];
+  isSending.value = true;
+  noteInteraction();
+  applyBaseAnimation(true);
+  startBubbleAnimation();
+  scrollMessagesToBottom();
+
+  const commandMatch = text.match(/^\/agent\s+(\S+)\s+([\s\S]+)$/i);
+  try {
+    let responseText = resolveBoundPetResponseText(pet, text);
+    if (commandMatch && responseText.startsWith("已收到指令，准备通过")) {
+      const targetToken = commandMatch[1].trim();
+      const prompt = commandMatch[2].trim();
+      const targetAgentId =
+        targetToken === "main" || targetToken === "default" || targetToken === "主对话"
+          ? null
+          : staffMembers.value.find((member) => member.agentId === targetToken)?.agentId ?? targetToken;
+      const response = await sendOpenClawChat([{ role: "user", content: prompt }], { agentId: targetAgentId });
+      responseText = `[${targetToken}] ${response.text}`;
+    } else {
+      await new Promise((resolve) => window.setTimeout(resolve, 420));
+    }
+
+    const pendingMessage = chatMessages.value.find((message) => message.id === pendingId);
+    if (pendingMessage) {
+      pendingMessage.text = responseText;
+      pendingMessage.status = "done";
+    }
+    statusText.value = `${pet.petName} 已回复。`;
+  } catch (error) {
+    const pendingMessage = chatMessages.value.find((message) => message.id === pendingId);
+    if (pendingMessage) {
+      pendingMessage.text = error instanceof Error ? error.message : "远程宠物回复失败。";
+      pendingMessage.status = "error";
+    }
+    statusText.value = "远程宠物通信失败，请稍后重试。";
+  } finally {
+    isSending.value = false;
+    applyBaseAnimation();
+    startBubbleAnimation();
+    scrollMessagesToBottom();
+  }
+}
+
 function switchChatAgent(agentId: string | null) {
   if (agentId === activeChatAgentId.value) return;
   agentChatHistories.value[activeChatAgentId.value ?? "__main__"] = [...chatMessages.value];
@@ -1970,6 +2342,10 @@ function switchChatAgent(agentId: string | null) {
   currentSessionId.value = loadStoredSessionId(agentId);
   chatInput.value = "";
   chatAttachments.value = [];
+  if (isBoundPetChatAgentId(agentId)) {
+    const pet = boundPets.value.find((item) => buildBoundPetChatAgentId(item.id) === agentId);
+    statusText.value = pet ? `已切换到 ${pet.petName} 的远程会话。` : "已切换远程宠物会话。";
+  }
   scrollMessagesToBottom();
 }
 
@@ -2298,14 +2674,15 @@ function toggleChatPanel(nextValue?: boolean) {
 }
 
 async function openConsole(section: ConsoleSection) {
-  if (!isConsoleWindowMode) {
+  const shouldOpenDetachedWindow = !isConsoleWindowMode && section !== "bindings";
+  if (shouldOpenDetachedWindow) {
     const invoke = getTauriApi()?.core?.invoke;
     if (invoke) {
       try {
         await invoke("open_console_window", { section });
         hideContextMenu();
         noteInteraction();
-        statusText.value = "平台管理窗口已独立打开。";
+        statusText.value = `${section === "platforms" ? "平台管理" : section === "staff" ? "员工管理" : section === "tasks" ? "任务管理" : "控制台"}窗口已独立打开。`;
         return;
       } catch {
         // Fallback to the embedded panel when window creation is unavailable.
@@ -2335,6 +2712,8 @@ async function openConsole(section: ConsoleSection) {
     void refreshStaffSnapshot();
     void refreshOpenClawSkillSnapshot();
     void refreshOpenClawSkillsList();
+  } else if (section === "bindings") {
+    statusText.value = "宠物绑定已展开，可以配置绑定码、远程多宠连接与 Agent 授权。";
   } else if (section === "tasks") {
     statusText.value = "任务管理已展开，当前展示的是 openclaw cron 的真实调度快照。";
     void refreshTaskSnapshot();
@@ -3039,6 +3418,11 @@ function handleConsolePanelPointerDown(event: PointerEvent) {
 }
 
 async function closeConsoleWindow() {
+  if (!isConsoleWindowMode) {
+    toggleConsolePanel(false);
+    return;
+  }
+
   const invoke = getTauriApi()?.core?.invoke;
   if (invoke) {
     try {
@@ -3081,6 +3465,11 @@ async function submitChat() {
   const text = chatInput.value.trim();
   const pendingAttachments = [...chatAttachments.value];
   if ((!text && pendingAttachments.length === 0) || isSending.value) {
+    return;
+  }
+
+  if (activeBoundPet.value) {
+    await submitBoundPetChat(activeBoundPet.value, text, pendingAttachments);
     return;
   }
 
@@ -3700,6 +4089,11 @@ async function refreshStaffSnapshot() {
   try {
     const result = (await invoke("load_staff_snapshot")) as StaffSnapshotResponse;
     staffMembers.value = Array.isArray(result.members) ? result.members : [];
+    boundPets.value = boundPets.value.map((pet) => ({
+      ...pet,
+      capabilities: createBoundPetCapabilities(pet.capabilities)
+    }));
+    persistBoundPets();
     staffSnapshotSourcePath.value = result.sourcePath ?? "";
     staffSnapshotDetail.value = result.detail ?? "员工配置读取完成。";
     staffMissionStatement.value = result.missionStatement || staffMissionStatement.value;
@@ -4022,6 +4416,18 @@ function getTaskScheduleClass(kind: string, deleteAfterRun: boolean) {
   return "is-critical";
 }
 
+async function toggleCronTaskEnabled(taskId: string, enabled: boolean) {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) return;
+  try {
+    await invoke("set_task_enabled", { taskId, enabled });
+    await refreshTaskSnapshot();
+  } catch (error) {
+    statusText.value = error instanceof Error ? error.message : "任务状态切换失败。";
+  }
+}
+
 function formatDueAt(value: number) {
   return `${formatTime(value)} 执行`;
 }
@@ -4039,6 +4445,33 @@ function formatTaskRelativeDueAt(value: number) {
   }
 
   return `逾期 ${hours} 小时`;
+}
+
+function getCronTaskCardClass(status: string) {
+  if (status === "late") return "ptask-card--in_progress";
+  if (status === "scheduled") return "ptask-card--todo";
+  if (status === "disabled") return "ptask-card--done";
+  return "";
+}
+
+function formatCronNextRun(ms: number | null) {
+  if (ms === null) return "—";
+  const delta = ms - Date.now();
+  const absDelta = Math.abs(delta);
+  if (absDelta < 60 * 60 * 1000) {
+    return delta >= 0 ? "1 小时内" : "已逾期";
+  }
+  const hours = Math.round(absDelta / (60 * 60 * 1000));
+  if (hours < 24) {
+    return delta >= 0 ? `${hours} 小时后` : `逾期 ${hours} 小时`;
+  }
+  const days = Math.round(hours / 24);
+  return delta >= 0 ? `${days} 天后` : `逾期 ${days} 天`;
+}
+
+function formatCronTimestamp(ms: number | null) {
+  if (ms === null) return "从未";
+  return formatTime(ms);
 }
 
 function handleTogglePlatform(platformId: string, enabled: boolean) {
@@ -4958,7 +5391,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main ref="stage" class="desktop-pet-stage" :class="{ 'desktop-pet-stage--console': isConsoleWindowMode }">
-    <div v-if="!isConsoleWindowMode" class="desktop-pet-hint" :style="hintStyle">
+    <div v-if="!isConsoleWindowMode && shouldShowHint" class="desktop-pet-hint" :style="hintStyle">
       <span class="desktop-pet-hint-title">{{ activeAnimation.label }}</span>
       <p>{{ statusText }}</p>
     </div>
@@ -4988,7 +5421,7 @@ onBeforeUnmount(() => {
       >
         <div class="chat-header__bar">
           <span class="chat-header__title">
-            {{ activeChatAgent ? stripRoleLabel(activeChatAgent.displayName) : 'OpenClaw' }}
+            {{ chatHeaderTitle }}
           </span>
           <div class="chat-header__actions">
             <button
@@ -5034,6 +5467,18 @@ onBeforeUnmount(() => {
           >
             <span class="chat-tag__dot" aria-hidden="true">{{ member.displayName.charAt(0) }}</span>
             {{ stripRoleLabel(member.displayName) }}
+          </button>
+          <button
+            v-for="petPeer in boundPets"
+            :key="petPeer.id"
+            class="chat-tag"
+            :class="{ 'chat-tag--active': activeChatAgentId === buildBoundPetChatAgentId(petPeer.id) }"
+            type="button"
+            :title="`绑定码 ${petPeer.bindingCode}`"
+            @click="switchChatAgent(buildBoundPetChatAgentId(petPeer.id))"
+          >
+            <span class="chat-tag__dot" aria-hidden="true">{{ petPeer.petName.charAt(0) }}</span>
+            {{ petPeer.petName }}
           </button>
         </nav>
       </header>
@@ -5129,7 +5574,7 @@ onBeforeUnmount(() => {
                 v-model="chatInput"
                 class="composer__input"
                 rows="2"
-                placeholder="输入你想让 OpenClaw 帮你做的事"
+                :placeholder="activeBoundPet ? '输入消息，或用 /agent <agentId> <任务> 调用已授权 Agent' : '输入你想让 OpenClaw 帮你做的事'"
                 @keydown="handleComposerKeydown"
                 @paste="handlePaste"
               />
@@ -6128,121 +6573,280 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
+      <div v-else-if="activeSection === 'bindings'" class="desktop-console-body desktop-console-body--overview">
+        <section class="section-block overview-section bindings-section">
+          <header class="section-block__header">
+            <div>
+              <h3>宠物绑定中心</h3>
+              <p>在这里管理绑定码、远程多宠物连接和 Agent 授权。</p>
+            </div>
+          </header>
+
+          <div class="bindings-config-grid">
+            <article class="bindings-config-card">
+              <h4>我的宠物绑定码</h4>
+              <p>将绑定码分享给对方，即可在远程设备完成连接。</p>
+              <div class="bindings-config-card__value">{{ petBindingCode || "未生成" }}</div>
+              <label class="bindings-config-field">
+                <span>编辑绑定码</span>
+                <input
+                  v-model="bindingCodeDraft"
+                  type="text"
+                  placeholder="ABCD-EFGH"
+                  @blur="bindingCodeDraft = normalizeBindingCode(bindingCodeDraft)"
+                />
+              </label>
+              <div class="bindings-config-actions">
+                <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="savePetBindingCode">
+                  保存绑定码
+                </button>
+                <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="copyPetBindingCode">
+                  复制绑定码
+                </button>
+                <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="regeneratePetBindingCode">
+                  重新生成
+                </button>
+              </div>
+            </article>
+
+            <article class="bindings-config-card">
+              <h4>添加远程宠物</h4>
+              <p>输入对方绑定码并确认后，对方宠物将出现在聊天标签页。</p>
+              <label class="bindings-config-field">
+                <span>对方绑定码</span>
+                <input
+                  v-model="incomingBindingCode"
+                  type="text"
+                  placeholder="输入对方绑定码"
+                  @blur="incomingBindingCode = normalizeBindingCode(incomingBindingCode)"
+                  @keydown.enter.prevent="bindRemotePetByCode"
+                />
+              </label>
+              <div class="bindings-config-actions bindings-config-actions--right">
+                <button class="desktop-console-panel__action" type="button" @click="bindRemotePetByCode">
+                  通过绑定码添加
+                </button>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="section-block overview-section">
+          <header class="section-block__header">
+            <div>
+              <h3>远程宠物列表</h3>
+              <p>按宠物逐条配置授权能力，可随时打开互聊或解除绑定。</p>
+            </div>
+          </header>
+          <div v-if="boundPets.length > 0" class="staff-brief-grid">
+            <article v-for="petPeer in boundPets" :key="`bound-${petPeer.id}`" class="staff-brief-card">
+              <div class="staff-brief-head">
+                <div class="staff-avatar">
+                  <div class="staff-avatar__badge">{{ petPeer.petName.charAt(0) }}</div>
+                </div>
+                <div class="staff-brief-identity">
+                  <strong>{{ petPeer.petName }}</strong>
+                  <p>{{ petPeer.ownerLabel }}</p>
+                </div>
+              </div>
+              <dl class="staff-brief-list">
+                <div class="staff-brief-row">
+                  <dt>绑定码</dt>
+                  <dd>{{ petPeer.bindingCode }}</dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>绑定时间</dt>
+                  <dd>{{ formatTime(petPeer.linkedAt) }}</dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>昵称</dt>
+                  <dd>
+                    <input
+                      :value="petPeer.petName"
+                      type="text"
+                      class="management-filter-input"
+                      placeholder="远程宠物昵称"
+                      @change="updateBoundPetName(petPeer.id, ($event.target as HTMLInputElement).value)"
+                    />
+                  </dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>Agent 授权</dt>
+                  <dd>
+                    <label v-for="capability in petPeer.capabilities" :key="`${petPeer.id}-${capability.id}`" class="task-switch">
+                      <input
+                        type="checkbox"
+                        :checked="capability.enabled"
+                        @change="setBoundPetCapability(petPeer.id, capability.id, ($event.target as HTMLInputElement).checked)"
+                      />
+                      <span>{{ capability.label }}</span>
+                    </label>
+                  </dd>
+                </div>
+              </dl>
+              <div class="platform-modal__actions">
+                <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="openBoundPetChat(petPeer.id)">
+                  打开互聊
+                </button>
+                <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="removeBoundPet(petPeer.id)">
+                  解除绑定
+                </button>
+              </div>
+            </article>
+          </div>
+          <div v-else class="empty-state">还没有远程绑定宠物。先在上方配置绑定码并输入对方绑定码完成连接。</div>
+        </section>
+      </div>
+
       <div v-else-if="activeSection === 'tasks'" class="desktop-console-body desktop-console-body--overview">
-        <section class="tasks-dashboard">
-          <section class="section-block overview-section tasks-hero">
-            <header class="section-block__header tasks-hero__header">
-              <div>
-                <h3>今日与下一批排程</h3>
-                <p>直接读取 openclaw 的 `cron/jobs.json`，把真实调度任务按运行时间和启用状态集中展示。</p>
-              </div>
-              <div class="tasks-hero__badge">
-                <span>下一截止</span>
-                <strong>{{ nextTaskDueRecord?.nextRunAtMs ? formatTaskRelativeDueAt(nextTaskDueRecord.nextRunAtMs) : "暂无排程" }}</strong>
-              </div>
-            </header>
-
-            <div class="tasks-kpi-grid">
-              <article class="tasks-kpi-card tasks-kpi-card--primary">
-                <span>任务总数</span>
-                <strong>{{ taskBoardMetrics.total }}</strong>
-                <small>当前看板累计条目</small>
-              </article>
-              <article class="tasks-kpi-card">
-                <span>已启用</span>
-                <strong>{{ taskBoardMetrics.pending }}</strong>
-                <small>将在 cron 中继续运行</small>
-              </article>
-              <article class="tasks-kpi-card">
-                <span>12 小时内</span>
-                <strong>{{ taskBoardMetrics.dueSoon }}</strong>
-                <small>即将到期</small>
-              </article>
-              <article class="tasks-kpi-card">
-                <span>未标注代理</span>
-                <strong>{{ taskBoardMetrics.unassigned }}</strong>
-                <small>agentId 待确认</small>
-              </article>
+        <section class="section-block overview-section ptask-section">
+          <header class="section-block__header ptask-header">
+            <div>
+              <h3>计划任务</h3>
+              <p>来自 OpenClaw cron/jobs.json 的调度任务，按 Agent 与状态管理。</p>
             </div>
+            <div class="ptask-header__actions">
+              <label class="ptask-toggle">
+                <span>计划任务</span>
+                <span class="ptask-toggle__badge">已启用</span>
+              </label>
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshTaskSnapshot()">刷新</button>
+            </div>
+          </header>
 
-            <div class="tasks-schedule-grid">
-              <article v-for="group in taskScheduleCards" :key="group.id" class="tasks-schedule-card" :class="`tasks-schedule-card--${group.tone}`">
-                <div class="tasks-schedule-card__header">
-                  <div>
-                    <strong>{{ group.title }}</strong>
-                    <p>{{ group.subtitle }}</p>
+          <div class="tasks-kpi-grid">
+            <article class="tasks-kpi-card tasks-kpi-card--primary">
+              <span>任务总数</span>
+              <strong>{{ taskBoardMetrics.total }}</strong>
+              <small>当前看板累计条目</small>
+            </article>
+            <article class="tasks-kpi-card">
+              <span>已启用</span>
+              <strong>{{ taskBoardMetrics.pending }}</strong>
+              <small>将在 cron 中继续运行</small>
+            </article>
+            <article class="tasks-kpi-card">
+              <span>12 小时内</span>
+              <strong>{{ taskBoardMetrics.dueSoon }}</strong>
+              <small>即将到期</small>
+            </article>
+            <article class="tasks-kpi-card">
+              <span>待执行</span>
+              <strong>{{ taskBoardMetrics.overdue }}</strong>
+              <small>运行时间已到或已过</small>
+            </article>
+          </div>
+
+          <div class="ptask-toolbar">
+            <div class="ptask-tabs">
+              <button
+                class="ptask-tab"
+                :class="{ active: cronTaskTab === 'late' }"
+                type="button"
+                @click="cronTaskTab = 'late'"
+              >
+                执行中 <em>{{ cronTaskStatusCounts.late }}</em>
+              </button>
+              <button
+                class="ptask-tab"
+                :class="{ active: cronTaskTab === 'scheduled' }"
+                type="button"
+                @click="cronTaskTab = 'scheduled'"
+              >
+                待执行 <em>{{ cronTaskStatusCounts.scheduled }}</em>
+              </button>
+              <button
+                class="ptask-tab"
+                :class="{ active: cronTaskTab === 'disabled' }"
+                type="button"
+                @click="cronTaskTab = 'disabled'"
+              >
+                已完成 <em>{{ cronTaskStatusCounts.disabled }}</em>
+              </button>
+              <button
+                class="ptask-tab"
+                :class="{ active: cronTaskTab === 'all' }"
+                type="button"
+                @click="cronTaskTab = 'all'"
+              >
+                全部 <em>{{ cronTaskStatusCounts.all }}</em>
+              </button>
+            </div>
+            <div class="ptask-toolbar__right">
+              <select v-model="cronTaskAgentFilter" class="ptask-agent-select">
+                <option value="all">全部 Agent</option>
+                <option v-for="agent in cronTaskAgents" :key="agent" :value="agent">{{ agent }}</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="ptask-list">
+            <article v-for="task in filteredCronTasks" :key="task.id" class="ptask-card" :class="[getCronTaskCardClass(task.statusKind)]">
+              <div class="ptask-card__head">
+                <div class="ptask-card__indicator" :class="getTaskStatusClass(task.statusKind)" />
+                <div class="ptask-card__title-row">
+                  <strong>{{ task.name }}</strong>
+                  <div class="ptask-card__tags">
+                    <span class="task-status-pill" :class="getTaskStatusClass(task.statusKind)">{{ formatTaskStatus(task.statusKind) }}</span>
+                    <span class="task-priority-pill" :class="getTaskScheduleClass(task.scheduleKind, task.deleteAfterRun)">{{ formatTaskScheduleKind(task.scheduleKind, task.deleteAfterRun) }}</span>
+                    <span v-if="task.agentId && task.agentId !== '未标注'" class="ptask-tag ptask-tag--agent">{{ task.agentId }}</span>
+                    <span v-if="task.sessionTarget" class="ptask-tag ptask-tag--session">{{ task.sessionTarget }}</span>
                   </div>
-                  <span>{{ group.records.length }} 条</span>
                 </div>
-
-                <div v-if="group.records.length" class="tasks-schedule-list">
-                  <article v-for="record in group.records.slice(0, 3)" :key="record.id" class="tasks-schedule-item">
-                    <div class="tasks-schedule-item__topline">
-                      <strong>{{ record.name }}</strong>
-                      <span class="task-status-pill" :class="getTaskStatusClass(record.statusKind)">{{ formatTaskStatus(record.statusKind) }}</span>
-                    </div>
-                    <p>{{ record.summary }}</p>
-                    <div class="tasks-schedule-item__meta">
-                      <span>Agent {{ record.agentId }}</span>
-                      <span>Target {{ record.sessionTarget }}</span>
-                      <span>{{ record.nextRunAtMs ? formatDueAt(record.nextRunAtMs) : "未提供下次执行时间" }}</span>
-                    </div>
-                  </article>
+                <div class="ptask-card__actions">
+                  <button
+                    v-if="task.enabled"
+                    class="ptask-action-btn ptask-action-btn--pause"
+                    type="button"
+                    title="暂停任务"
+                    @click="toggleCronTaskEnabled(task.id, false)"
+                  >⏸</button>
+                  <button
+                    v-else
+                    class="ptask-action-btn ptask-action-btn--play"
+                    type="button"
+                    title="启动任务"
+                    @click="toggleCronTaskEnabled(task.id, true)"
+                  >▶</button>
                 </div>
-                <div v-else class="empty-state">当前分组没有任务</div>
-              </article>
-            </div>
-
-          </section>
-
-          <section class="section-block overview-section tasks-board">
-            <header class="section-block__header tasks-board__header">
-              <div>
-                <h3>Cron 执行看板</h3>
-                <p>按状态分组展示当前任务、任务目的以及下一次执行时间，风格向 control-center 靠拢。</p>
               </div>
-              <div class="tasks-board__summary">
-                <span>待执行 {{ taskBoardMetrics.overdue }}</span>
-                <strong>{{ taskStatusSummary.scheduled + taskStatusSummary.late }} 个启用任务</strong>
-              </div>
-            </header>
 
-            <div class="tasks-board-groups">
-              <section v-for="group in taskBoardGroups" :key="group.key" class="tasks-board-group">
-                <div class="tasks-board-group__header">
-                  <div>
-                    <strong>{{ group.label }}</strong>
-                    <p>{{ group.summary }}</p>
+              <div class="ptask-card__body">
+                <div class="ptask-card__meta">
+                  <div v-if="task.agentId" class="ptask-meta-item">
+                    <span>Agent</span>
+                    <strong>{{ task.agentId }}</strong>
                   </div>
-                  <span>{{ group.count }} 个任务</span>
+                  <div class="ptask-meta-item">
+                    <span>执行方式</span>
+                    <strong>{{ task.statusLabel }}</strong>
+                  </div>
+                  <div class="ptask-meta-item">
+                    <span>下次运行</span>
+                    <strong>{{ task.nextRunAtMs ? formatTime(task.nextRunAtMs) : '—' }}</strong>
+                  </div>
+                  <div v-if="task.nextRunAtMs" class="ptask-meta-item">
+                    <span>距运行</span>
+                    <strong>{{ formatCronNextRun(task.nextRunAtMs) }}</strong>
+                  </div>
+                  <div class="ptask-meta-item">
+                    <span>创建时间</span>
+                    <strong>{{ formatCronTimestamp(task.createdAtMs) }}</strong>
+                  </div>
+                  <div class="ptask-meta-item">
+                    <span>上次更新</span>
+                    <strong>{{ formatCronTimestamp(task.updatedAtMs) }}</strong>
+                  </div>
                 </div>
+                <p v-if="task.summary" class="ptask-card__summary">{{ task.summary }}</p>
+              </div>
+            </article>
 
-                <div v-if="group.records.length" class="tasks-board-list">
-                  <article v-for="record in group.records" :key="record.id" class="tasks-board-card">
-                    <div class="tasks-board-card__topline">
-                      <div>
-                        <strong>{{ record.name }}</strong>
-                        <p>{{ record.summary }}</p>
-                      </div>
-                      <div class="tasks-board-card__tags">
-                        <span class="task-priority-pill" :class="getTaskScheduleClass(record.scheduleKind, record.deleteAfterRun)">
-                          {{ formatTaskScheduleKind(record.scheduleKind, record.deleteAfterRun) }}
-                        </span>
-                        <span class="task-status-pill" :class="getTaskStatusClass(record.statusKind)">{{ formatTaskStatus(record.statusKind) }}</span>
-                      </div>
-                    </div>
-                    <div class="tasks-board-card__meta">
-                      <span>Agent {{ record.agentId }}</span>
-                      <span>Target {{ record.sessionTarget }}</span>
-                      <span>{{ record.nextRunAtMs ? `下次: ${formatDueAt(record.nextRunAtMs)}` : "未提供下次执行时间" }}</span>
-                      <span>{{ record.nextRunAtMs ? formatTaskRelativeDueAt(record.nextRunAtMs) : record.statusLabel }}</span>
-                    </div>
-                  </article>
-                </div>
-                <div v-else class="empty-state">当前分组没有任务</div>
-              </section>
+            <div v-if="filteredCronTasks.length === 0" class="empty-state ptask-empty">
+              {{ cronTaskTab === 'all' ? '暂无任务。请确认 cron/jobs.json 文件存在，或点击「刷新」重新读取。' : '当前筛选条件下没有任务。' }}
             </div>
-          </section>
+          </div>
+
         </section>
       </div>
 
@@ -6635,6 +7239,7 @@ onBeforeUnmount(() => {
     >
       <button class="desktop-context-menu__item" type="button" @click="openChatPanel()">聊天</button>
       <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">平台管理</button>
+      <button class="desktop-context-menu__item" type="button" @click="openConsole('bindings')">宠物绑定</button>
       <button class="desktop-context-menu__item" type="button" @click="openLogAnalysis('timeline')">日志分析</button>
       <button class="desktop-context-menu__item" type="button" @click="openSubscriptionRecommendations()">订阅推荐</button>
       <button class="desktop-context-menu__item" type="button" @click="openSystemSettings()">系统设置</button>

@@ -2526,6 +2526,58 @@ fn load_task_snapshot() -> Result<TaskSnapshotResponse, String> {
 }
 
 #[tauri::command]
+fn set_task_enabled(task_id: String, enabled: bool) -> Result<(), String> {
+    let source_path = resolve_openclaw_config_path()
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".openclaw"))
+        .join("cron")
+        .join("jobs.json");
+
+    let raw = std::fs::read_to_string(&source_path)
+        .map_err(|err| format!("无法读取 cron/jobs.json: {}", err))?;
+
+    let mut parsed: Value = serde_json::from_str(&raw)
+        .map_err(|err| format!("cron/jobs.json 解析失败: {}", err))?;
+
+    let jobs = parsed
+        .get_mut("jobs")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "cron/jobs.json 中没有 jobs 数组。".to_string())?;
+
+    let mut found = false;
+    for job in jobs.iter_mut() {
+        if let Some(obj) = job.as_object_mut() {
+            let id = obj
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if id == task_id.trim() {
+                obj.insert("enabled".to_string(), Value::Bool(enabled));
+                obj.insert(
+                    "updatedAtMs".to_string(),
+                    Value::Number(serde_json::Number::from(current_timestamp_millis() as i64)),
+                );
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if !found {
+        return Err(format!("未找到 id 为 {} 的任务。", task_id));
+    }
+
+    let output = serde_json::to_string_pretty(&parsed)
+        .map_err(|err| format!("序列化失败: {}", err))?;
+    std::fs::write(&source_path, output)
+        .map_err(|err| format!("写入 cron/jobs.json 失败: {}", err))?;
+
+    Ok(())
+}
+
+#[tauri::command]
 fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
     let source_path = resolve_openclaw_config_path();
     let mission_statement = load_staff_mission_statement();
@@ -3659,6 +3711,7 @@ pub fn run() {
             load_openclaw_message_logs,
             load_staff_snapshot,
             load_task_snapshot,
+            set_task_enabled,
             load_memory_file_snapshot,
             load_document_file_snapshot,
             load_openclaw_resource_snapshot,

@@ -1414,9 +1414,18 @@ select {
   align-items: start;
 }
 
+.tasks-dashboard--stats-only {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 980px;
+}
+
 .tasks-hero,
 .tasks-board {
   gap: 16px;
+}
+
+.tasks-hero--stats-only {
+  gap: 14px;
 }
 
 .tasks-hero__header,
@@ -1716,6 +1725,337 @@ select {
 .tasks-done-chip span {
   color: rgba(94, 60, 35, 0.72);
   font-size: 12px;
+}
+
+/* ─── Project Task Management ─── */
+
+.ptask-section {
+  gap: 16px;
+}
+
+.ptask-section--cron {
+  margin-top: 4px;
+}
+
+.ptask-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ptask-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.ptask-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: rgba(76, 48, 27, 0.74);
+}
+
+.ptask-toggle__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(214, 242, 233, 0.96);
+  border: 1px solid rgba(88, 167, 137, 0.28);
+  color: #1b7059;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ptask-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ptask-tabs {
+  display: flex;
+  gap: 2px;
+  background: rgba(121, 73, 34, 0.06);
+  border-radius: 14px;
+  padding: 3px;
+}
+
+.ptask-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
+  color: rgba(76, 48, 27, 0.64);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+
+.ptask-tab:hover {
+  color: #3d2415;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.ptask-tab.active {
+  background: #fff;
+  color: #3d2415;
+  box-shadow: 0 1px 4px rgba(122, 72, 34, 0.1);
+}
+
+.ptask-tab em {
+  font-style: normal;
+  font-weight: 700;
+  font-size: 12px;
+  color: rgba(76, 48, 27, 0.48);
+}
+
+.ptask-tab.active em {
+  color: rgba(50, 145, 118, 0.88);
+}
+
+.ptask-toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ptask-agent-select {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(121, 73, 34, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #382215;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+
+.ptask-agent-select:focus {
+  border-color: rgba(140, 84, 40, 0.44);
+  box-shadow: 0 0 0 3px rgba(191, 124, 74, 0.14);
+}
+
+.ptask-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ptask-card {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  border: 1px solid rgba(121, 73, 34, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.88);
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ptask-card:hover {
+  border-color: rgba(121, 73, 34, 0.16);
+  box-shadow: 0 4px 16px rgba(122, 72, 34, 0.06);
+}
+
+.ptask-card--in_progress {
+  border-left: 3px solid #1b9e70;
+}
+
+.ptask-card--todo {
+  border-left: 3px solid #5a8eb3;
+}
+
+.ptask-card--blocked {
+  border-left: 3px solid #c47a2e;
+}
+
+.ptask-card--done {
+  border-left: 3px solid #9aa3b0;
+  opacity: 0.78;
+}
+
+.ptask-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px 10px;
+}
+
+.ptask-card__indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+  background: #9aa3b0;
+}
+
+.ptask-card__indicator.is-active {
+  background: #1b9e70;
+  box-shadow: 0 0 6px rgba(27, 158, 112, 0.4);
+}
+
+.ptask-card__indicator.is-queued {
+  background: #5a8eb3;
+}
+
+.ptask-card__indicator.is-blocked {
+  background: #c47a2e;
+  box-shadow: 0 0 6px rgba(196, 122, 46, 0.3);
+}
+
+.ptask-card__indicator.is-done {
+  background: #9aa3b0;
+}
+
+.ptask-card__title-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.ptask-card__title-row strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  color: #3d2415;
+  line-height: 1.35;
+  margin-bottom: 6px;
+}
+
+.ptask-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.ptask-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ptask-tag--agent {
+  background: rgba(99, 148, 196, 0.14);
+  color: #3b6181;
+  border: 1px solid rgba(99, 148, 196, 0.2);
+}
+
+.ptask-tag--session {
+  background: rgba(165, 130, 96, 0.12);
+  color: #6b5035;
+  border: 1px solid rgba(165, 130, 96, 0.18);
+}
+
+.ptask-card__actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.ptask-card:hover .ptask-card__actions {
+  opacity: 1;
+}
+
+.ptask-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(121, 73, 34, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  color: rgba(76, 48, 27, 0.6);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.ptask-action-btn:hover {
+  background: #fff;
+  border-color: rgba(121, 73, 34, 0.2);
+  color: #3d2415;
+}
+
+.ptask-action-btn--play:hover {
+  color: #1b9e70;
+  border-color: rgba(27, 158, 112, 0.3);
+}
+
+.ptask-action-btn--pause:hover {
+  color: #c47a2e;
+  border-color: rgba(196, 122, 46, 0.3);
+}
+
+.ptask-card__body {
+  padding: 0 16px 14px 36px;
+}
+
+.ptask-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+
+.ptask-meta-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ptask-meta-item span {
+  color: rgba(94, 60, 35, 0.56);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ptask-meta-item strong {
+  color: rgba(61, 36, 21, 0.82);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ptask-card__summary {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: rgba(251, 247, 242, 0.7);
+  border-radius: 10px;
+  color: rgba(76, 48, 27, 0.72);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ptask-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: rgba(76, 48, 27, 0.5);
+  font-size: 14px;
+}
+
+.ptask-source-info {
+  margin-top: 8px;
 }
 
 .workbench-summary-grid .detail-stat-card {
@@ -2033,6 +2373,86 @@ select {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.bindings-section {
+  display: grid;
+  gap: 14px;
+}
+
+.bindings-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.bindings-config-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(121, 73, 34, 0.12);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(252, 248, 244, 0.96)),
+    radial-gradient(circle at top right, rgba(255, 226, 196, 0.22), transparent 44%);
+}
+
+.bindings-config-card h4 {
+  margin: 0;
+  color: #5f3418;
+  font-size: 15px;
+}
+
+.bindings-config-card p {
+  margin: 0;
+  color: rgba(94, 60, 35, 0.74);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.bindings-config-card__value {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(121, 73, 34, 0.2);
+  background: rgba(255, 255, 255, 0.72);
+  color: #5e3c23;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.bindings-config-field {
+  display: grid;
+  gap: 8px;
+}
+
+.bindings-config-field span {
+  color: #3f3f46;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.bindings-config-field input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid rgba(209, 213, 219, 0.9);
+  border-radius: 10px;
+  background: #fff;
+  color: #27272a;
+  font: inherit;
+}
+
+.bindings-config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bindings-config-actions--right {
+  justify-content: flex-end;
 }
 
 .staff-brief-card {
@@ -3907,6 +4327,7 @@ select {
   .desktop-console-body--overview,
   .overview-metrics-grid,
   .overview-status-grid,
+  .bindings-config-grid,
   .management-form-grid,
   .tasks-dashboard,
   .tasks-kpi-grid,
@@ -3948,6 +4369,27 @@ select {
   .tasks-editor__actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .ptask-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ptask-tabs {
+    overflow-x: auto;
+  }
+
+  .ptask-toolbar__right {
+    justify-content: space-between;
+  }
+
+  .ptask-card__body {
+    padding-left: 16px;
+  }
+
+  .ptask-card__meta {
+    gap: 4px 12px;
   }
 
   .desktop-console-panel__actions {
