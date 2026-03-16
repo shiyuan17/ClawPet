@@ -508,7 +508,7 @@ const actionTips: Record<AnimationName, string> = {
   confusion: "它有点困惑，歪着头不太理解刚才发生了什么。",
   have_meal: "像被投喂到一样，收到回应后会满足地吃一口。",
   rub_your_eyes: "它在揉眼睛，也许你也该休息一下了。",
-  sleep: "太久没有新互动，它已经安心睡着了。",
+  sleep: "",
   smile_and_blink: "聊天窗口打开时，它会保持更专注的陪伴表情。",
   smile_blink: "今天状态不错，适合放在页面右下角陪你工作。",
   stomp_feet: "你刚刚戳到它了，它正在跺脚表达情绪。",
@@ -5391,7 +5391,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main ref="stage" class="desktop-pet-stage" :class="{ 'desktop-pet-stage--console': isConsoleWindowMode }">
-    <div v-if="!isConsoleWindowMode && shouldShowHint" class="desktop-pet-hint" :style="hintStyle">
+<div v-if="!isConsoleWindowMode && shouldShowHint" class="desktop-pet-hint" :style="hintStyle">
       <span class="desktop-pet-hint-title">{{ activeAnimation.label }}</span>
       <p>{{ statusText }}</p>
     </div>
