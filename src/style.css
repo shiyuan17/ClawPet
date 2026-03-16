@@ -1980,6 +1980,8 @@ select {
   display: grid;
   min-height: 0;
   align-content: start;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .management-form-grid--workbench {
@@ -2810,7 +2812,7 @@ select {
   gap: 14px;
   min-height: 0;
   flex: 1;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .resource-modal__content--full {
