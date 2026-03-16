@@ -7060,7 +7060,7 @@ onBeforeUnmount(() => {
                 <div v-if="filteredMemberMemoryRecords.length === 0" class="empty-state management-empty-state">当前员工暂无可显示的记忆资料。</div>
               </div>
             </aside>
-            <section class="management-editor">
+            <section class="management-editor management-editor--memory">
               <div class="management-editor__header">
                 <div>
                   <strong>{{ activeResourceSelectedLabel }}</strong>
@@ -7070,25 +7070,37 @@ onBeforeUnmount(() => {
                   <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshMemorySnapshot()">重新读取</button>
                 </div>
               </div>
-              <form class="management-editor__form" @submit.prevent="handleSaveMemory">
-              <div class="management-form-grid management-form-grid--workbench">
-                <input v-model="memoryDraft.title" type="text" placeholder="记忆标题" readonly />
-                <input v-model="memoryDraft.owner" type="text" placeholder="归属员工" readonly />
-                <input v-model="memoryDraft.scope" type="text" placeholder="记忆分类" readonly />
-                <input v-model="memoryDraft.relativePath" type="text" placeholder="相对路径" readonly />
-                <input v-model="memoryDraft.sourcePath" type="text" placeholder="源文件路径" readonly />
-                <div class="management-editor__meta-card">
-                  <span>当前来源</span>
-                  <strong>{{ memoryEditorModeLabel }}</strong>
-                  <small>{{ selectedMemoryId ? (selectedMemoryRecord?.exists === false ? "保存会在 OpenClaw 工作区中创建该记忆文件" : "保存会直接写回 OpenClaw 真实记忆文件") : "先从左侧选择记忆文件" }}</small>
+              <form class="management-editor__form management-editor__form--memory" @submit.prevent="handleSaveMemory">
+                <div class="memory-meta-strip">
+                  <div class="memory-meta-strip__item" v-if="memoryDraft.title">
+                    <span>标题</span>
+                    <strong>{{ memoryDraft.title }}</strong>
+                  </div>
+                  <div class="memory-meta-strip__item" v-if="memoryDraft.owner">
+                    <span>归属</span>
+                    <strong>{{ memoryDraft.owner }}</strong>
+                  </div>
+                  <div class="memory-meta-strip__item" v-if="memoryDraft.scope">
+                    <span>分类</span>
+                    <strong>{{ memoryDraft.scope }}</strong>
+                  </div>
+                  <div class="memory-meta-strip__item memory-meta-strip__item--wide" v-if="memoryDraft.relativePath">
+                    <span>路径</span>
+                    <strong>{{ memoryDraft.relativePath }}</strong>
+                  </div>
+                  <div class="memory-meta-strip__item memory-meta-strip__item--accent">
+                    <span>{{ memoryEditorModeLabel }}</span>
+                    <strong>{{ selectedMemoryId ? (selectedMemoryRecord?.exists === false ? "保存时创建" : "保存时写回") : "未选择" }}</strong>
+                  </div>
                 </div>
-                <textarea v-model="memoryDraft.content" rows="12" placeholder="记忆文件内容" />
-              </div>
-
-              <div class="management-form-grid__actions management-form-grid__actions--editor">
-                <button class="desktop-console-panel__action" type="submit" :disabled="!memoryDraft.sourcePath">{{ memoryEditorModeLabel }}</button>
-              </div>
-            </form>
+                <div class="memory-editor-textarea-wrap">
+                  <textarea v-model="memoryDraft.content" class="memory-editor-textarea" placeholder="记忆文件内容" />
+                </div>
+                <div class="management-form-grid__actions management-form-grid__actions--editor">
+                  <small v-if="memoryDraft.sourcePath" class="memory-meta-source-hint" :title="memoryDraft.sourcePath">{{ memoryDraft.sourcePath }}</small>
+                  <button class="desktop-console-panel__action" type="submit" :disabled="!memoryDraft.sourcePath">{{ memoryEditorModeLabel }}</button>
+                </div>
+              </form>
             </section>
           </template>
         </div>
