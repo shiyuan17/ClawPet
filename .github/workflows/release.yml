@@ -1,0 +1,96 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: '--target universal-apple-darwin'
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build the app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'ClawPet ${{ github.ref_name }}'
+          releaseBody: 'See CHANGELOG.md for details.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Release Notes
+        id: notes
+        run: |
+          echo "## ClawPet ${{ github.ref_name }}" > release_notes.md
+          echo "" >> release_notes.md
+          echo "### 新功能" >> release_notes.md
+          echo "- 🐾 宠物远程绑定与聊天功能" >> release_notes.md
+          echo "- 💐 宠物互动功能（送花、送蛋糕、拥抱、亲亲）" >> release_notes.md
+          echo "- 🔇 移除默认交互提示" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### 下载说明" >> release_notes.md
+          echo "- **macOS**: 下载 `.dmg` 或 `.app.tar.gz` 文件" >> release_notes.md
+          echo "- **Windows**: 下载 `.msi` 或 `.exe` 文件" >> release_notes.md
+          echo "- **Linux**: 下载 `.deb` 或 `.AppImage` 文件" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### 使用方式" >> release_notes.md
+          echo "1. 启动后端服务: \`cd server && npm install && npm start\`" >> release_notes.md
+          echo "2. 运行应用程序" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "完整文档请查看 [README.md](./README.md)" >> release_notes.md
+
+      - name: Update Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: release_notes.md
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
