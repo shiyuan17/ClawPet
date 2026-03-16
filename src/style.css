@@ -159,6 +159,27 @@ select {
   gap: 12px;
 }
 
+/* macOS overlay titlebar mode:
+   keep content below the traffic-light controls area. */
+.desktop-pet-stage--console .desktop-console-panel {
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  padding-top: max(52px, calc(env(safe-area-inset-top, 0px) + 34px));
+}
+
+.desktop-pet-stage--console {
+  background:
+    radial-gradient(circle at top right, rgba(255, 220, 178, 0.52), transparent 36%),
+    linear-gradient(180deg, rgba(255, 250, 245, 0.99), rgba(255, 244, 232, 0.98));
+}
+
 .desktop-console-panel__dragbar {
   cursor: move;
 }

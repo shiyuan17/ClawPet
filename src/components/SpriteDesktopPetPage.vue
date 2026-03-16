@@ -897,6 +897,17 @@ const consolePanelStyle = computed(() => {
   const bounds = stage.value?.getBoundingClientRect();
   const viewportWidth = bounds?.width ?? (typeof window === "undefined" ? 360 : window.innerWidth);
   const viewportHeight = bounds?.height ?? (typeof window === "undefined" ? 640 : window.innerHeight);
+  if (isConsoleWindowMode) {
+    return {
+      width: `${Math.max(320, viewportWidth)}px`,
+      height: `${Math.max(320, viewportHeight)}px`,
+      left: "0px",
+      top: "0px",
+      opacity: "1",
+      transform: "none",
+      transformOrigin: "center center"
+    };
+  }
   const prefersWide = true;
   const availableWidth = Math.max(320, viewportWidth - 32);
   const availableHeight = Math.max(320, viewportHeight - 32);
@@ -1654,8 +1665,12 @@ const runtimeLogPollIntervalMs = 2500;
 const runtimeLogFollowWindowMs = 4000;
 
 type TauriWindowApi = {
+  label?: string;
   close: () => Promise<void> | void;
   destroy: () => Promise<void> | void;
+  setFocus?: () => Promise<void> | void;
+  setAlwaysOnTop?: (value: boolean) => Promise<void> | void;
+  startDragging?: () => Promise<void> | void;
   setIgnoreCursorEvents: (value: boolean, options?: { forward?: boolean }) => Promise<void> | void;
 };
 
@@ -1669,8 +1684,54 @@ type TauriNamespace = {
   window?: {
     getCurrentWindow?: () => TauriWindowApi;
     cursorPosition?: () => Promise<{ x: number; y: number }>;
+    WebviewWindow?: new (
+      label: string,
+      options?: {
+        url?: string;
+        title?: string;
+        width?: number;
+        height?: number;
+        minWidth?: number;
+        minHeight?: number;
+        center?: boolean;
+        focus?: boolean;
+        alwaysOnTop?: boolean;
+        transparent?: boolean;
+        decorations?: boolean;
+        resizable?: boolean;
+      }
+    ) => unknown;
   };
 };
+
+function parseConsoleSection(raw: string | null): ConsoleSection | null {
+  if (raw === "overview" || raw === "platforms" || raw === "staff" || raw === "tasks") {
+    return raw;
+  }
+  return null;
+}
+
+const isConsoleWindowMode = (() => {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return new URL(window.location.href).searchParams.get("window") === "console";
+  } catch {
+    return false;
+  }
+})();
+
+const initialConsoleSection = (() => {
+  if (!isConsoleWindowMode || typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return parseConsoleSection(new URL(window.location.href).searchParams.get("section"));
+  } catch {
+    return null;
+  }
+})();
 
 function createMessageId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2236,7 +2297,22 @@ function toggleChatPanel(nextValue?: boolean) {
   statusText.value = finalValue ? "对话窗口已打开。" : "对话窗口已收起。";
 }
 
-function openConsole(section: ConsoleSection) {
+async function openConsole(section: ConsoleSection) {
+  if (!isConsoleWindowMode) {
+    const invoke = getTauriApi()?.core?.invoke;
+    if (invoke) {
+      try {
+        await invoke("open_console_window", { section });
+        hideContextMenu();
+        noteInteraction();
+        statusText.value = "平台管理窗口已独立打开。";
+        return;
+      } catch {
+        // Fallback to the embedded panel when window creation is unavailable.
+      }
+    }
+  }
+
   activePanelMode.value = "console";
   activeSection.value = section;
   hideContextMenu();
@@ -2321,6 +2397,14 @@ function toggleConsolePanel(nextValue?: boolean) {
   const finalValue = nextValue ?? !isConsoleOpen.value;
   if (finalValue === isConsoleOpen.value) {
     return;
+  }
+
+  if (isConsoleWindowMode && !finalValue) {
+    const currentWindow = getTauriApi()?.window?.getCurrentWindow?.();
+    if (currentWindow?.close) {
+      void currentWindow.close();
+      return;
+    }
   }
 
   isConsoleOpen.value = finalValue;
@@ -2901,6 +2985,77 @@ function handlePanelDragStart(event: PointerEvent) {
   };
   captureCurrentPanelPlacement();
   consolePanelRef.value?.setPointerCapture(event.pointerId);
+}
+
+function startConsoleWindowDrag(event: PointerEvent) {
+  const invoke = getTauriApi()?.core?.invoke;
+  if (invoke) {
+    event.preventDefault();
+    void invoke("start_console_window_drag");
+    return;
+  }
+
+  const currentWindow = getTauriApi()?.window?.getCurrentWindow?.();
+  if (currentWindow?.startDragging) {
+    event.preventDefault();
+    void currentWindow.startDragging();
+  }
+}
+
+function handleConsoleHeaderPointerDown(event: PointerEvent) {
+  if (!isConsoleWindowMode) {
+    handlePanelDragStart(event);
+  }
+}
+
+function handleConsolePanelPointerDown(event: PointerEvent) {
+  if (!isConsoleWindowMode || event.button !== 0 || !(event.target instanceof HTMLElement)) {
+    return;
+  }
+
+  const target = event.target;
+  if (
+    target.closest(
+      "button, textarea, input, select, a, label, [role='switch'], .desktop-console-panel__resize-handle"
+    )
+  ) {
+    return;
+  }
+
+  const className = target.className;
+  const isBodySurface =
+    typeof className === "string" && (className.includes("desktop-console-body") || className.includes("desktop-console-nav"));
+  const isDragSurface =
+    target === consolePanelRef.value ||
+    target.classList.contains("desktop-console-panel__header") ||
+    target.classList.contains("desktop-console-panel__actions") ||
+    isBodySurface;
+
+  if (!isDragSurface) {
+    return;
+  }
+
+  startConsoleWindowDrag(event);
+}
+
+async function closeConsoleWindow() {
+  const invoke = getTauriApi()?.core?.invoke;
+  if (invoke) {
+    try {
+      await invoke("close_console_window");
+      return;
+    } catch {
+      // Ignore and fallback to direct window API below.
+    }
+  }
+
+  const currentWindow = getTauriApi()?.window?.getCurrentWindow?.();
+  if (currentWindow?.close) {
+    await currentWindow.close();
+    return;
+  }
+
+  toggleConsolePanel(false);
 }
 
 function handlePanelResizeStart(event: PointerEvent) {
@@ -4711,7 +4866,14 @@ onMounted(() => {
   void refreshOpenClawSkillSnapshot();
   void refreshOpenClawSkillsList();
   void refreshTaskSnapshot();
-  void applyAlwaysOnTop(petAlwaysOnTop.value);
+  void applyAlwaysOnTop(isConsoleWindowMode ? false : petAlwaysOnTop.value);
+  if (isConsoleWindowMode) {
+    activePanelMode.value = "console";
+    activeSection.value = initialConsoleSection ?? "platforms";
+    isConsoleOpen.value = true;
+    panelMotionValue.value = 1;
+    statusText.value = "平台管理窗口已独立打开。";
+  }
   const storedActivePlatformId = loadActivePlatformId();
   const storedActivePlatform =
     platforms.value.find((platform) => platform.id === storedActivePlatformId) ?? null;
@@ -4795,13 +4957,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main ref="stage" class="desktop-pet-stage">
-    <div class="desktop-pet-hint" :style="hintStyle">
+  <main ref="stage" class="desktop-pet-stage" :class="{ 'desktop-pet-stage--console': isConsoleWindowMode }">
+    <div v-if="!isConsoleWindowMode" class="desktop-pet-hint" :style="hintStyle">
       <span class="desktop-pet-hint-title">{{ activeAnimation.label }}</span>
       <p>{{ statusText }}</p>
     </div>
 
     <button
+      v-if="!isConsoleWindowMode"
       ref="pet"
       class="sprite-pet"
       :class="{ dragging: isDragging }"
@@ -4813,6 +4976,7 @@ onBeforeUnmount(() => {
     />
 
     <section
+      v-if="!isConsoleWindowMode"
       v-show="isChatOpen || chatMotionValue > 0"
       ref="chatPanelRef"
       class="desktop-console-panel desktop-chat-window"
@@ -5014,8 +5178,9 @@ onBeforeUnmount(() => {
       ref="consolePanelRef"
       class="desktop-console-panel"
       :style="consolePanelStyle"
+      @pointerdown="handleConsolePanelPointerDown"
     >
-      <header class="desktop-console-panel__header desktop-console-panel__dragbar" @pointerdown="handlePanelDragStart">
+      <header class="desktop-console-panel__header desktop-console-panel__dragbar" @pointerdown="handleConsoleHeaderPointerDown">
         <div v-if="activePanelMode === 'console'">
           <p class="desktop-console-panel__eyebrow">ClawPet Command Deck</p>
           <strong>运营控制台</strong>
@@ -5075,7 +5240,7 @@ onBeforeUnmount(() => {
           >
             日志分析
           </button>
-          <button class="desktop-console-panel__action" type="button" @click="toggleConsolePanel(false)">收起</button>
+          <button class="desktop-console-panel__action" type="button" @pointerdown.stop @click.stop.prevent="closeConsoleWindow">关闭</button>
         </div>
       </header>
 
@@ -6081,7 +6246,7 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
-      <div class="desktop-console-panel__resize-handle" @pointerdown="handlePanelResizeStart" />
+      <div v-if="!isConsoleWindowMode" class="desktop-console-panel__resize-handle" @pointerdown="handlePanelResizeStart" />
     </section>
 
     <div v-if="sessionOverlayLog" class="platform-modal-backdrop" @click.self="closeSessionLogOverlay">
@@ -6463,7 +6628,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div
-      v-if="contextMenu.visible"
+      v-if="!isConsoleWindowMode && contextMenu.visible"
       ref="contextMenuRef"
       class="desktop-context-menu"
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"

@@ -3179,6 +3179,63 @@ fn get_window_inner_position(app: tauri::AppHandle) -> Result<WindowInnerPositio
     })
 }
 
+#[tauri::command]
+fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("console") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let section = section
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| matches!(*value, "overview" | "platforms" | "staff" | "tasks"))
+        .unwrap_or("platforms");
+    let url = format!("index.html?window=console&section={section}");
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "console",
+        tauri::WebviewUrl::App(url.into()),
+    )
+    .title("ClawPet Platform Console")
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .hidden_title(true)
+    .inner_size(1200.0, 820.0)
+    .min_inner_size(960.0, 640.0)
+    .resizable(true)
+    .maximizable(true)
+    .minimizable(true)
+    .closable(true)
+    .decorations(true)
+    .transparent(false)
+    .shadow(true)
+    .always_on_top(false)
+    .skip_taskbar(false)
+    .focused(true)
+    .visible(true)
+    .build()
+    .map(|_| ())
+    .map_err(|error| format!("failed to open console window: {error}"))
+}
+
+#[tauri::command]
+fn close_console_window(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("console")
+        .ok_or_else(|| "console window not found".to_string())?;
+    window.close().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn start_console_window_drag(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("console")
+        .ok_or_else(|| "console window not found".to_string())?;
+    window.start_dragging().map_err(|error| error.to_string())
+}
+
 fn toggle_main_window_visibility(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -3592,6 +3649,9 @@ pub fn run() {
             get_available_monitors,
             get_window_inner_position,
             move_window_to_monitor,
+            open_console_window,
+            close_console_window,
+            start_console_window_drag,
             openclaw_chat,
             sync_local_proxy,
             check_openclaw_gateway,
