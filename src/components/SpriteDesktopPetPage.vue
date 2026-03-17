@@ -110,6 +110,25 @@ type CodingPlanRecommendation = {
   accent: "amber" | "sky" | "mint" | "rose" | "default";
 };
 
+type SubscriptionScenarioRecommendation = {
+  scene: string;
+  primary: string;
+  secondary: string;
+  caution: string;
+};
+
+type SubscriptionPlatformBenchmark = {
+  platform: string;
+  firstResponse: string;
+  outputSpeed: string;
+  tokenUsage: string;
+  simpleAccuracy: string;
+  logicAccuracy: string;
+  spatialAccuracy: string;
+  stability: string;
+  note: string;
+};
+
 type AnimationDefinition = {
   name: AnimationName;
   label: string;
@@ -777,6 +796,116 @@ const consoleSections: Array<{ id: ConsoleSection; label: string }> = [
   { id: "bindings", label: "宠物绑定" },
   { id: "tasks", label: "任务管理" }
 ];
+const subscriptionReferenceUrl = "https://mp.weixin.qq.com/s/AD4nB87oGu4s40Dvo4p2PA?scene=1";
+const subscriptionDataUpdatedAt = "2026-03-17";
+const subscriptionScenarioRecommendations: SubscriptionScenarioRecommendation[] = [
+  {
+    scene: "快速简单问答",
+    primary: "Kimi",
+    secondary: "智谱 GLM5",
+    caution: "阿里云百炼（过度思考）"
+  },
+  {
+    scene: "逻辑推理 / 数学题",
+    primary: "火山方舟",
+    secondary: "智谱 GLM5",
+    caution: "腾讯云、MiniMax（易卡死）"
+  },
+  {
+    scene: "空间想象 / 陷阱题",
+    primary: "智谱 GLM5",
+    secondary: "火山方舟",
+    caution: "Kimi（答案不稳定）"
+  },
+  {
+    scene: "追求性价比（省 Token）",
+    primary: "火山方舟",
+    secondary: "Kimi / 智谱 GLM5",
+    caution: "阿里云、腾讯云"
+  },
+  {
+    scene: "追求稳定性（生产环境）",
+    primary: "智谱 GLM5",
+    secondary: "火山方舟",
+    caution: "所有平台高峰期都可能波动"
+  }
+];
+const subscriptionPlatformBenchmarks: SubscriptionPlatformBenchmark[] = [
+  {
+    platform: "Kimi",
+    firstResponse: "★★★★★（约 7s）",
+    outputSpeed: "★★★★★",
+    tokenUsage: "★★★★（偏省）",
+    simpleAccuracy: "通过",
+    logicAccuracy: "通过",
+    spatialAccuracy: "不稳定（3 次结果不一致）",
+    stability: "★★★",
+    note: "速度最快，但空间推理偶发“硬猜”现象"
+  },
+  {
+    platform: "火山方舟",
+    firstResponse: "★★★",
+    outputSpeed: "★★★★★（逻辑题约 15s）",
+    tokenUsage: "★★★★★（最省）",
+    simpleAccuracy: "通过",
+    logicAccuracy: "通过",
+    spatialAccuracy: "通过",
+    stability: "★★★★★",
+    note: "综合表现最优，简单题思考略长但无答错记录"
+  },
+  {
+    platform: "智谱 GLM5",
+    firstResponse: "★★★★",
+    outputSpeed: "★★★★",
+    tokenUsage: "★★★★（适中）",
+    simpleAccuracy: "通过",
+    logicAccuracy: "通过",
+    spatialAccuracy: "通过",
+    stability: "★★★★★",
+    note: "速度 / 消耗 / 质量三者平衡最好"
+  },
+  {
+    platform: "阿里云百炼",
+    firstResponse: "★（约 27.8s）",
+    outputSpeed: "★（逻辑题约 98s）",
+    tokenUsage: "★★（较高）",
+    simpleAccuracy: "通过",
+    logicAccuracy: "通过",
+    spatialAccuracy: "通过",
+    stability: "★★",
+    note: "思考模式偏重，简单问题也会深思熟虑，整体偏慢"
+  },
+  {
+    platform: "腾讯云",
+    firstResponse: "★★★",
+    outputSpeed: "失败（常卡住截断）",
+    tokenUsage: "不可用（深度任务易中断）",
+    simpleAccuracy: "通过",
+    logicAccuracy: "交白卷",
+    spatialAccuracy: "交白卷",
+    stability: "★",
+    note: "深度思考场景表现不稳定，不建议逻辑 / 空间任务"
+  },
+  {
+    platform: "MiniMax",
+    firstResponse: "★★★★",
+    outputSpeed: "失败（常卡住截断）",
+    tokenUsage: "不可用（深度任务易中断）",
+    simpleAccuracy: "通过",
+    logicAccuracy: "交白卷",
+    spatialAccuracy: "不稳定",
+    stability: "★★",
+    note: "简单任务速度尚可，深度任务易卡死，答案波动大"
+  }
+];
+const subscriptionPlatformUrlMap: Record<string, string> = {
+  Kimi: "https://www.kimi.com/code/zh",
+  "火山方舟": "https://www.volcengine.com/docs/82379/2188957",
+  "智谱 GLM5": "https://docs.bigmodel.cn/cn/coding-plan/overview",
+  "阿里云百炼": "https://www.aliyun.com/benefit/scene/codingplan",
+  "腾讯云": "https://cloud.tencent.com/act/pro/codingplan",
+  MiniMax: "https://platform.minimaxi.com/docs/guides/pricing-coding-plan"
+};
 const codingPlanRecommendations: CodingPlanRecommendation[] = [
   {
     id: "alibaba",
@@ -2774,7 +2903,7 @@ function openSubscriptionRecommendations() {
     startPanelAnimation();
   }
 
-  statusText.value = "订阅推荐已打开，当前查看最新 Coding Plan 平台汇总。";
+  statusText.value = "订阅推荐已打开，当前查看场景推荐与平台实测对比。";
   applyBaseAnimation();
 }
 
@@ -3093,6 +3222,64 @@ async function openCodingPlanPlatform(url: string) {
     window.open(url, "_blank", "noopener,noreferrer");
     statusText.value = "已尝试在浏览器中打开对应 Coding Plan 平台。";
   }
+}
+
+function openSubscriptionPlatformByName(platformName: string) {
+  const url = subscriptionPlatformUrlMap[platformName];
+  if (!url) {
+    return;
+  }
+  void openCodingPlanPlatform(url);
+}
+
+function getSubscriptionStatusTone(value: string): "good" | "warn" | "bad" | "neutral" {
+  if (value.includes("通过")) {
+    return "good";
+  }
+  if (value.includes("不稳定")) {
+    return "warn";
+  }
+  if (value.includes("交白卷") || value.includes("失败") || value.includes("不可用")) {
+    return "bad";
+  }
+  return "neutral";
+}
+
+function getSubscriptionStarCount(value: string): number {
+  const matched = value.trim().match(/^([★⭐]+)/);
+  if (!matched) {
+    return 0;
+  }
+  return matched[1].replace(/⭐/g, "★").length;
+}
+
+function getSubscriptionMetricNote(value: string): string {
+  const matched = value.match(/（([^）]+)）/);
+  return matched ? `（${matched[1]}）` : "";
+}
+
+function isSubscriptionMetricFailure(value: string): boolean {
+  return value.includes("失败") || value.includes("不可用") || value.includes("交白卷");
+}
+
+function getSubscriptionStatusIcon(value: string): string {
+  if (value.includes("通过")) {
+    return "✅";
+  }
+  if (value.includes("不稳定")) {
+    return "⚠️";
+  }
+  return "❌";
+}
+
+function getSubscriptionStatusLabel(value: string): string {
+  if (value.includes("通过")) {
+    return "通过";
+  }
+  if (value.includes("交白卷")) {
+    return "交白卷";
+  }
+  return value;
 }
 
 async function syncLocalProxyServer() {
@@ -6437,9 +6624,191 @@ onBeforeUnmount(() => {
 
       <div v-else-if="activePanelMode === 'subscriptions'" class="desktop-console-body desktop-console-body--overview">
         <section class="section-block overview-section">
+          <div class="subscription-insight-card">
+            <div class="subscription-insight-card__header">
+              <div>
+                <strong>订阅推荐更新</strong>
+                <p>根据你提供的实测截图整理，更新时间 {{ subscriptionDataUpdatedAt }}。</p>
+              </div>
+              <button
+                class="desktop-console-panel__action desktop-console-panel__action--ghost"
+                type="button"
+                @click="openCodingPlanPlatform(subscriptionReferenceUrl)"
+              >
+                查看参考原文
+              </button>
+            </div>
+            <p class="subscription-insight-card__hint">
+              维度包含：首响速度、总输出速度、Token 消耗、三类题型准确性和综合稳定性。
+            </p>
+          </div>
+
+          <div class="subscription-table-card">
+            <div class="subscription-table-card__header">
+              <strong>按场景推荐</strong>
+              <span>5 个高频使用场景</span>
+            </div>
+            <div class="subscription-table-scroll">
+              <table class="subscription-table">
+                <thead>
+                  <tr>
+                    <th>使用场景</th>
+                    <th>首选推荐</th>
+                    <th>次选</th>
+                    <th>避坑提醒</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in subscriptionScenarioRecommendations" :key="item.scene">
+                    <td>{{ item.scene }}</td>
+                    <td class="subscription-table__recommend">{{ item.primary }}</td>
+                    <td>{{ item.secondary }}</td>
+                    <td class="subscription-table__warning">{{ item.caution }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="subscription-table-card">
+            <div class="subscription-table-card__header">
+              <strong>平台实测对比</strong>
+              <span>6 个平台横向评估</span>
+            </div>
+            <div class="subscription-table-scroll">
+              <table class="subscription-table subscription-table--benchmark">
+                <colgroup>
+                  <col class="subscription-col-platform" />
+                  <col class="subscription-col-first" />
+                  <col class="subscription-col-output" />
+                  <col class="subscription-col-token" />
+                  <col class="subscription-col-status-simple" />
+                  <col class="subscription-col-status-logic" />
+                  <col class="subscription-col-status-spatial" />
+                  <col class="subscription-col-stability" />
+                  <col class="subscription-col-note" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th class="subscription-table__sticky-col">平台</th>
+                    <th>首响速度</th>
+                    <th>输出速度（总耗时）</th>
+                    <th>Token 消耗</th>
+                    <th>简单问答</th>
+                    <th>逻辑题</th>
+                    <th>空间题</th>
+                    <th>综合稳定性</th>
+                    <th>关键备注</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in subscriptionPlatformBenchmarks" :key="item.platform">
+                    <td class="subscription-table__sticky-col">
+                      <button
+                        v-if="subscriptionPlatformUrlMap[item.platform]"
+                        class="subscription-platform-link"
+                        type="button"
+                        @click="openSubscriptionPlatformByName(item.platform)"
+                      >
+                        {{ item.platform }}
+                      </button>
+                      <span v-else>{{ item.platform }}</span>
+                    </td>
+                    <td class="subscription-table__metric">
+                      <template v-if="getSubscriptionStarCount(item.firstResponse) > 0">
+                        <span class="subscription-rating">
+                          <span class="subscription-rating__stars">
+                            <span
+                              v-for="index in getSubscriptionStarCount(item.firstResponse)"
+                              :key="`first-${item.platform}-${index}`"
+                              class="subscription-rating__star"
+                            >
+                              ★
+                            </span>
+                          </span>
+                          <span v-if="getSubscriptionMetricNote(item.firstResponse)" class="subscription-rating__note">{{ getSubscriptionMetricNote(item.firstResponse) }}</span>
+                        </span>
+                      </template>
+                      <span v-else class="subscription-rating__text" :class="{ 'subscription-rating__text--bad': isSubscriptionMetricFailure(item.firstResponse) }">{{ item.firstResponse }}</span>
+                    </td>
+                    <td class="subscription-table__metric">
+                      <template v-if="getSubscriptionStarCount(item.outputSpeed) > 0">
+                        <span class="subscription-rating">
+                          <span class="subscription-rating__stars">
+                            <span
+                              v-for="index in getSubscriptionStarCount(item.outputSpeed)"
+                              :key="`output-${item.platform}-${index}`"
+                              class="subscription-rating__star"
+                            >
+                              ★
+                            </span>
+                          </span>
+                          <span v-if="getSubscriptionMetricNote(item.outputSpeed)" class="subscription-rating__note">{{ getSubscriptionMetricNote(item.outputSpeed) }}</span>
+                        </span>
+                      </template>
+                      <span v-else class="subscription-rating__text" :class="{ 'subscription-rating__text--bad': isSubscriptionMetricFailure(item.outputSpeed) }">{{ item.outputSpeed }}</span>
+                    </td>
+                    <td class="subscription-table__metric">
+                      <template v-if="getSubscriptionStarCount(item.tokenUsage) > 0">
+                        <span class="subscription-rating">
+                          <span class="subscription-rating__stars">
+                            <span
+                              v-for="index in getSubscriptionStarCount(item.tokenUsage)"
+                              :key="`token-${item.platform}-${index}`"
+                              class="subscription-rating__star"
+                            >
+                              ★
+                            </span>
+                          </span>
+                          <span v-if="getSubscriptionMetricNote(item.tokenUsage)" class="subscription-rating__note">{{ getSubscriptionMetricNote(item.tokenUsage) }}</span>
+                        </span>
+                      </template>
+                      <span v-else class="subscription-rating__text" :class="{ 'subscription-rating__text--bad': isSubscriptionMetricFailure(item.tokenUsage) }">{{ item.tokenUsage }}</span>
+                    </td>
+                    <td>
+                      <span class="subscription-status" :class="`subscription-status--${getSubscriptionStatusTone(item.simpleAccuracy)}`">
+                        <span class="subscription-status__icon">{{ getSubscriptionStatusIcon(item.simpleAccuracy) }}</span>
+                        <span>{{ getSubscriptionStatusLabel(item.simpleAccuracy) }}</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="subscription-status" :class="`subscription-status--${getSubscriptionStatusTone(item.logicAccuracy)}`">
+                        <span class="subscription-status__icon">{{ getSubscriptionStatusIcon(item.logicAccuracy) }}</span>
+                        <span>{{ getSubscriptionStatusLabel(item.logicAccuracy) }}</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        class="subscription-status subscription-status--spatial"
+                        :class="`subscription-status--${getSubscriptionStatusTone(item.spatialAccuracy)}`"
+                      >
+                        <span class="subscription-status__icon">{{ getSubscriptionStatusIcon(item.spatialAccuracy) }}</span>
+                        <span>{{ item.spatialAccuracy }}</span>
+                      </span>
+                    </td>
+                    <td class="subscription-table__metric">
+                      <span class="subscription-rating">
+                        <span class="subscription-rating__stars">
+                          <span
+                            v-for="index in getSubscriptionStarCount(item.stability)"
+                            :key="`stable-${item.platform}-${index}`"
+                            class="subscription-rating__star"
+                          >
+                            ★
+                          </span>
+                        </span>
+                      </span>
+                    </td>
+                    <td class="subscription-table__note">{{ item.note }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <div class="coding-plan-section">
             <div class="coding-plan-section__header">
-              <strong>云厂商平台</strong>
+              <strong>云厂商平台入口</strong>
               <span class="coding-plan-section__count">{{ cloudCodingPlans.length }} 项</span>
             </div>
 
@@ -6485,7 +6854,7 @@ onBeforeUnmount(() => {
 
           <div class="coding-plan-section">
             <div class="coding-plan-section__header">
-              <strong>模型厂商平台</strong>
+              <strong>模型厂商平台入口</strong>
               <span class="coding-plan-section__count">{{ modelCodingPlans.length }} 项</span>
             </div>
 

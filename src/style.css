@@ -1092,6 +1092,312 @@ select {
   font-weight: 700;
 }
 
+.subscription-insight-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(121, 73, 34, 0.1);
+  background: linear-gradient(135deg, rgba(255, 252, 247, 0.94), rgba(255, 247, 238, 0.9));
+}
+
+.subscription-insight-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subscription-insight-card__header strong {
+  color: #4f2b13;
+  font-size: 16px;
+}
+
+.subscription-insight-card__header p {
+  margin: 8px 0 0;
+  color: rgba(66, 41, 24, 0.82);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.subscription-insight-card__hint {
+  margin: 0;
+  color: rgba(94, 60, 35, 0.74);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.subscription-table-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(121, 73, 34, 0.1);
+  background: rgba(255, 252, 248, 0.92);
+}
+
+.subscription-table-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.subscription-table-card__header strong {
+  color: #4f2b13;
+  font-size: 15px;
+}
+
+.subscription-table-card__header span {
+  color: rgba(94, 60, 35, 0.72);
+  font-size: 11px;
+}
+
+.subscription-table-scroll {
+  position: relative;
+  overflow: auto;
+  border: 1px solid rgba(121, 73, 34, 0.09);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.86);
+  scrollbar-color: rgba(140, 84, 40, 0.34) rgba(121, 73, 34, 0.08);
+  scrollbar-width: thin;
+}
+
+.subscription-table-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.subscription-table-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(140, 84, 40, 0.34);
+}
+
+.subscription-table-scroll::-webkit-scrollbar-track {
+  background: rgba(121, 73, 34, 0.08);
+}
+
+.subscription-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+
+.subscription-table--benchmark {
+  min-width: 1060px;
+  table-layout: fixed;
+}
+
+.subscription-col-platform {
+  width: 90px;
+}
+
+.subscription-col-first {
+  width: 128px;
+}
+
+.subscription-col-output {
+  width: 170px;
+}
+
+.subscription-col-token {
+  width: 164px;
+}
+
+.subscription-col-status-simple {
+  width: 102px;
+}
+
+.subscription-col-status-logic {
+  width: 102px;
+}
+
+.subscription-col-status-spatial {
+  width: 176px;
+}
+
+.subscription-col-stability {
+  width: 102px;
+}
+
+.subscription-col-note {
+  width: 250px;
+}
+
+.subscription-table th,
+.subscription-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(121, 73, 34, 0.08);
+  text-align: left;
+  vertical-align: top;
+  color: rgba(66, 41, 24, 0.86);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.subscription-table th {
+  background: rgba(255, 247, 237, 0.92);
+  color: rgba(94, 60, 35, 0.8);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.subscription-table--benchmark tbody tr:nth-child(odd) td {
+  background: rgba(255, 252, 246, 0.56);
+}
+
+.subscription-table--benchmark tbody tr:hover td {
+  background: rgba(255, 246, 236, 0.82);
+}
+
+.subscription-table--benchmark .subscription-table__sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: rgba(255, 251, 245, 0.98);
+  box-shadow: 8px 0 12px -10px rgba(122, 72, 34, 0.28);
+}
+
+.subscription-table--benchmark tbody tr:nth-child(odd) .subscription-table__sticky-col {
+  background: rgba(255, 252, 246, 0.98);
+}
+
+.subscription-table--benchmark tbody tr:hover .subscription-table__sticky-col {
+  background: rgba(255, 246, 236, 0.98);
+}
+
+.subscription-table--benchmark thead .subscription-table__sticky-col {
+  z-index: 3;
+  background: rgba(255, 247, 237, 0.98);
+}
+
+.subscription-table tr:last-child td {
+  border-bottom: none;
+}
+
+.subscription-table__metric {
+  white-space: nowrap;
+}
+
+.subscription-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.subscription-rating__stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.subscription-rating__star {
+  color: #f2b12f;
+  font-size: 13px;
+  line-height: 1;
+  text-shadow: 0 1px 0 rgba(117, 75, 30, 0.24);
+}
+
+.subscription-rating__note {
+  color: rgba(94, 60, 35, 0.82);
+  font-family: "SFMono-Regular", "Menlo", monospace;
+  font-size: 11px;
+}
+
+.subscription-rating__text {
+  color: rgba(66, 41, 24, 0.86);
+  font-size: 12px;
+}
+
+.subscription-rating__text--bad {
+  color: #982f2f;
+  font-weight: 700;
+}
+
+.subscription-table__recommend {
+  color: #5f3418;
+  font-weight: 700;
+}
+
+.subscription-table__warning {
+  color: #8d4a20;
+}
+
+.subscription-table__note {
+  color: rgba(66, 41, 24, 0.8);
+  line-height: 1.56;
+}
+
+.subscription-platform-link {
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: #2c5b81;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.subscription-platform-link:hover {
+  color: #214764;
+}
+
+.subscription-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.subscription-status__icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.subscription-status--spatial {
+  border-radius: 14px;
+  padding: 4px 9px;
+  white-space: normal;
+  line-height: 1.36;
+  align-items: flex-start;
+}
+
+.subscription-status--good {
+  color: #1f6d47;
+  background: rgba(66, 168, 113, 0.12);
+  border-color: rgba(66, 168, 113, 0.28);
+}
+
+.subscription-status--warn {
+  color: #8a5a1d;
+  background: rgba(226, 177, 95, 0.15);
+  border-color: rgba(190, 137, 53, 0.28);
+}
+
+.subscription-status--bad {
+  color: #9b3131;
+  background: rgba(221, 92, 92, 0.12);
+  border-color: rgba(193, 79, 79, 0.26);
+}
+
+.subscription-status--neutral {
+  color: rgba(94, 60, 35, 0.78);
+  background: rgba(121, 73, 34, 0.08);
+  border-color: rgba(121, 73, 34, 0.16);
+}
+
 .platform-card,
 .preset-card {
   width: 100%;
@@ -4683,5 +4989,29 @@ select {
 
   .coding-plan-section__header {
     padding-bottom: 8px;
+  }
+
+  .subscription-insight-card__header,
+  .subscription-table-card__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .subscription-table th,
+  .subscription-table td {
+    padding: 9px 10px;
+    font-size: 11px;
+  }
+
+  .subscription-table--benchmark {
+    min-width: 900px;
+  }
+
+  .subscription-col-note {
+    width: 210px;
+  }
+
+  .subscription-col-status-spatial {
+    width: 160px;
   }
 }
