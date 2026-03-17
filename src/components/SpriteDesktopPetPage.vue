@@ -240,6 +240,7 @@ type StaffMemberSnapshot = {
   agentId: string;
   displayName: string;
   roleLabel: string;
+  channel?: string;
   model: string;
   workspace: string;
   toolsProfile: string;
@@ -6450,7 +6451,6 @@ onBeforeUnmount(() => {
           <header class="section-block__header">
             <div>
               <h3>员工总览</h3>
-              <p>员工信息按 openclaw-control-center 的方式读取，展示角色定位、当前状态、正在处理什么、最近产出，以及是否在排班里。</p>
             </div>
           </header>
 
@@ -6468,11 +6468,28 @@ onBeforeUnmount(() => {
                   <div class="staff-chip-row">
                     <span class="staff-status-chip" :class="getStaffStatusClass(member)">{{ member.statusLabel }}</span>
                     <span class="staff-soft-chip">{{ member.scheduledLabel }}</span>
+                    <span v-if="member.channel" class="staff-soft-chip">{{ member.channel }}</span>
                   </div>
                 </div>
               </div>
 
               <dl class="staff-brief-list">
+                <div class="staff-brief-row">
+                  <dt>工具权限</dt>
+                  <dd>{{ member.toolsProfile || "—" }}</dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>模型</dt>
+                  <dd>{{ member.model || "—" }}</dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>工作目录</dt>
+                  <dd>{{ member.workspace || "—" }}</dd>
+                </div>
+                <div class="staff-brief-row">
+                  <dt>所属渠道</dt>
+                  <dd>{{ member.channel || "—" }}</dd>
+                </div>
                 <div class="staff-brief-row">
                   <dt>当前状态</dt>
                   <dd>{{ member.statusLabel }}</dd>
@@ -6511,64 +6528,6 @@ onBeforeUnmount(() => {
               </dl>
             </article>
             <div v-if="staffMembers.length === 0" class="empty-state">暂无可显示的员工信息。请确认 `~/.openclaw/openclaw.json` 或运行时员工目录存在。</div>
-          </div>
-        </section>
-
-        <section class="section-block compact-details">
-          <h4 class="compact-details__summary">员工共同目标</h4>
-          <div class="compact-details__body">
-            <div class="mission-banner">{{ staffMissionStatement }}</div>
-            <p class="compact-details__meta">来源：{{ staffSnapshotSourcePath || "未定位 openclaw.json" }}</p>
-            <p class="compact-details__meta">{{ staffSnapshotDetail }}</p>
-          </div>
-        </section>
-
-        <section class="section-block compact-details">
-          <h4 class="compact-details__summary">员工配置明细</h4>
-          <div class="compact-details__body">
-            <div class="staff-config-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>名称</th>
-                    <th>agentId</th>
-                    <th>工作目录</th>
-                    <th>职责焦点</th>
-                    <th>模型</th>
-                    <th>工具权限</th>
-                    <th>关联资源</th>
-                    <th>状态</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="member in staffMembers" :key="`${member.agentId}-detail`">
-                    <td>{{ member.displayName }}</td>
-                    <td>{{ member.agentId }}</td>
-                    <td>{{ member.workspace }}</td>
-                    <td>{{ getStaffRoleLabel(member) }}</td>
-                    <td>{{ member.model }}</td>
-                    <td>{{ member.toolsProfile }}</td>
-                    <td>
-                      <div class="staff-linked-actions staff-linked-actions--table">
-                        <button class="staff-linked-actions__button" type="button" title="该员工的记忆文件" @click="handleOpenMemberMemory(member)">
-                          <span>记忆</span>
-                          <strong>{{ getStaffLinkedResourceCounts(member).memory }}</strong>
-                        </button>
-                        <button class="staff-linked-actions__button" type="button" title="OpenClaw 技能库（全员共享）" @click="handleOpenMemberSkill(member)">
-                          <span>技能库</span>
-                          <strong>{{ getStaffLinkedResourceCounts(member).skill }}</strong>
-                        </button>
-                        <button class="staff-linked-actions__button" type="button" title="该员工工作区 TOOLS.md" @click="handleOpenMemberTool(member)">
-                          <span>TOOLS</span>
-                          <strong>{{ getStaffLinkedResourceCounts(member).tool }}</strong>
-                        </button>
-                      </div>
-                    </td>
-                    <td>{{ member.statusLabel }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
           </div>
         </section>
       </div>

@@ -87,6 +87,7 @@ struct StaffMemberSnapshot {
     agent_id: String,
     display_name: String,
     role_label: String,
+    channel: String,
     model: String,
     workspace: String,
     tools_profile: String,
@@ -471,8 +472,39 @@ fn read_string_or_primary<'a>(value: &'a Value) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
+/// 从 openclaw.json 的 bindings 中按 agentId 匹配，收集每个 agent 的 match.channel，多个用 ", " 拼接。
+fn resolve_channels_from_bindings(root: &serde_json::Map<String, Value>) -> std::collections::HashMap<String, String> {
+    let mut by_agent: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    if let Some(arr) = root.get("bindings").and_then(Value::as_array) {
+        for item in arr {
+            if let Some(obj) = value_as_object(item) {
+                let agent_id = obj
+                    .get("agentId")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let channel = obj
+                    .get("match")
+                    .and_then(value_as_object)
+                    .and_then(|m| m.get("channel"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                if let (Some(a), Some(c)) = (agent_id, channel) {
+                    by_agent.entry(a.to_string()).or_default().push(c.to_string());
+                }
+            }
+        }
+    }
+    by_agent
+        .into_iter()
+        .map(|(k, v)| (k, v.join(", ")))
+        .collect()
+}
+
 fn load_staff_from_runtime_dirs(
     scheduled_agents: &std::collections::HashSet<String>,
+    channels_by_agent: &std::collections::HashMap<String, String>,
 ) -> Result<Vec<StaffMemberSnapshot>, String> {
     let agents_path = resolve_openclaw_config_path()
         .parent()
@@ -510,10 +542,12 @@ fn load_staff_from_runtime_dirs(
             .as_deref()
             .map(load_recent_activity_from_session_file)
             .unwrap_or((None, None));
+        let channel = channels_by_agent.get(&agent_id).cloned().unwrap_or_default();
         members.push(StaffMemberSnapshot {
             agent_id: agent_id.clone(),
             display_name: agent_id.clone(),
             role_label: humanize_agent_role(&agent_id),
+            channel,
             model: runtime_summary
                 .latest_model
                 .unwrap_or_else(|| "未标注".to_string()),
@@ -2627,6 +2661,10 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
         .filter(|value| !value.is_empty())
         .unwrap_or("default");
 
+    let channels_by_agent = root
+        .map(resolve_channels_from_bindings)
+        .unwrap_or_default();
+
     let mut members = Vec::new();
     if let Some(list) = agents_root
         .and_then(|obj| obj.get("list"))
@@ -2652,6 +2690,10 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(agent_id);
+            let channel = channels_by_agent
+                .get(agent_id)
+                .cloned()
+                .unwrap_or_default();
             let model = obj
                 .get("model")
                 .and_then(read_string_or_primary)
@@ -2690,6 +2732,7 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
                 agent_id: agent_id.to_string(),
                 display_name: display_name.to_string(),
                 role_label: humanize_agent_role(agent_id),
+                channel,
                 model: effective_model.to_string(),
                 workspace: workspace.to_string(),
                 tools_profile: tools_profile.to_string(),
@@ -2709,7 +2752,7 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
     members.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
 
     if members.is_empty() {
-        let runtime_members = load_staff_from_runtime_dirs(&scheduled_agents)?;
+        let runtime_members = load_staff_from_runtime_dirs(&scheduled_agents, &channels_by_agent)?;
         if !runtime_members.is_empty() {
             return Ok(StaffSnapshotResponse {
                 mission_statement,
@@ -3246,7 +3289,7 @@ fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result
         .unwrap_or("platforms");
     let url = format!("index.html?window=console&section={section}");
 
-    tauri::WebviewWindowBuilder::new(
+    let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
         "console",
         tauri::WebviewUrl::App(url.into()),
@@ -3264,7 +3307,15 @@ fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result
     .always_on_top(false)
     .skip_taskbar(false)
     .focused(true)
-    .visible(true)
+    .visible(true);
+
+    // macOS: 隐藏标题栏区域，仅保留窗口控制按钮（红黄绿）
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+
+    builder
     .build()
     .map(|_| ())
     .map_err(|error| format!("failed to open console window: {error}"))

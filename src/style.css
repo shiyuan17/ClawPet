@@ -514,6 +514,24 @@ select {
   margin-top: 14px;
 }
 
+.staff-layout .staff-brief-grid {
+  align-items: stretch;
+}
+
+.staff-layout .staff-brief-card {
+  height: 100%;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.staff-layout .staff-brief-list {
+  align-content: start;
+}
+
+.staff-layout .staff-brief-row__current-work,
+.staff-layout .staff-brief-row__recent-output {
+  min-height: calc(1.45em * 4);
+}
+
 .staff-layout .section-block__header {
   display: block;
 }
@@ -2580,7 +2598,7 @@ select {
   display: grid;
   grid-template-columns: 84px minmax(0, 1fr);
   gap: 12px;
-  align-items: center;
+  align-items: start;
 }
 
 .staff-avatar {
