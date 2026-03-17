@@ -5,6 +5,7 @@ node_modules/
 dist/
 dist-ssr/
 *.local
+dist-lib/
 
 # Environment
 .env

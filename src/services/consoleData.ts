@@ -963,7 +963,7 @@ export function seedDefaultDocuments() {
   return [
     {
       id: createId("doc"),
-      title: "平台管理接入说明",
+      title: "代理配置接入说明",
       category: "运行文档",
       owner: "Commander",
       source: "/docs/platforms.md",
@@ -999,7 +999,7 @@ export function seedDefaultTasks() {
   return [
     {
       id: createId("task"),
-      title: "补齐平台管理入口",
+      title: "补齐代理配置入口",
       project: "ClawPet Control Deck",
       owner: "Commander",
       priority: "p0" as const,

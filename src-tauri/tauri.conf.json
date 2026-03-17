@@ -34,7 +34,8 @@
         "focus": false,
         "center": false,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "backgroundColor": [0, 0, 0, 0]
       }
     ],
     "security": {

@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 export default defineConfig({
   plugins: [vue()],
   build: {
+    outDir: "dist-lib",
     lib: {
       entry: resolve(__dirname, "src/embed.ts"),
       name: "KeAIDesktopPet",

@@ -35,6 +35,7 @@ import { usePetSound } from "../composables/usePetSound";
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
 import {
   appendRequestLog,
+  normalizeBaseUrl,
   normalizeApiPath,
   clearRequestLogs,
   createPlatformDraft,
@@ -95,7 +96,7 @@ type ConsoleSection =
 type ResourceModalKind = "memory" | "skill" | "tool";
 
 type LogAnalysisView = "timeline" | "sessions" | "failures";
-type PanelMode = "console" | "logs" | "subscriptions";
+type PanelMode = "console" | "logs" | "subscriptions" | "lobster";
 
 type CodingPlanRecommendation = {
   id: string;
@@ -151,6 +152,7 @@ type ChatMessage = {
   role: "assistant" | "user" | "system";
   text: string;
   status: "pending" | "done" | "error";
+  createdAt?: number;
   attachments?: ChatAttachment[];
 };
 
@@ -333,6 +335,24 @@ type LocalProxyPlatformPayload = {
   apiKey: string;
 };
 
+type OpenClawPlatformSnapshotItem = {
+  id: string;
+  providerId: string;
+  name: string;
+  protocol: PlatformProtocol;
+  baseUrl: string;
+  pathPrefix: string;
+  apiPath: string;
+  apiKey: string;
+  model: string;
+};
+
+type OpenClawPlatformSnapshotResponse = {
+  sourcePath: string;
+  detail: string;
+  platforms: OpenClawPlatformSnapshotItem[];
+};
+
 type SessionSummary = {
   id: string;
   startedAt: number;
@@ -366,6 +386,68 @@ type GatewayMonitorState = {
   checkedUrl?: string | null;
   detail?: string | null;
   latencyMs?: number | null;
+};
+
+type LobsterActionId = "install" | "restart_gateway" | "auto_fix" | "backup" | "restore" | "upgrade";
+
+type LobsterBackupItem = {
+  name: string;
+  path: string;
+  createdAtMs: number;
+  sizeBytes: number;
+};
+
+type LobsterSnapshotResponse = {
+  openclawInstalled: boolean;
+  openclawVersion: string | null;
+  openclawBinary: string | null;
+  openclawHome: string;
+  backupDir: string;
+  detail: string;
+  backups: LobsterBackupItem[];
+};
+
+type LobsterActionResult = {
+  action: string;
+  command: string;
+  success: boolean;
+  detail: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  backupPath: string | null;
+};
+
+type LobsterInstallCheckStatus = "success" | "warning" | "failed";
+
+type LobsterInstallCheckItem = {
+  id: string;
+  title: string;
+  status: LobsterInstallCheckStatus;
+  detail: string;
+};
+
+type LobsterInstallGuideResponse = {
+  os: string;
+  ready: boolean;
+  checks: LobsterInstallCheckItem[];
+};
+
+type LobsterInstallWizardStep = 1 | 2 | 3 | 4 | 5;
+
+type LobsterProviderOption = {
+  id: string;
+  name: string;
+  group: "official" | "compatible" | "cn" | "local" | "custom";
+  protocol: PlatformProtocol;
+  defaultBaseUrl: string;
+  defaultModelId: string;
+  modelPlaceholder: string;
+  apiKeyPlaceholder: string;
+  docsUrl?: string;
+  pathPrefix: string;
+  requiresApiKey: boolean;
 };
 
 type OpenClawMessageLogResponse = {
@@ -551,6 +633,14 @@ const CHAT_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-history";
 const SESSION_STORAGE_PREFIX = "keai.desktop-pet.openclaw.session-id";
 const PET_BIND_CODE_STORAGE_KEY = "keai.desktop-pet.binding.code";
 const BOUND_PETS_STORAGE_KEY = "keai.desktop-pet.binding.peers";
+const PLATFORM_PROXY_ENABLED_STORAGE_KEY = "keai.desktop-pet.platform-proxy-enabled";
+const PLATFORM_DIRECT_BASEURL_STORAGE_KEY = "keai.desktop-pet.openclaw.platform-direct-baseurl";
+const OPENCLAW_PROVIDER_DIRECT_BASEURL_PRESETS: Record<string, string> = {
+  "coding-plan": "https://coding.dashscope.aliyuncs.com/v1"
+};
+const OPENCLAW_PROVIDER_PROXY_BASEURL_PRESETS: Record<string, string> = {
+  "coding-plan": "http://localhost:3100/coding-plan"
+};
 const BOUND_PET_CHAT_PREFIX = "__bound_pet__:";
 const DEFAULT_BOUND_CAPABILITIES: Array<Omit<BoundPetAgentCapability, "enabled">> = [
   { id: "__main__", label: "主对话 Agent" }
@@ -561,14 +651,17 @@ function chatStorageKeyFor(agentId: string | null) {
 function sessionStorageKeyFor(agentId: string | null) {
   return agentId ? `${SESSION_STORAGE_PREFIX}.${agentId}` : SESSION_STORAGE_PREFIX;
 }
-const defaultChatMessages: ChatMessage[] = [
-  {
-    id: "welcome",
-    role: "assistant",
-    text: "点一下我就会展开 OpenClaw 对话框，回复会用文字气泡显示。",
-    status: "done"
-  }
-];
+function createDefaultChatMessages(): ChatMessage[] {
+  return [
+    {
+      id: "welcome",
+      role: "assistant",
+      text: "点一下我就会展开 OpenClaw 对话框，回复会用文字气泡显示。",
+      status: "done",
+      createdAt: Date.now()
+    }
+  ];
+}
 
 const stage = ref<HTMLDivElement | null>(null);
 const pet = ref<HTMLButtonElement | null>(null);
@@ -592,7 +685,7 @@ const activeSection = ref<ConsoleSection>("overview");
 const activeLogAnalysisView = ref<LogAnalysisView>("timeline");
 const isSending = ref(false);
 const chatInput = ref("");
-const chatMessages = ref<ChatMessage[]>([...defaultChatMessages]);
+const chatMessages = ref<ChatMessage[]>(createDefaultChatMessages());
 const chatAttachments = ref<ChatAttachment[]>([]);
 const isDragOver = ref(false);
 const fileInputRef = ref<HTMLInputElement | null>(null);
@@ -604,6 +697,8 @@ const bubbleMotionValue = ref(1);
 const localRequestLogs = ref<RequestLog[]>([]);
 const runtimeRequestLogs = ref<RequestLog[]>([]);
 const platforms = ref<PlatformConfig[]>([]);
+const openClawProviderIdMap = ref<Record<string, string>>({});
+const platformDirectBaseUrlMap = ref<Record<string, string>>(loadPlatformDirectBaseUrlMap());
 const staffMembers = ref<StaffMemberSnapshot[]>([]);
 const recentOutputModalMemberId = ref<string | null>(null);
 const petBindingCode = ref("");
@@ -641,14 +736,72 @@ const OPENCLAW_TOOLS_PROFILE_PRESETS: OpenClawToolsProfileOption[] = [
 
 type PetSizeLevel = "small" | "medium" | "large";
 const PET_SIZE_MAP: Record<PetSizeLevel, number> = { small: 180, medium: 280, large: 380 };
+const CONTEXT_MENU_VIEWPORT_MARGIN = 8;
+const CONTEXT_MENU_FALLBACK_WIDTH = 208;
+const CONTEXT_MENU_FALLBACK_HEIGHT = 224;
+
+function getSafeLocalStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalStorageGetItem(key: string): string | null {
+  try {
+    return getSafeLocalStorage()?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalStorageSetItem(key: string, value: string) {
+  try {
+    getSafeLocalStorage()?.setItem(key, value);
+  } catch {
+    // Ignore storage write failures in restricted environments.
+  }
+}
 
 function loadPetSizeLevel(): PetSizeLevel {
-  const raw = globalThis.localStorage?.getItem("keai.desktop-pet.size-level");
+  const raw = safeLocalStorageGetItem("keai.desktop-pet.size-level");
   if (raw === "small" || raw === "medium" || raw === "large") return raw;
   return "medium";
 }
+
+function clampContextMenuPosition(x: number, y: number, width: number, height: number) {
+  const maxX = Math.max(CONTEXT_MENU_VIEWPORT_MARGIN, window.innerWidth - width - CONTEXT_MENU_VIEWPORT_MARGIN);
+  const maxY = Math.max(CONTEXT_MENU_VIEWPORT_MARGIN, window.innerHeight - height - CONTEXT_MENU_VIEWPORT_MARGIN);
+  return {
+    x: Math.min(Math.max(CONTEXT_MENU_VIEWPORT_MARGIN, x), maxX),
+    y: Math.min(Math.max(CONTEXT_MENU_VIEWPORT_MARGIN, y), maxY)
+  };
+}
+
+function adjustContextMenuToViewport() {
+  if (!contextMenu.value.visible) {
+    return;
+  }
+
+  const menuWidth = contextMenuRef.value?.offsetWidth ?? CONTEXT_MENU_FALLBACK_WIDTH;
+  const menuHeight = contextMenuRef.value?.offsetHeight ?? CONTEXT_MENU_FALLBACK_HEIGHT;
+  const next = clampContextMenuPosition(contextMenu.value.x, contextMenu.value.y, menuWidth, menuHeight);
+
+  if (next.x === contextMenu.value.x && next.y === contextMenu.value.y) {
+    return;
+  }
+
+  contextMenu.value = {
+    ...contextMenu.value,
+    ...next
+  };
+}
 function loadAlwaysOnTop(): boolean {
-  const raw = globalThis.localStorage?.getItem("keai.desktop-pet.always-on-top");
+  const raw = safeLocalStorageGetItem("keai.desktop-pet.always-on-top");
   return raw === "true";
 }
 
@@ -663,7 +816,7 @@ function createBindingCode() {
 }
 
 function loadPetBindingCode() {
-  const stored = globalThis.localStorage?.getItem(PET_BIND_CODE_STORAGE_KEY);
+  const stored = safeLocalStorageGetItem(PET_BIND_CODE_STORAGE_KEY);
   const normalized = stored ? normalizeBindingCode(stored) : "";
   return normalized || createBindingCode();
 }
@@ -707,7 +860,7 @@ function normalizeBoundPetConnection(value: unknown): BoundPetConnection | null 
 }
 
 function loadBoundPets() {
-  const raw = globalThis.localStorage?.getItem(BOUND_PETS_STORAGE_KEY);
+  const raw = safeLocalStorageGetItem(BOUND_PETS_STORAGE_KEY);
   if (!raw) {
     return [] as BoundPetConnection[];
   }
@@ -726,7 +879,7 @@ function loadBoundPets() {
 
 function persistBoundPets() {
   try {
-    globalThis.localStorage?.setItem(BOUND_PETS_STORAGE_KEY, JSON.stringify(boundPets.value));
+    safeLocalStorageSetItem(BOUND_PETS_STORAGE_KEY, JSON.stringify(boundPets.value));
   } catch {
     // Ignore storage write failures.
   }
@@ -735,7 +888,7 @@ function persistBoundPets() {
 petBindingCode.value = loadPetBindingCode();
 bindingCodeDraft.value = petBindingCode.value;
 boundPets.value = loadBoundPets();
-globalThis.localStorage?.setItem(PET_BIND_CODE_STORAGE_KEY, petBindingCode.value);
+safeLocalStorageSetItem(PET_BIND_CODE_STORAGE_KEY, petBindingCode.value);
 
 const petSizeLevel = ref<PetSizeLevel>(loadPetSizeLevel());
 const petAlwaysOnTop = ref<boolean>(loadAlwaysOnTop());
@@ -782,6 +935,22 @@ const gatewayMonitor = ref<GatewayMonitorState>({
   detail: null,
   latencyMs: null
 });
+const lobsterSnapshot = ref<LobsterSnapshotResponse | null>(null);
+const lobsterActionResult = ref<LobsterActionResult | null>(null);
+const lobsterActionRunning = ref<LobsterActionId | null>(null);
+const selectedLobsterBackupPath = ref<string | null>(null);
+const isLobsterInstallWizardOpen = ref(false);
+const lobsterInstallWizardStep = ref<LobsterInstallWizardStep>(1);
+const lobsterInstallGuide = ref<LobsterInstallGuideResponse | null>(null);
+const lobsterInstallGuideLoading = ref(false);
+const lobsterInstallRuntimeLogs = ref("");
+const lobsterInstallRunning = ref(false);
+const lobsterInstallFinishedResult = ref<LobsterActionResult | null>(null);
+const lobsterProviderPresetKey = ref("");
+const lobsterProviderForm = ref(createPlatformDraft());
+const lobsterProviderConfigured = ref(false);
+const lobsterProviderSaving = ref(false);
+const lobsterProviderShowKey = ref(false);
 const chatPlacement = ref({
   mode: "auto" as "auto" | "manual",
   x: 0,
@@ -808,11 +977,262 @@ const chinaPlatformPresets = computed(() => platformPresets.filter((preset) => p
 const openClawDefaultPlatformName = "OpenClaw 默认通道";
 const consoleSections: Array<{ id: ConsoleSection; label: string }> = [
   { id: "overview", label: "总览" },
-  { id: "platforms", label: "平台管理" },
+  { id: "platforms", label: "代理配置" },
   { id: "staff", label: "员工管理" },
   { id: "bindings", label: "宠物绑定" },
   { id: "tasks", label: "任务管理" }
 ];
+const lobsterActionCards: Array<{ id: LobsterActionId; title: string; description: string; buttonLabel: string; danger?: boolean }> = [
+  {
+    id: "install",
+    title: "龙虾安装",
+    description: "参考 ClawPet 引导安装流程，优先检测环境，再执行安装。",
+    buttonLabel: "开始安装"
+  },
+  {
+    id: "restart_gateway",
+    title: "重启网关",
+    description: "优先执行 `openclaw gateway restart`，失败时自动回退 stop/start。",
+    buttonLabel: "立即重启"
+  },
+  {
+    id: "auto_fix",
+    title: "自动修复",
+    description: "执行 `openclaw doctor --fix --yes --non-interactive` 自动修复常见问题。",
+    buttonLabel: "开始修复"
+  },
+  {
+    id: "backup",
+    title: "龙虾备份",
+    description: "将当前 `~/.openclaw` 备份到独立目录，便于回滚。",
+    buttonLabel: "创建备份"
+  },
+  {
+    id: "restore",
+    title: "备份恢复",
+    description: "从选中的备份恢复配置，恢复前会自动保留当前目录快照。",
+    buttonLabel: "执行恢复",
+    danger: true
+  },
+  {
+    id: "upgrade",
+    title: "升级龙虾",
+    description: "尝试使用 npm/pnpm/yarn 升级 OpenClaw 到最新版本。",
+    buttonLabel: "开始升级"
+  }
+];
+const lobsterInstallWizardSteps: Array<{ id: LobsterInstallWizardStep; title: string; description: string }> = [
+  { id: 1, title: "欢迎使用 ClawPet", description: "确认安装流程和预期结果" },
+  { id: 2, title: "环境检查", description: "参照 ClawPet 先检查运行环境" },
+  { id: 3, title: "AI 提供商", description: "配置安装后的默认 AI 服务" },
+  { id: 4, title: "执行安装", description: "正在执行 ClawPet 安装流程" },
+  { id: 5, title: "完成", description: "查看安装结果并返回操作台" }
+];
+const lobsterProviderOptions: LobsterProviderOption[] = [
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    group: "official",
+    protocol: "anthropic",
+    defaultBaseUrl: "https://api.anthropic.com",
+    defaultModelId: "claude-sonnet-4-5",
+    modelPlaceholder: "claude-sonnet-4-5",
+    apiKeyPlaceholder: "sk-ant-api03-...",
+    docsUrl: "https://platform.claude.com/docs/en/api/overview",
+    pathPrefix: "/anthropic",
+    requiresApiKey: true
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    group: "official",
+    protocol: "openai",
+    defaultBaseUrl: "https://api.openai.com",
+    defaultModelId: "gpt-5.4",
+    modelPlaceholder: "gpt-5.4",
+    apiKeyPlaceholder: "sk-proj-...",
+    docsUrl: "https://platform.openai.com/api-keys",
+    pathPrefix: "/openai",
+    requiresApiKey: true
+  },
+  {
+    id: "google",
+    name: "Google",
+    group: "official",
+    protocol: "openai",
+    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    defaultModelId: "gemini-3.1-pro-preview",
+    modelPlaceholder: "gemini-3.1-pro-preview",
+    apiKeyPlaceholder: "AIza...",
+    docsUrl: "https://aistudio.google.com/app/apikey",
+    pathPrefix: "/google",
+    requiresApiKey: true
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    group: "compatible",
+    protocol: "openai",
+    defaultBaseUrl: "https://openrouter.ai/api",
+    defaultModelId: "openai/gpt-5.4",
+    modelPlaceholder: "openai/gpt-5.4",
+    apiKeyPlaceholder: "sk-or-v1-...",
+    docsUrl: "https://openrouter.ai/models",
+    pathPrefix: "/openrouter",
+    requiresApiKey: true
+  },
+  {
+    id: "ark",
+    name: "ByteDance Ark",
+    group: "cn",
+    protocol: "openai",
+    defaultBaseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    defaultModelId: "ep-20260228000000-xxxxx",
+    modelPlaceholder: "ep-20260228000000-xxxxx",
+    apiKeyPlaceholder: "your-ark-api-key",
+    docsUrl: "https://www.volcengine.com/",
+    pathPrefix: "/ark",
+    requiresApiKey: true
+  },
+  {
+    id: "moonshot",
+    name: "Moonshot (CN)",
+    group: "cn",
+    protocol: "openai",
+    defaultBaseUrl: "https://api.moonshot.cn/v1",
+    defaultModelId: "kimi-k2.5",
+    modelPlaceholder: "kimi-k2.5",
+    apiKeyPlaceholder: "sk-...",
+    docsUrl: "https://platform.moonshot.cn/",
+    pathPrefix: "/moonshot",
+    requiresApiKey: true
+  },
+  {
+    id: "siliconflow",
+    name: "SiliconFlow (CN)",
+    group: "cn",
+    protocol: "openai",
+    defaultBaseUrl: "https://api.siliconflow.cn/v1",
+    defaultModelId: "deepseek-ai/DeepSeek-V3",
+    modelPlaceholder: "deepseek-ai/DeepSeek-V3",
+    apiKeyPlaceholder: "sk-...",
+    docsUrl: "https://docs.siliconflow.cn/cn/userguide/introduction",
+    pathPrefix: "/siliconflow",
+    requiresApiKey: true
+  },
+  {
+    id: "minimax-portal-cn",
+    name: "MiniMax (CN)",
+    group: "cn",
+    protocol: "openai",
+    defaultBaseUrl: "https://api.minimaxi.com/v1",
+    defaultModelId: "MiniMax-M2.5",
+    modelPlaceholder: "MiniMax-M2.5",
+    apiKeyPlaceholder: "OAuth 或 API Key",
+    docsUrl: "https://platform.minimaxi.com/",
+    pathPrefix: "/minimax-cn",
+    requiresApiKey: false
+  },
+  {
+    id: "minimax-portal",
+    name: "MiniMax (Global)",
+    group: "compatible",
+    protocol: "openai",
+    defaultBaseUrl: "https://api.minimax.io/v1",
+    defaultModelId: "MiniMax-M2.5",
+    modelPlaceholder: "MiniMax-M2.5",
+    apiKeyPlaceholder: "OAuth 或 API Key",
+    docsUrl: "https://intl.minimaxi.com/",
+    pathPrefix: "/minimax-global",
+    requiresApiKey: false
+  },
+  {
+    id: "qwen-portal",
+    name: "Qwen (Global)",
+    group: "compatible",
+    protocol: "openai",
+    defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    defaultModelId: "coder-model",
+    modelPlaceholder: "coder-model",
+    apiKeyPlaceholder: "OAuth",
+    pathPrefix: "/qwen",
+    requiresApiKey: false
+  },
+  {
+    id: "ollama",
+    name: "Ollama",
+    group: "local",
+    protocol: "openai",
+    defaultBaseUrl: "http://localhost:11434/v1",
+    defaultModelId: "qwen3:latest",
+    modelPlaceholder: "qwen3:latest",
+    apiKeyPlaceholder: "无需填写",
+    pathPrefix: "/ollama",
+    requiresApiKey: false
+  },
+  {
+    id: "custom",
+    name: "Custom",
+    group: "custom",
+    protocol: "openai",
+    defaultBaseUrl: "https://api.openai.com",
+    defaultModelId: "your-provider/model-id",
+    modelPlaceholder: "your-provider/model-id",
+    apiKeyPlaceholder: "API key...",
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/BmiLwGBcEiloZDkdYnGc8RWnn6d",
+    pathPrefix: "/custom",
+    requiresApiKey: true
+  }
+];
+const lobsterProviderGroups: Array<{ key: LobsterProviderOption["group"]; label: string }> = [
+  { key: "official", label: "官方" },
+  { key: "compatible", label: "兼容平台" },
+  { key: "cn", label: "国内渠道" },
+  { key: "local", label: "本地模型" },
+  { key: "custom", label: "自定义" }
+];
+const lobsterProviderGroupOptions = computed(() =>
+  lobsterProviderGroups
+    .map((group) => ({
+      ...group,
+      options: lobsterProviderOptions.filter((item) => item.group === group.key)
+    }))
+    .filter((group) => group.options.length > 0)
+);
+const lobsterSelectedProviderOption = computed(
+  () => lobsterProviderOptions.find((item) => item.id === lobsterProviderPresetKey.value) ?? null
+);
+const lobsterEffectiveProviderOption = computed(
+  () => lobsterSelectedProviderOption.value ?? getLobsterProviderOptionByDraft(lobsterProviderForm.value)
+);
+const lobsterProviderRequiresApiKey = computed(() => lobsterEffectiveProviderOption.value?.requiresApiKey !== false);
+const lobsterProviderModelPlaceholder = computed(
+  () => lobsterEffectiveProviderOption.value?.modelPlaceholder ?? "如 openai/gpt-5.4"
+);
+const lobsterProviderApiKeyPlaceholder = computed(
+  () => lobsterEffectiveProviderOption.value?.apiKeyPlaceholder ?? "sk-..."
+);
+const lobsterProviderProtocolLabel = computed(() =>
+  lobsterProviderForm.value.protocol === "anthropic" ? "Anthropic Messages" : "OpenAI 兼容"
+);
+const lobsterInstallCanGoNext = computed(() => {
+  if (lobsterInstallWizardStep.value === 1) return true;
+  if (lobsterInstallWizardStep.value === 2) return Boolean(lobsterInstallGuide.value?.ready);
+  if (lobsterInstallWizardStep.value === 3) return lobsterProviderConfigured.value;
+  if (lobsterInstallWizardStep.value === 4) return false;
+  return true;
+});
+const lobsterProviderCanSave = computed(() =>
+  lobsterProviderForm.value.name.trim().length > 0 &&
+  lobsterProviderForm.value.model.trim().length > 0 &&
+  (!lobsterProviderRequiresApiKey.value || lobsterProviderForm.value.apiKey.trim().length > 0)
+);
+const lobsterInstallStepTitle = computed(
+  () => lobsterInstallWizardSteps.find((item) => item.id === lobsterInstallWizardStep.value)?.title ?? "安装向导"
+);
+const lobsterInstallStepDescription = computed(
+  () => lobsterInstallWizardSteps.find((item) => item.id === lobsterInstallWizardStep.value)?.description ?? ""
+);
 const subscriptionReferenceUrl = "https://mp.weixin.qq.com/s/AD4nB87oGu4s40Dvo4p2PA?scene=1";
 const subscriptionDataUpdatedAt = "2026-03-17";
 const subscriptionScenarioRecommendations: SubscriptionScenarioRecommendation[] = [
@@ -1052,7 +1472,7 @@ const actionTipValues = new Set(Object.values(actionTips));
 const shouldShowHint = computed(() => !actionTipValues.has(statusText.value));
 const currentFrame = computed(() => activeAnimation.value.config.frames[currentFrameIndex.value]);
 const activePlatform = computed(
-  () => platforms.value.find((platform) => platform.id === activePlatformId.value && platform.enabled) || null
+  () => platforms.value.find((platform) => platform.id === activePlatformId.value) || null
 );
 const requestLogs = computed<RequestLog[]>(() =>
   [...localRequestLogs.value, ...runtimeRequestLogs.value]
@@ -1296,7 +1716,7 @@ const metrics = computed(() => {
             : "检测中";
 
   return [
-    { label: "启用平台", value: `${enabledPlatformCount.value}` },
+    { label: "代理平台", value: `${enabledPlatformCount.value}` },
     { label: "调用总数", value: `${requestLogs.value.length}` },
     { label: "网关状态", value: gatewayStatusValue },
     { label: "平均耗时", value: `${averageDuration} ms` },
@@ -1916,7 +2336,7 @@ const overviewStatusCards = computed(() => [
     value: `${configuredSubscriptionCount.value}/${platforms.value.length}`,
     description:
       platforms.value.length > 0
-        ? `已配置密钥 ${configuredSubscriptionCount.value} 个，启用平台 ${enabledPlatformCount.value} 个。`
+        ? `已配置密钥 ${configuredSubscriptionCount.value} 个，本地代理开启 ${enabledPlatformCount.value} 个。`
         : "还没有接入平台，暂时没有可统计的订阅。"
   },
   {
@@ -1924,7 +2344,7 @@ const overviewStatusCards = computed(() => [
     value: activePlatform.value?.name ?? openClawDefaultPlatformName,
     description: activePlatform.value
       ? `${activePlatform.value.protocol.toUpperCase()} · ${activePlatform.value.model}`
-      : "可在平台管理中设置默认接入平台。"
+      : "可在代理配置中设置默认接入平台。"
   },
   {
     label: "最近调用",
@@ -1983,6 +2403,7 @@ let runtimeLogFollowTimer = 0;
 let runtimeLogRefreshTask: Promise<RequestLog[]> | null = null;
 let runtimeLogLastFingerprint = "";
 let runtimeLogFollowActiveUntil = 0;
+let unlistenConsoleOpenEvent: (() => void) | null = null;
 let activeVoiceAudio: HTMLAudioElement | null = null;
 const activeVoiceMessageId = ref<string | null>(null);
 const audioPayloadCache = new Map<string, AudioFilePayload>();
@@ -1993,6 +2414,7 @@ type TauriWindowApi = {
   label?: string;
   close: () => Promise<void> | void;
   destroy: () => Promise<void> | void;
+  show?: () => Promise<void> | void;
   setFocus?: () => Promise<void> | void;
   setAlwaysOnTop?: (value: boolean) => Promise<void> | void;
   startDragging?: () => Promise<void> | void;
@@ -2027,6 +2449,12 @@ type TauriNamespace = {
       }
     ) => unknown;
   };
+  event?: {
+    listen?: (
+      event: string,
+      handler: (event: { payload: unknown }) => void
+    ) => Promise<() => void> | (() => void);
+  };
 };
 
 function parseConsoleSection(raw: string | null): ConsoleSection | null {
@@ -2040,15 +2468,38 @@ const isConsoleWindowMode = (() => {
   if (typeof window === "undefined") {
     return false;
   }
-  try {
-    return new URL(window.location.href).searchParams.get("window") === "console";
-  } catch {
-    return false;
+  const tauriWindow = window as Window & {
+    __CLAWPET_CONSOLE_MODE?: boolean;
+    __TAURI__?: TauriNamespace;
+  };
+  if (tauriWindow.__CLAWPET_CONSOLE_MODE) {
+    return true;
   }
+  let queryWindowLabel: string | null = null;
+  try {
+    queryWindowLabel = new URL(window.location.href).searchParams.get("window");
+  } catch {
+    queryWindowLabel = null;
+  }
+  if (queryWindowLabel === "console") {
+    return true;
+  }
+  const label = tauriWindow.__TAURI__?.window?.getCurrentWindow?.().label;
+  return label === "console";
 })();
 
 const initialConsoleSection = (() => {
-  if (!isConsoleWindowMode || typeof window === "undefined") {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const tauriWindow = window as Window & {
+    __CLAWPET_CONSOLE_SECTION?: string;
+  };
+  const bootstrapped = parseConsoleSection(tauriWindow.__CLAWPET_CONSOLE_SECTION ?? null);
+  if (bootstrapped) {
+    return bootstrapped;
+  }
+  if (!isConsoleWindowMode) {
     return null;
   }
   try {
@@ -2096,6 +2547,51 @@ function getAudioMessageLabel(message: ChatMessage) {
   return audioPath.split("/").filter(Boolean).pop() ?? "语音消息";
 }
 
+const chatTimeFormatter =
+  typeof Intl !== "undefined"
+    ? new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit"
+    })
+    : null;
+
+function extractTimestampFromMessageId(id: string) {
+  const matched = id.match(/-(\d{13})-[a-z0-9]+$/i);
+  if (!matched) {
+    return null;
+  }
+  const parsed = Number(matched[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getMessageTimestamp(message: ChatMessage) {
+  if (typeof message.createdAt === "number" && Number.isFinite(message.createdAt)) {
+    return message.createdAt;
+  }
+  return extractTimestampFromMessageId(message.id);
+}
+
+function getMessageTimeLabel(message: ChatMessage) {
+  const timestamp = getMessageTimestamp(message);
+  if (!timestamp) {
+    return "";
+  }
+  if (chatTimeFormatter) {
+    return chatTimeFormatter.format(timestamp);
+  }
+  return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function getMessageRoleLabel(message: ChatMessage) {
+  if (message.role === "user") {
+    return "你";
+  }
+  if (message.role === "system") {
+    return "系统";
+  }
+  return activeChatAgent.value ? stripRoleLabel(activeChatAgent.value.displayName) : "ClawPet";
+}
+
 function isAudioMessagePlaying(messageId: string) {
   return activeVoiceMessageId.value === messageId;
 }
@@ -2133,7 +2629,8 @@ function buildRuntimeToolMessage(log: RequestLog): ChatMessage {
     id: `runtime-tool-${log.id}`,
     role: "assistant",
     text,
-    status: "done"
+    status: "done",
+    createdAt: log.createdAt
   };
 }
 
@@ -2218,7 +2715,10 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
     id: message.id,
     role,
     text: message.text,
-    status
+    status,
+    createdAt: typeof message.createdAt === "number" && Number.isFinite(message.createdAt)
+      ? message.createdAt
+      : undefined
   };
 }
 
@@ -2227,19 +2727,15 @@ function getStableChatMessages(messages: ChatMessage[]) {
 }
 
 function loadChatHistory(agentId: string | null = null) {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return [...defaultChatMessages];
-  }
-
   try {
-    const raw = window.localStorage.getItem(chatStorageKeyFor(agentId));
+    const raw = safeLocalStorageGetItem(chatStorageKeyFor(agentId));
     if (!raw) {
-      return [...defaultChatMessages];
+      return createDefaultChatMessages();
     }
 
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
-      return [...defaultChatMessages];
+      return createDefaultChatMessages();
     }
 
     const messages = parsed
@@ -2247,35 +2743,27 @@ function loadChatHistory(agentId: string | null = null) {
       .filter((message): message is ChatMessage => message !== null)
       .filter((message) => message.status !== "pending");
 
-    return messages.length > 0 ? messages : [...defaultChatMessages];
+    return messages.length > 0 ? messages : createDefaultChatMessages();
   } catch {
-    return [...defaultChatMessages];
+    return createDefaultChatMessages();
   }
 }
 
 function loadStoredSessionId(agentId: string | null = null) {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return createSessionId();
-  }
-
-  const value = window.localStorage.getItem(sessionStorageKeyFor(agentId));
+  const value = safeLocalStorageGetItem(sessionStorageKeyFor(agentId));
   if (value) {
     return value;
   }
 
   const next = createSessionId();
-  window.localStorage.setItem(sessionStorageKeyFor(agentId), next);
+  safeLocalStorageSetItem(sessionStorageKeyFor(agentId), next);
   return next;
 }
 
 function persistChatHistory(agentId: string | null = null) {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return;
-  }
-
   try {
-    window.localStorage.setItem(chatStorageKeyFor(agentId), JSON.stringify(getStableChatMessages(chatMessages.value)));
-    window.localStorage.setItem(sessionStorageKeyFor(agentId), currentSessionId.value);
+    safeLocalStorageSetItem(chatStorageKeyFor(agentId), JSON.stringify(getStableChatMessages(chatMessages.value)));
+    safeLocalStorageSetItem(sessionStorageKeyFor(agentId), currentSessionId.value);
   } catch {
     // Ignore storage errors so chat remains usable even in restricted environments.
   }
@@ -2301,7 +2789,7 @@ function savePetBindingCode() {
   }
   petBindingCode.value = normalized;
   bindingCodeDraft.value = normalized;
-  globalThis.localStorage?.setItem(PET_BIND_CODE_STORAGE_KEY, normalized);
+  safeLocalStorageSetItem(PET_BIND_CODE_STORAGE_KEY, normalized);
   statusText.value = "绑定码已保存。";
 }
 
@@ -2309,7 +2797,7 @@ function regeneratePetBindingCode() {
   const nextCode = createBindingCode();
   petBindingCode.value = nextCode;
   bindingCodeDraft.value = nextCode;
-  globalThis.localStorage?.setItem(PET_BIND_CODE_STORAGE_KEY, nextCode);
+  safeLocalStorageSetItem(PET_BIND_CODE_STORAGE_KEY, nextCode);
   statusText.value = "已重新生成绑定码。";
 }
 
@@ -2434,19 +2922,22 @@ function resolveBoundPetResponseText(pet: BoundPetConnection, text: string) {
 }
 
 async function submitBoundPetChat(pet: BoundPetConnection, text: string, pendingAttachments: ChatAttachment[]) {
+  const startedAt = Date.now();
   const pendingId = createMessageId("assistant");
   chatMessages.value.push({
     id: createMessageId("user"),
     role: "user",
     text: text || "(附件)",
     status: "done",
+    createdAt: startedAt,
     attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
   });
   chatMessages.value.push({
     id: pendingId,
     role: "assistant",
     text: `${pet.petName} 正在同步中...`,
-    status: "pending"
+    status: "pending",
+    createdAt: Date.now()
   });
 
   chatInput.value = "";
@@ -2512,13 +3003,105 @@ function switchChatAgent(agentId: string | null) {
 }
 
 function loadProxyPort() {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return 5005;
-  }
-
-  const raw = window.localStorage.getItem("keai.desktop-pet.proxy-port");
+  const raw = safeLocalStorageGetItem("keai.desktop-pet.proxy-port");
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 5005;
+}
+
+function loadPlatformProxyEnabledMap() {
+  const raw = safeLocalStorageGetItem(PLATFORM_PROXY_ENABLED_STORAGE_KEY);
+  if (!raw) {
+    return {} as Record<string, boolean>;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, boolean] => typeof entry[0] === "string" && typeof entry[1] === "boolean")
+    );
+  } catch {
+    return {} as Record<string, boolean>;
+  }
+}
+
+function loadPlatformDirectBaseUrlMap() {
+  const raw = safeLocalStorageGetItem(PLATFORM_DIRECT_BASEURL_STORAGE_KEY);
+  if (!raw) {
+    return {} as Record<string, string>;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string")
+    );
+  } catch {
+    return {} as Record<string, string>;
+  }
+}
+
+function persistPlatformProxyEnabledStates(platformList: PlatformConfig[]) {
+  const payload = Object.fromEntries(platformList.map((platform) => [platform.id, Boolean(platform.enabled)]));
+  safeLocalStorageSetItem(PLATFORM_PROXY_ENABLED_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function persistPlatformDirectBaseUrlStates(baseUrlMap: Record<string, string>) {
+  safeLocalStorageSetItem(PLATFORM_DIRECT_BASEURL_STORAGE_KEY, JSON.stringify(baseUrlMap));
+}
+
+function isLocalProxyBaseUrl(value: string) {
+  return /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i.test(value.trim());
+}
+
+function normalizeLocalProxyBaseUrlForPersist(value: string) {
+  const normalized = normalizeBaseUrl(value);
+  if (!isLocalProxyBaseUrl(normalized)) {
+    return normalized;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    let path = parsed.pathname.replace(/\/+$/, "");
+    const lower = path.toLowerCase();
+    if (lower.endsWith("/v1/chat/completions")) {
+      path = path.slice(0, -"/v1/chat/completions".length);
+    } else if (lower.endsWith("/chat/completions")) {
+      path = path.slice(0, -"/chat/completions".length);
+    } else if (lower.endsWith("/v1/responses")) {
+      path = path.slice(0, -"/v1/responses".length);
+    } else if (lower.endsWith("/responses")) {
+      path = path.slice(0, -"/responses".length);
+    } else if (lower.endsWith("/v1/messages")) {
+      path = path.slice(0, -"/v1/messages".length);
+    } else if (lower.endsWith("/messages")) {
+      path = path.slice(0, -"/messages".length);
+    }
+
+    if (path.toLowerCase().endsWith("/v1")) {
+      path = path.slice(0, -"/v1".length);
+    }
+    parsed.pathname = path || "/";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return normalized.replace(/\/v1$/i, "");
+  }
+}
+
+function inferApiPathForBaseUrl(protocol: PlatformProtocol, baseUrl: string, currentApiPath?: string) {
+  const normalizedBase = normalizeBaseUrl(baseUrl).toLowerCase();
+  const normalizedApiPath = normalizeApiPath(currentApiPath ?? "");
+  const usesResponses = normalizedApiPath.includes("responses");
+  const endsWithV1 = normalizedBase.endsWith("/v1");
+
+  if (usesResponses) {
+    return endsWithV1 ? "/responses" : "/v1/responses";
+  }
+  if (protocol === "anthropic") {
+    return endsWithV1 ? "/messages" : "/v1/messages";
+  }
+  return endsWithV1 ? "/chat/completions" : "/v1/chat/completions";
 }
 
 function easeOutCubic(value: number) {
@@ -2836,7 +3419,7 @@ function toggleChatPanel(nextValue?: boolean) {
 }
 
 async function openConsole(section: ConsoleSection) {
-  const shouldOpenDetachedWindow = !isConsoleWindowMode && section !== "bindings";
+  const shouldOpenDetachedWindow = false;
   if (shouldOpenDetachedWindow) {
     const invoke = getTauriApi()?.core?.invoke;
     if (invoke) {
@@ -2844,7 +3427,7 @@ async function openConsole(section: ConsoleSection) {
         await invoke("open_console_window", { section });
         hideContextMenu();
         noteInteraction();
-        statusText.value = `${section === "platforms" ? "平台管理" : section === "staff" ? "员工管理" : section === "tasks" ? "任务管理" : "控制台"}窗口已独立打开。`;
+        statusText.value = `${section === "platforms" ? "代理配置" : section === "staff" ? "员工管理" : section === "tasks" ? "任务管理" : "控制台"}窗口已独立打开。`;
         return;
       } catch {
         // Fallback to the embedded panel when window creation is unavailable.
@@ -2868,7 +3451,7 @@ async function openConsole(section: ConsoleSection) {
   if (section === "overview") {
     statusText.value = "总览已展开，可以先快速查看平台、员工、记忆、文档和任务状态。";
   } else if (section === "platforms") {
-    statusText.value = "平台管理已展开，可以新增、切换默认平台或修改接口配置。";
+    statusText.value = "代理配置已展开，可以新增、切换默认平台或修改接口配置。";
   } else if (section === "staff") {
     statusText.value = "员工管理已展开，适合维护角色、职责和轮值状态。";
     void refreshStaffSnapshot();
@@ -2914,6 +3497,24 @@ function openLogAnalysis(view: LogAnalysisView = "timeline") {
   }
 
   updateLogAnalysisStatus(view);
+  applyBaseAnimation();
+}
+
+function openLobsterConfig() {
+  activePanelMode.value = "lobster";
+  hideContextMenu();
+  noteInteraction();
+
+  if (!isConsoleOpen.value) {
+    if (panelPlacement.value.mode === "auto") {
+      resetPanelPlacement();
+    }
+    isConsoleOpen.value = true;
+    startPanelAnimation();
+  }
+
+  statusText.value = "龙虾配置已打开，可执行安装、重启、修复、备份、恢复和升级。";
+  void refreshLobsterSnapshot();
   applyBaseAnimation();
 }
 
@@ -3148,6 +3749,7 @@ function finishDrag(event?: PointerEvent) {
 
 function handleResize() {
   petPosition.value = clampPetPosition(petPosition.value.x, petPosition.value.y);
+  adjustContextMenuToViewport();
   if (chatPlacement.value.mode === "manual") {
     const bounds = stage.value?.getBoundingClientRect();
     if (bounds) {
@@ -3191,6 +3793,20 @@ function hideContextMenu() {
 
 function getTauriApi() {
   return (window as Window & { __TAURI__?: TauriNamespace }).__TAURI__;
+}
+
+async function revealConsoleWindowIfNeeded() {
+  if (!isConsoleWindowMode) {
+    return;
+  }
+
+  const currentWindow = getTauriApi()?.window?.getCurrentWindow?.();
+  if (!currentWindow?.show) {
+    return;
+  }
+
+  await currentWindow.show();
+  await currentWindow.setFocus?.();
 }
 
 type MonitorInfoFromBackend = {
@@ -3309,6 +3925,76 @@ function getSubscriptionStatusLabel(value: string): string {
   return value;
 }
 
+function buildPlatformProxyBaseUrl(platform: Pick<PlatformConfig, "pathPrefix">) {
+  return `http://127.0.0.1:${proxyPort.value}${normalizePathPrefix(platform.pathPrefix)}`;
+}
+
+function getOpenClawProviderId(platformId: string) {
+  return openClawProviderIdMap.value[platformId] ?? null;
+}
+
+function getPlatformProxyPersistBaseUrl(platform: Pick<PlatformConfig, "id" | "pathPrefix" | "baseUrl">) {
+  const providerId = getOpenClawProviderId(platform.id);
+  if (providerId && OPENCLAW_PROVIDER_PROXY_BASEURL_PRESETS[providerId]) {
+    return normalizeLocalProxyBaseUrlForPersist(OPENCLAW_PROVIDER_PROXY_BASEURL_PRESETS[providerId]);
+  }
+
+  if (isLocalProxyBaseUrl(platform.baseUrl)) {
+    return normalizeLocalProxyBaseUrlForPersist(platform.baseUrl);
+  }
+
+  return normalizeLocalProxyBaseUrlForPersist(buildPlatformProxyBaseUrl(platform));
+}
+
+function getPlatformProxyRequestBaseUrl(platform: Pick<PlatformConfig, "pathPrefix">) {
+  return buildPlatformProxyBaseUrl(platform);
+}
+
+function getPlatformDirectTargetBaseUrl(platform: Pick<PlatformConfig, "id" | "baseUrl">) {
+  if (!isLocalProxyBaseUrl(platform.baseUrl)) {
+    return normalizeBaseUrl(platform.baseUrl);
+  }
+
+  const direct = platformDirectBaseUrlMap.value[platform.id];
+  if (direct?.trim()) {
+    return normalizeBaseUrl(direct);
+  }
+
+  const providerId = getOpenClawProviderId(platform.id);
+  if (providerId && OPENCLAW_PROVIDER_DIRECT_BASEURL_PRESETS[providerId]) {
+    return normalizeBaseUrl(OPENCLAW_PROVIDER_DIRECT_BASEURL_PRESETS[providerId]);
+  }
+
+  return normalizeBaseUrl(platform.baseUrl);
+}
+
+function getPlatformDisplayBaseUrl(platform: Pick<PlatformConfig, "id" | "baseUrl" | "pathPrefix" | "enabled">) {
+  return platform.enabled ? getPlatformProxyRequestBaseUrl(platform) : normalizeBaseUrl(platform.baseUrl);
+}
+
+function buildPlatformRequestEndpoint(platform: Pick<PlatformConfig, "id" | "baseUrl" | "pathPrefix" | "apiPath" | "enabled">) {
+  const baseUrl = platform.enabled ? getPlatformProxyRequestBaseUrl(platform) : getPlatformDirectTargetBaseUrl(platform);
+  return `${baseUrl}${normalizeApiPath(platform.apiPath)}`;
+}
+
+async function saveOpenClawProviderBaseUrl(platformId: string, baseUrl: string) {
+  const providerId = getOpenClawProviderId(platformId);
+  if (!providerId) {
+    return;
+  }
+
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    return;
+  }
+
+  await invoke("save_openclaw_provider_base_url", {
+    providerId,
+    baseUrl
+  });
+}
+
 async function syncLocalProxyServer() {
   const tauriApi = getTauriApi();
   const invoke = tauriApi?.core?.invoke;
@@ -3316,17 +4002,86 @@ async function syncLocalProxyServer() {
     return;
   }
 
-  const payload: LocalProxyPlatformPayload[] = platforms.value.map((platform) => ({
-    protocol: platform.protocol,
-    baseUrl: platform.baseUrl,
-    pathPrefix: platform.pathPrefix,
-    apiKey: platform.apiKey
-  }));
+  const payload: LocalProxyPlatformPayload[] = platforms.value
+    .filter((platform) => platform.enabled)
+    .map((platform) => ({
+      protocol: platform.protocol,
+      baseUrl: getPlatformDirectTargetBaseUrl(platform),
+      pathPrefix: platform.pathPrefix,
+      apiKey: platform.apiKey
+    }));
 
   try {
     await invoke("sync_local_proxy", { port: proxyPort.value, platforms: payload });
   } catch (error) {
     statusText.value = error instanceof Error ? error.message : "本地代理启动失败。";
+  }
+}
+
+async function loadPlatformsFromOpenClawConfig() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    return null as PlatformConfig[] | null;
+  }
+
+  const now = Date.now();
+  const enabledMap = loadPlatformProxyEnabledMap();
+  const nextProviderIdMap: Record<string, string> = {};
+  const nextDirectBaseUrlMap = { ...platformDirectBaseUrlMap.value };
+  try {
+    const result = (await invoke("load_openclaw_platforms_snapshot")) as OpenClawPlatformSnapshotResponse;
+    const configuredPlatforms = Array.isArray(result.platforms) ? result.platforms : [];
+    const mapped = configuredPlatforms
+      .map((item, index) => {
+        const fallbackId = `platform-openclaw-${index + 1}`;
+        const id = typeof item.id === "string" && item.id.trim() ? item.id.trim() : fallbackId;
+        const providerId = typeof item.providerId === "string" ? item.providerId.trim() : "";
+        if (providerId) {
+          nextProviderIdMap[id] = providerId;
+        }
+        const normalizedBaseUrl = normalizeBaseUrl(typeof item.baseUrl === "string" ? item.baseUrl : "");
+        const inferredProxy = typeof item.baseUrl === "string" ? isLocalProxyBaseUrl(item.baseUrl) : false;
+        if (!isLocalProxyBaseUrl(normalizedBaseUrl)) {
+          nextDirectBaseUrlMap[id] = normalizedBaseUrl;
+        } else if (!nextDirectBaseUrlMap[id] && providerId && OPENCLAW_PROVIDER_DIRECT_BASEURL_PRESETS[providerId]) {
+          nextDirectBaseUrlMap[id] = OPENCLAW_PROVIDER_DIRECT_BASEURL_PRESETS[providerId];
+        }
+        const effectiveBaseUrl =
+          inferredProxy && nextDirectBaseUrlMap[id] ? normalizeBaseUrl(nextDirectBaseUrlMap[id]) : normalizedBaseUrl;
+        const protocol: PlatformProtocol = item.protocol === "anthropic" ? "anthropic" : "openai";
+        const normalizedApiPath = normalizeApiPath(typeof item.apiPath === "string" ? item.apiPath : "/v1/chat/completions");
+        const effectiveApiPath = inferApiPathForBaseUrl(protocol, effectiveBaseUrl || normalizedBaseUrl, normalizedApiPath);
+        const enabled = typeof enabledMap[id] === "boolean" ? enabledMap[id] : inferredProxy;
+        return {
+          id,
+          name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : `平台 ${index + 1}`,
+          protocol,
+          baseUrl: effectiveBaseUrl,
+          pathPrefix: normalizePathPrefix(typeof item.pathPrefix === "string" ? item.pathPrefix : `/provider-${index + 1}`),
+          apiPath: effectiveApiPath,
+          apiKey: typeof item.apiKey === "string" ? item.apiKey : "",
+          model: typeof item.model === "string" ? item.model : "",
+          enabled,
+          createdAt: now - index,
+          updatedAt: now
+        } satisfies PlatformConfig;
+      })
+      .filter((item) => item.baseUrl);
+
+    if (!mapped.length) {
+      openClawProviderIdMap.value = {};
+      return [] as PlatformConfig[];
+    }
+
+    openClawProviderIdMap.value = nextProviderIdMap;
+    platformDirectBaseUrlMap.value = nextDirectBaseUrlMap;
+    persistPlatformDirectBaseUrlStates(nextDirectBaseUrlMap);
+    persistPlatformProxyEnabledStates(mapped);
+    return mapped;
+  } catch {
+    openClawProviderIdMap.value = {};
+    return null as PlatformConfig[] | null;
   }
 }
 
@@ -3373,6 +4128,354 @@ async function refreshGatewayMonitor() {
   }
 }
 
+function getLobsterActionTitle(action: LobsterActionId | string) {
+  if (action === "install") return "龙虾安装";
+  if (action === "restart_gateway") return "重启网关";
+  if (action === "auto_fix") return "自动修复";
+  if (action === "backup") return "龙虾备份";
+  if (action === "restore") return "备份恢复";
+  if (action === "upgrade") return "升级龙虾";
+  return action;
+}
+
+function getLobsterInstallCheckStatusLabel(status: LobsterInstallCheckStatus) {
+  if (status === "success") return "通过";
+  if (status === "warning") return "注意";
+  return "失败";
+}
+
+function getLobsterProviderOptionByDraft(draft: Pick<PlatformDraft, "name" | "protocol" | "baseUrl" | "pathPrefix">) {
+  const baseUrl = normalizeBaseUrl(draft.baseUrl);
+  const pathPrefix = normalizePathPrefix(draft.pathPrefix);
+
+  return (
+    lobsterProviderOptions.find(
+      (item) =>
+        item.protocol === draft.protocol &&
+        normalizeBaseUrl(item.defaultBaseUrl) === baseUrl &&
+        normalizePathPrefix(item.pathPrefix) === pathPrefix
+    ) ??
+    lobsterProviderOptions.find((item) => item.protocol === draft.protocol && item.name === draft.name.trim()) ??
+    null
+  );
+}
+
+function isLobsterProviderDraftReady(
+  draft: Pick<PlatformDraft, "name" | "model" | "apiKey">,
+  option: Pick<LobsterProviderOption, "requiresApiKey"> | null
+) {
+  if (!draft.name.trim() || !draft.model.trim()) {
+    return false;
+  }
+  if (option?.requiresApiKey === false) {
+    return true;
+  }
+  return draft.apiKey.trim().length > 0;
+}
+
+function resetLobsterProviderDraft() {
+  const active = activePlatform.value ?? platforms.value[0] ?? null;
+  if (active) {
+    lobsterProviderForm.value = createPlatformDraft({
+      name: active.name,
+      protocol: active.protocol,
+      baseUrl: active.baseUrl,
+      pathPrefix: active.pathPrefix,
+      apiPath: active.apiPath,
+      apiKey: active.apiKey,
+      model: active.model,
+      enabled: true
+    });
+  } else {
+    const preset = lobsterProviderOptions.find((item) => item.id === "openai") ?? lobsterProviderOptions[0];
+    lobsterProviderForm.value = createPlatformDraft(
+      preset
+        ? {
+          name: preset.name,
+          protocol: preset.protocol,
+          baseUrl: preset.defaultBaseUrl,
+          pathPrefix: preset.pathPrefix,
+          apiPath: preset.protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions",
+          model: preset.defaultModelId,
+          enabled: true
+        }
+        : undefined
+    );
+  }
+
+  const matchedOption = getLobsterProviderOptionByDraft(lobsterProviderForm.value);
+  lobsterProviderPresetKey.value = matchedOption?.id ?? "";
+  lobsterProviderConfigured.value = isLobsterProviderDraftReady(lobsterProviderForm.value, matchedOption);
+}
+
+function handleLobsterProviderPresetChange() {
+  const selectedOption = lobsterProviderOptions.find((item) => item.id === lobsterProviderPresetKey.value);
+  if (!selectedOption) {
+    lobsterProviderConfigured.value = false;
+    return;
+  }
+
+  lobsterProviderForm.value = createPlatformDraft({
+    name: selectedOption.name,
+    protocol: selectedOption.protocol,
+    baseUrl: selectedOption.defaultBaseUrl,
+    pathPrefix: selectedOption.pathPrefix,
+    apiPath: selectedOption.protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions",
+    model: selectedOption.defaultModelId,
+    apiKey: lobsterProviderForm.value.apiKey.trim(),
+    enabled: true
+  });
+  lobsterProviderConfigured.value = false;
+}
+
+function openLobsterProviderDocs() {
+  const url = lobsterEffectiveProviderOption.value?.docsUrl?.trim();
+  if (!url) {
+    statusText.value = "当前提供商暂无可用文档链接。";
+    return;
+  }
+  void openCodingPlanPlatform(url);
+}
+
+async function saveLobsterProviderFromWizard() {
+  if (!lobsterProviderCanSave.value || lobsterProviderSaving.value) {
+    return;
+  }
+
+  lobsterProviderSaving.value = true;
+  try {
+    const nextName = lobsterProviderForm.value.name.trim();
+    const nextProtocol = lobsterProviderForm.value.protocol;
+    const nextApiPath = nextProtocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
+    const nextApiKey = lobsterProviderForm.value.apiKey.trim();
+    const selectedOption = lobsterEffectiveProviderOption.value;
+    if (selectedOption?.requiresApiKey !== false && !nextApiKey) {
+      statusText.value = "当前提供商需要 API 密钥，请先填写。";
+      return;
+    }
+
+    const nextPlatforms = upsertPlatform(platforms.value, {
+      ...lobsterProviderForm.value,
+      name: nextName,
+      model: lobsterProviderForm.value.model.trim(),
+      apiKey: nextApiKey,
+      enabled: true,
+      baseUrl: normalizeBaseUrl(lobsterProviderForm.value.baseUrl),
+      pathPrefix: normalizePathPrefix(lobsterProviderForm.value.pathPrefix),
+      apiPath: nextApiPath
+    });
+    platforms.value = nextPlatforms;
+    activePlatformId.value = lobsterProviderForm.value.id;
+    setActivePlatform(lobsterProviderForm.value.id);
+    lobsterProviderConfigured.value = true;
+    statusText.value = `AI 提供商「${nextName}」已保存。`;
+  } finally {
+    lobsterProviderSaving.value = false;
+  }
+}
+
+async function refreshLobsterSnapshot() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    lobsterSnapshot.value = null;
+    return;
+  }
+
+  try {
+    const result = (await invoke("load_lobster_snapshot")) as LobsterSnapshotResponse;
+    lobsterSnapshot.value = result;
+    const paths = new Set((result.backups ?? []).map((item) => item.path));
+    if (selectedLobsterBackupPath.value && paths.has(selectedLobsterBackupPath.value)) {
+      return;
+    }
+    selectedLobsterBackupPath.value = result.backups?.[0]?.path ?? null;
+  } catch (error) {
+    statusText.value = error instanceof Error ? error.message : "读取龙虾状态失败。";
+  }
+}
+
+async function refreshLobsterInstallGuide() {
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke) {
+    lobsterInstallGuide.value = {
+      os: "unknown",
+      ready: false,
+      checks: [
+        {
+          id: "tauri",
+          title: "运行环境",
+          status: "failed",
+          detail: "当前环境不支持安装检查，请在桌面端执行。"
+        }
+      ]
+    };
+    return;
+  }
+
+  lobsterInstallGuideLoading.value = true;
+  try {
+    const guide = (await invoke("load_lobster_install_guide")) as LobsterInstallGuideResponse;
+    lobsterInstallGuide.value = guide;
+  } catch (error) {
+    lobsterInstallGuide.value = {
+      os: "unknown",
+      ready: false,
+      checks: [
+        {
+          id: "invoke",
+          title: "环境检查",
+          status: "failed",
+          detail: error instanceof Error ? error.message : "加载安装检查失败。"
+        }
+      ]
+    };
+  } finally {
+    lobsterInstallGuideLoading.value = false;
+  }
+}
+
+async function openLobsterInstallWizard() {
+  isLobsterInstallWizardOpen.value = true;
+  lobsterInstallWizardStep.value = 1;
+  lobsterInstallRuntimeLogs.value = "";
+  lobsterInstallFinishedResult.value = null;
+  lobsterInstallRunning.value = false;
+  lobsterInstallGuide.value = null;
+  lobsterProviderShowKey.value = false;
+  resetLobsterProviderDraft();
+  statusText.value = "已进入龙虾安装引导。";
+}
+
+function closeLobsterInstallWizard() {
+  if (lobsterInstallRunning.value) {
+    return;
+  }
+  isLobsterInstallWizardOpen.value = false;
+}
+
+async function startLobsterInstallFromWizard() {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke || lobsterInstallRunning.value || lobsterActionRunning.value) {
+    return;
+  }
+
+  lobsterInstallRunning.value = true;
+  lobsterActionRunning.value = "install";
+  lobsterInstallRuntimeLogs.value = "";
+  lobsterInstallFinishedResult.value = null;
+
+  try {
+    const result = (await invoke("run_lobster_action", { action: "install" })) as LobsterActionResult;
+    lobsterActionResult.value = result;
+    lobsterInstallFinishedResult.value = result;
+    lobsterInstallRuntimeLogs.value = [result.command, result.stdout, result.stderr].filter(Boolean).join("\n\n").trim();
+    statusText.value = result.success ? "龙虾安装执行完成。" : `龙虾安装执行失败：${result.detail}`;
+    await refreshLobsterSnapshot();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "龙虾安装执行失败。";
+    lobsterInstallFinishedResult.value = {
+      action: "install",
+      command: "npm install -g openclaw@latest",
+      success: false,
+      detail,
+      exitCode: null,
+      stdout: "",
+      stderr: detail,
+      durationMs: 0,
+      backupPath: null
+    };
+    lobsterInstallRuntimeLogs.value = detail;
+    statusText.value = detail;
+  } finally {
+    lobsterActionRunning.value = null;
+    lobsterInstallRunning.value = false;
+    lobsterInstallWizardStep.value = 5;
+  }
+}
+
+async function handleLobsterInstallWizardNext() {
+  if (lobsterInstallWizardStep.value === 1) {
+    lobsterInstallWizardStep.value = 2;
+    if (!lobsterInstallGuide.value) {
+      await refreshLobsterInstallGuide();
+    }
+    return;
+  }
+
+  if (lobsterInstallWizardStep.value === 2) {
+    if (!lobsterInstallGuide.value?.ready) {
+      statusText.value = "请先完成环境检查，再进入下一步。";
+      return;
+    }
+    lobsterInstallWizardStep.value = 3;
+    return;
+  }
+
+  if (lobsterInstallWizardStep.value === 3) {
+    lobsterInstallWizardStep.value = 4;
+    await startLobsterInstallFromWizard();
+    return;
+  }
+
+  if (lobsterInstallWizardStep.value === 5) {
+    closeLobsterInstallWizard();
+  }
+}
+
+function handleLobsterInstallWizardBack() {
+  if (lobsterInstallRunning.value) {
+    return;
+  }
+  if (lobsterInstallWizardStep.value > 1 && lobsterInstallWizardStep.value < 5) {
+    lobsterInstallWizardStep.value = (lobsterInstallWizardStep.value - 1) as LobsterInstallWizardStep;
+  }
+}
+
+async function runLobsterAction(action: LobsterActionId) {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke || lobsterActionRunning.value) {
+    return;
+  }
+
+  if (action === "install") {
+    await openLobsterInstallWizard();
+    return;
+  }
+
+  if (action === "restore") {
+    if (!selectedLobsterBackupPath.value) {
+      statusText.value = "请先创建备份，或选择一个可恢复备份。";
+      return;
+    }
+    const backupLabel =
+      selectedLobsterBackupPath.value.split(/[\\/]/).filter(Boolean).pop() ?? selectedLobsterBackupPath.value;
+    const confirmed = window.confirm(`确认从备份「${backupLabel}」恢复吗？当前目录会先自动留存一份快照。`);
+    if (!confirmed) {
+      return;
+    }
+  }
+
+  lobsterActionRunning.value = action;
+  try {
+    const payload = action === "restore"
+      ? { action, backupPath: selectedLobsterBackupPath.value }
+      : { action };
+    const result = (await invoke("run_lobster_action", payload)) as LobsterActionResult;
+    lobsterActionResult.value = result;
+    statusText.value = result.success
+      ? `${getLobsterActionTitle(action)}执行完成。`
+      : `${getLobsterActionTitle(action)}执行失败：${result.detail}`;
+    await refreshLobsterSnapshot();
+  } catch (error) {
+    statusText.value = error instanceof Error ? error.message : `${getLobsterActionTitle(action)}执行失败。`;
+  } finally {
+    lobsterActionRunning.value = null;
+  }
+}
+
 async function setWindowIgnoreCursorEvents(nextValue: boolean) {
   if (ignoreCursorEvents === nextValue) {
     return;
@@ -3414,8 +4517,8 @@ function closeSystemSettings() {
 async function handleSystemSettingsSave() {
   petSizeLevel.value = draftSizeLevel.value;
   petAlwaysOnTop.value = draftAlwaysOnTop.value;
-  globalThis.localStorage?.setItem("keai.desktop-pet.size-level", petSizeLevel.value);
-  globalThis.localStorage?.setItem("keai.desktop-pet.always-on-top", String(petAlwaysOnTop.value));
+  safeLocalStorageSetItem("keai.desktop-pet.size-level", petSizeLevel.value);
+  safeLocalStorageSetItem("keai.desktop-pet.always-on-top", String(petAlwaysOnTop.value));
   await applyAlwaysOnTop(petAlwaysOnTop.value);
   closeSystemSettings();
   statusText.value = "系统设置已保存。";
@@ -3449,6 +4552,12 @@ async function closeDesktopPet() {
 
 function handleEscape(event: KeyboardEvent) {
   if (event.key !== "Escape" || !isWindowActive.value) {
+    return;
+  }
+
+  if (isLobsterInstallWizardOpen.value) {
+    closeLobsterInstallWizard();
+    event.preventDefault();
     return;
   }
 
@@ -3504,19 +4613,29 @@ function handleVisibilityChange() {
 
 function handleContextMenu(event: MouseEvent) {
   event.preventDefault();
-  const menuWidth = 188;
-  const menuHeight = 128;
-  const maxX = Math.max(8, window.innerWidth - menuWidth - 8);
-  const maxY = Math.max(8, window.innerHeight - menuHeight - 8);
+  const initialPosition = clampContextMenuPosition(
+    event.clientX,
+    event.clientY,
+    CONTEXT_MENU_FALLBACK_WIDTH,
+    CONTEXT_MENU_FALLBACK_HEIGHT
+  );
 
   contextMenu.value = {
     visible: true,
-    x: Math.min(event.clientX, maxX),
-    y: Math.min(event.clientY, maxY)
+    x: initialPosition.x,
+    y: initialPosition.y
   };
+
+  void nextTick(() => {
+    adjustContextMenuToViewport();
+  });
 }
 
 function handleWindowPointerDown(event: PointerEvent) {
+  if (isLobsterInstallWizardOpen.value && event.target instanceof HTMLElement && event.target.closest(".lobster-install-wizard-modal")) {
+    return;
+  }
+
   if (activeRecentOutputMember.value && event.target instanceof HTMLElement && event.target.closest(".recent-output-modal")) {
     return;
   }
@@ -3718,15 +4837,18 @@ async function submitChat() {
       content: userContent
     }
   ];
-  const effectivePlatform = platform?.enabled ? platform : null;
+  const effectivePlatform = !agent ? platform : null;
   const agentId = agent?.agentId ?? null;
-  const endpoint = agentId ? `openclaw://agent/${agentId}` : "openclaw://default";
-  const protocol = "openai";
+  const requestEndpoint = effectivePlatform ? buildPlatformRequestEndpoint(effectivePlatform) : null;
+  const endpoint = agentId ? `openclaw://agent/${agentId}` : (requestEndpoint ?? "openclaw://default");
+  const protocol: PlatformProtocol = effectivePlatform?.protocol ?? "openai";
   const payload = { messages };
   const requestBody = safeJson(payload);
-  const requestHeaders = buildRequestHeaders(protocol);
-  const baseUrl = agentId ? `openclaw://agent/${agentId}` : "openclaw://default";
-  const path = "";
+  const requestHeaders = buildRequestHeaders(protocol, effectivePlatform?.apiKey);
+  const baseUrl = agentId
+    ? `openclaw://agent/${agentId}`
+    : (effectivePlatform ? getPlatformDisplayBaseUrl(effectivePlatform) : "openclaw://default");
+  const path = agentId ? "" : (effectivePlatform ? normalizeApiPath(effectivePlatform.apiPath) : "");
   const platformId = agentId ? `openclaw-agent-${agentId}` : (effectivePlatform?.id ?? "openclaw-default");
   const platformName = agent ? `OpenClaw / ${stripRoleLabel(agent.displayName)}` : (effectivePlatform?.name ?? "OpenClaw 默认通道");
   const startedAt = performance.now();
@@ -3737,13 +4859,15 @@ async function submitChat() {
     role: "user",
     text: text || "(附件)",
     status: "done",
+    createdAt: startedAtMs,
     attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
   });
   chatMessages.value.push({
     id: pendingId,
     role: "assistant",
     text: agent ? `${stripRoleLabel(agent.displayName)} 正在思考中...` : "OpenClaw 正在思考中...",
-    status: "pending"
+    status: "pending",
+    createdAt: Date.now()
   });
   chatInput.value = "";
   chatAttachments.value = [];
@@ -3756,7 +4880,11 @@ async function submitChat() {
 
   try {
     const response = await sendOpenClawChat(messages, {
-      agentId: agent?.agentId ?? null
+      agentId: agentId ?? null,
+      endpoint: agentId ? null : requestEndpoint,
+      apiKey: agentId ? null : (effectivePlatform?.apiKey ?? null),
+      model: agentId ? null : (effectivePlatform?.model ?? null),
+      protocol
     });
     const completedAt = performance.now();
     const duration = Math.round(completedAt - startedAt);
@@ -3936,12 +5064,6 @@ function handleComposerDrop(event: DragEvent) {
   if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
     void addFiles(event.dataTransfer.files);
   }
-}
-
-function formatFileSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function isImageAttachment(attachment: ChatAttachment) {
@@ -5036,25 +6158,52 @@ function formatCronTimestamp(ms: number | null) {
   return formatTime(ms);
 }
 
-function handleTogglePlatform(platformId: string, enabled: boolean) {
-  platforms.value = setPlatformEnabled(platforms.value, platformId, enabled);
+async function handleTogglePlatform(platformId: string, enabled: boolean) {
   const current = platforms.value.find((item) => item.id === platformId);
 
   if (!current) {
     return;
   }
 
+  const nextDirectBaseUrlMap = { ...platformDirectBaseUrlMap.value };
+  if (!isLocalProxyBaseUrl(current.baseUrl)) {
+    nextDirectBaseUrlMap[platformId] = normalizeBaseUrl(current.baseUrl);
+  }
+  const targetBaseUrl = enabled ? getPlatformProxyPersistBaseUrl(current) : getPlatformDirectTargetBaseUrl(current);
+  const nextStoredBaseUrl = enabled ? getPlatformDirectTargetBaseUrl(current) : targetBaseUrl;
+
+  try {
+    await saveOpenClawProviderBaseUrl(platformId, targetBaseUrl);
+  } catch (error) {
+    statusText.value = error instanceof Error ? error.message : "写回 openclaw.json 失败。";
+    return;
+  }
+
+  if (!enabled && !isLocalProxyBaseUrl(targetBaseUrl)) {
+    nextDirectBaseUrlMap[platformId] = normalizeBaseUrl(targetBaseUrl);
+  }
+  platformDirectBaseUrlMap.value = nextDirectBaseUrlMap;
+  persistPlatformDirectBaseUrlStates(nextDirectBaseUrlMap);
+
+  const toggledPlatforms = setPlatformEnabled(platforms.value, platformId, enabled);
+  platforms.value = toggledPlatforms.map((item) =>
+    item.id === platformId
+      ? {
+          ...item,
+          baseUrl: normalizeBaseUrl(nextStoredBaseUrl),
+          apiPath: inferApiPathForBaseUrl(item.protocol, normalizeBaseUrl(nextStoredBaseUrl), item.apiPath),
+          updatedAt: Date.now()
+        }
+      : item
+  );
+  persistPlatformProxyEnabledStates(platforms.value);
+
   if (enabled && !activePlatformId.value) {
     activePlatformId.value = platformId;
     setActivePlatform(platformId);
   }
 
-  if (!enabled && activePlatformId.value === platformId) {
-    activePlatformId.value = null;
-    setActivePlatform(null);
-  }
-
-  statusText.value = enabled ? `${current.name} 已启用。` : `${current.name} 已停用。`;
+  statusText.value = enabled ? `${current.name} 已切换到本地代理链接。` : `${current.name} 已恢复默认平台链接。`;
 }
 
 function handleSetActivePlatform(platformId: string) {
@@ -5068,11 +6217,11 @@ function handleSetActivePlatform(platformId: string) {
 
 function handleNewConversation() {
   currentSessionId.value = createSessionId();
-  chatMessages.value = [...defaultChatMessages];
+  chatMessages.value = createDefaultChatMessages();
   chatInput.value = "";
   chatAttachments.value = [];
   persistChatHistory(activeChatAgentId.value);
-  agentChatHistories.value[activeChatAgentId.value ?? "__main__"] = [...defaultChatMessages];
+  agentChatHistories.value[activeChatAgentId.value ?? "__main__"] = createDefaultChatMessages();
   statusText.value = "新会话已创建，后续调用会归档到新的会话视图里。";
   openChatPanel();
 }
@@ -5111,6 +6260,7 @@ async function syncCursorPassThrough() {
   }
 
   const isAnyModalOpen =
+    isLobsterInstallWizardOpen.value ||
     !!activeRecentOutputMember.value ||
     (activeResourceModal.value && activeResourceMember.value) ||
     !!sessionOverlayLog.value ||
@@ -5272,6 +6422,22 @@ function formatTime(value: number) {
 
 function formatDuration(value: number) {
   return `${Math.max(0, Math.round(value))} ms`;
+}
+
+function formatFileSize(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "-";
+  }
+  if (value < 1024) {
+    return `${Math.round(value)} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+  }
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function formatLatencyStat(value?: number) {
@@ -5682,6 +6848,19 @@ watch(chatInput, () => {
 });
 
 watch(
+  () => contextMenu.value.visible,
+  (visible) => {
+    if (!visible) {
+      return;
+    }
+
+    void nextTick(() => {
+      adjustContextMenuToViewport();
+    });
+  }
+);
+
+watch(
   chatMessages,
   () => {
     persistChatHistory(activeChatAgentId.value);
@@ -5690,16 +6869,13 @@ watch(
 );
 
 watch(proxyPort, (value) => {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return;
-  }
-
-  window.localStorage.setItem("keai.desktop-pet.proxy-port", String(value));
+  safeLocalStorageSetItem("keai.desktop-pet.proxy-port", String(value));
 });
 
 watch(
   [platforms, proxyPort],
   () => {
+    persistPlatformProxyEnabledStates(platforms.value);
     void syncLocalProxyServer();
   },
   { deep: true }
@@ -5848,11 +7024,43 @@ watch(
   { immediate: true }
 );
 
-onMounted(() => {
+onMounted(async () => {
+  if (isConsoleWindowMode) {
+    activePanelMode.value = "console";
+    activeSection.value = initialConsoleSection ?? "platforms";
+    isConsoleOpen.value = true;
+    panelMotionValue.value = 1;
+    statusText.value = "代理配置窗口已独立打开。";
+    void nextTick(() => {
+      void revealConsoleWindowIfNeeded();
+    });
+  }
+
+  const listen = getTauriApi()?.event?.listen;
+  if (listen && isConsoleWindowMode) {
+    try {
+      const unlisten = await listen("clawpet://console-open", (event) => {
+        const payload = event.payload as { section?: string } | null;
+        const section = parseConsoleSection(payload?.section ?? null);
+        if (!section) {
+          return;
+        }
+        activePanelMode.value = "console";
+        activeSection.value = section;
+        isConsoleOpen.value = true;
+        panelMotionValue.value = 1;
+      });
+      unlistenConsoleOpenEvent = unlisten;
+    } catch {
+      unlistenConsoleOpenEvent = null;
+    }
+  }
+
   chatMessages.value = loadChatHistory();
   currentSessionId.value = loadStoredSessionId();
   proxyPort.value = loadProxyPort();
-  platforms.value = loadPlatforms();
+  const openClawPlatforms = await loadPlatformsFromOpenClawConfig();
+  platforms.value = openClawPlatforms ?? loadPlatforms();
   localRequestLogs.value = loadRequestLogs(platforms.value);
   void loadAvailableMonitors();
   void refreshOpenClawMessageLogs();
@@ -5862,14 +7070,8 @@ onMounted(() => {
   void refreshOpenClawSkillSnapshot();
   void refreshOpenClawSkillsList();
   void refreshTaskSnapshot();
+  void refreshLobsterSnapshot();
   void applyAlwaysOnTop(isConsoleWindowMode ? false : petAlwaysOnTop.value);
-  if (isConsoleWindowMode) {
-    activePanelMode.value = "console";
-    activeSection.value = initialConsoleSection ?? "platforms";
-    isConsoleOpen.value = true;
-    panelMotionValue.value = 1;
-    statusText.value = "平台管理窗口已独立打开。";
-  }
   const storedActivePlatformId = loadActivePlatformId();
   const storedActivePlatform =
     platforms.value.find((platform) => platform.id === storedActivePlatformId) ?? null;
@@ -5919,6 +7121,10 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (unlistenConsoleOpenEvent) {
+    unlistenConsoleOpenEvent();
+    unlistenConsoleOpenEvent = null;
+  }
   stopVoicePlayback();
   window.cancelAnimationFrame(rafId);
   window.cancelAnimationFrame(chatAnimationFrame);
@@ -6052,43 +7258,67 @@ onBeforeUnmount(() => {
             <article
               v-for="(message, index) in chatMessages"
               :key="message.id"
-              class="chat-bubble"
+              class="chat-message"
               :class="[
-                `chat-bubble--${message.role}`,
-                `chat-bubble--${message.status}`,
-                { 'chat-bubble--audio': isAudioMessage(message) }
+                `chat-message--${message.role}`,
+                `chat-message--${message.status}`,
+                { 'chat-message--audio': isAudioMessage(message) }
               ]"
               :style="getBubbleStyle(index)"
             >
-              <button
-                v-if="isAudioMessage(message)"
-                class="voice-message"
-                :class="{ 'is-playing': isAudioMessagePlaying(message.id) }"
-                type="button"
-                @click="handleAudioMessageClick(message)"
+              <div
+                v-if="message.role !== 'user' && message.role !== 'system'"
+                class="chat-message__avatar"
+                aria-hidden="true"
               >
-                <span
-                  class="voice-message__icon"
-                  :class="isAudioMessagePlaying(message.id) ? 'is-pause' : 'is-play'"
-                  aria-hidden="true"
-                />
-                <span class="voice-message__body">
-                  <strong>{{ getAudioMessageLabel(message) }}</strong>
-                  <small>{{ isAudioMessagePlaying(message.id) ? "点击停止播放" : "点击播放语音" }}</small>
-                </span>
-              </button>
-              <template v-else>
-                <div v-if="message.attachments && message.attachments.length > 0" class="bubble-attachments">
-                  <div v-for="att in message.attachments" :key="att.id" class="bubble-attachment">
-                    <img v-if="isImageAttachment(att)" class="bubble-attachment__img" :src="att.dataUrl" :alt="att.name" />
-                    <span v-else class="bubble-attachment__file">
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
-                      {{ att.name }}
+                <svg viewBox="0 0 20 20">
+                  <path d="M10 2.8l1.5 3.3 3.4 1.5-3.4 1.5L10 12.4 8.5 9.1 5 7.6l3.5-1.5z" />
+                </svg>
+              </div>
+              <div class="chat-message__body">
+                <div
+                  class="chat-bubble"
+                  :class="[
+                    `chat-bubble--${message.role}`,
+                    `chat-bubble--${message.status}`,
+                    { 'chat-bubble--audio': isAudioMessage(message) }
+                  ]"
+                >
+                  <button
+                    v-if="isAudioMessage(message)"
+                    class="voice-message"
+                    :class="{ 'is-playing': isAudioMessagePlaying(message.id) }"
+                    type="button"
+                    @click="handleAudioMessageClick(message)"
+                  >
+                    <span
+                      class="voice-message__icon"
+                      :class="isAudioMessagePlaying(message.id) ? 'is-pause' : 'is-play'"
+                      aria-hidden="true"
+                    />
+                    <span class="voice-message__body">
+                      <strong>{{ getAudioMessageLabel(message) }}</strong>
+                      <small>{{ isAudioMessagePlaying(message.id) ? "点击停止播放" : "点击播放语音" }}</small>
                     </span>
-                  </div>
+                  </button>
+                  <template v-else>
+                    <div v-if="message.attachments && message.attachments.length > 0" class="bubble-attachments">
+                      <div v-for="att in message.attachments" :key="att.id" class="bubble-attachment">
+                        <img v-if="isImageAttachment(att)" class="bubble-attachment__img" :src="att.dataUrl" :alt="att.name" />
+                        <span v-else class="bubble-attachment__file">
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                          {{ att.name }}
+                        </span>
+                      </div>
+                    </div>
+                    <p v-if="message.text && message.text !== '(附件)'">{{ message.text }}</p>
+                  </template>
                 </div>
-                <p v-if="message.text && message.text !== '(附件)'">{{ message.text }}</p>
-              </template>
+                <div class="chat-message__meta">
+                  <span class="chat-message__meta-role">{{ getMessageRoleLabel(message) }}</span>
+                  <span v-if="getMessageTimeLabel(message)">{{ getMessageTimeLabel(message) }}</span>
+                </div>
+              </div>
             </article>
           </div>
 
@@ -6166,6 +7396,17 @@ onBeforeUnmount(() => {
                   </svg>
                 </button>
               </div>
+              <div class="composer__hint">
+                <span>{{ isSending ? "正在等待回复…" : "Enter 发送 · Shift + Enter 换行" }}</span>
+                <span>
+                  当前会话：
+                  {{
+                    activeBoundPet
+                      ? activeBoundPet.petName
+                      : (activeChatAgent ? stripRoleLabel(activeChatAgent.displayName) : "主对话")
+                  }}
+                </span>
+              </div>
             </template>
             <input
               ref="fileInputRef"
@@ -6203,11 +7444,24 @@ onBeforeUnmount(() => {
           <strong>日志分析</strong>
           <p class="desktop-console-panel__intro">集中查看时间线、会话视图和失败分析，不再混入控制台导航。</p>
         </div>
+        <div v-else-if="activePanelMode === 'lobster'">
+          <p class="desktop-console-panel__eyebrow">ClawPet Command Deck</p>
+          <strong>龙虾配置</strong>
+          <p class="desktop-console-panel__intro">包含龙虾安装、网关重启、自动修复、备份恢复与版本升级。</p>
+        </div>
         <div v-else>
           <p class="desktop-console-panel__eyebrow">ClawPet Command Deck</p>
           <strong>订阅推荐</strong>
         </div>
         <div class="desktop-console-panel__actions">
+          <button
+            v-if="activePanelMode === 'console'"
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            @click="openLobsterConfig()"
+          >
+            龙虾配置
+          </button>
           <button
             v-if="activePanelMode === 'console'"
             class="desktop-console-panel__action desktop-console-panel__action--ghost"
@@ -6238,10 +7492,18 @@ onBeforeUnmount(() => {
             type="button"
             @click="openConsole('platforms')"
           >
-            平台管理
+            代理配置
           </button>
           <button
-            v-if="activePanelMode === 'subscriptions'"
+            v-if="activePanelMode === 'subscriptions' || activePanelMode === 'lobster'"
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            @click="openLobsterConfig()"
+          >
+            龙虾配置
+          </button>
+          <button
+            v-if="activePanelMode === 'subscriptions' || activePanelMode === 'lobster'"
             class="desktop-console-panel__action desktop-console-panel__action--ghost"
             type="button"
             @click="openLogAnalysis()"
@@ -6788,6 +8050,58 @@ onBeforeUnmount(() => {
         </template>
       </div>
 
+      <div v-else-if="activePanelMode === 'lobster'" class="desktop-console-body desktop-console-body--overview lobster-console">
+        <section class="section-block overview-section lobster-operations">
+          <div class="lobster-toolbar">
+            <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshLobsterSnapshot()">
+              刷新状态
+            </button>
+          </div>
+
+          <div class="lobster-action-grid">
+            <article v-for="item in lobsterActionCards" :key="item.id" class="lobster-action-card">
+              <div class="lobster-action-card__header">
+                <strong>{{ item.title }}</strong>
+                <p>{{ item.description }}</p>
+              </div>
+
+              <label v-if="item.id === 'restore'" class="lobster-restore-picker">
+                <span>恢复目标备份</span>
+                <select v-model="selectedLobsterBackupPath">
+                  <option :value="null">自动选择最近备份</option>
+                  <option v-for="backup in lobsterSnapshot?.backups ?? []" :key="backup.path" :value="backup.path">
+                    {{ backup.name }} · {{ formatTime(backup.createdAtMs) }} · {{ formatFileSize(backup.sizeBytes) }}
+                  </option>
+                </select>
+              </label>
+              <p v-if="item.id === 'restore' && !(lobsterSnapshot?.backups?.length)" class="lobster-action-card__hint">
+                暂无可恢复备份，请先执行“龙虾备份”。
+              </p>
+
+              <button
+                class="desktop-console-panel__action"
+                :class="{ 'desktop-console-panel__action--danger': item.danger }"
+                type="button"
+                :disabled="lobsterActionRunning !== null || (item.id === 'restore' && !(lobsterSnapshot?.backups?.length))"
+                @click="runLobsterAction(item.id)"
+              >
+                {{ lobsterActionRunning === item.id ? "执行中..." : item.buttonLabel }}
+              </button>
+
+              <p
+                v-if="lobsterActionResult && lobsterActionResult.action === item.id"
+                class="lobster-action-card__result"
+                :class="{ 'is-success': lobsterActionResult.success, 'is-failed': !lobsterActionResult.success }"
+              >
+                <span>{{ lobsterActionResult.success ? "最近执行成功" : "最近执行失败" }}</span>
+                <small>耗时 {{ formatDuration(lobsterActionResult.durationMs) }}</small>
+                <em>{{ lobsterActionResult.detail }}</em>
+              </p>
+            </article>
+          </div>
+        </section>
+      </div>
+
       <div v-else-if="activePanelMode === 'subscriptions'" class="desktop-console-body desktop-console-body--overview">
         <section class="section-block overview-section">
           <div class="subscription-insight-card">
@@ -7122,7 +8436,7 @@ onBeforeUnmount(() => {
         <section class="section-block section-block--platforms">
           <header class="section-block__header">
             <div>
-              <h3>平台管理</h3>
+              <h3>代理配置</h3>
               <p>统一维护已接入的平台配置，并切换聊天窗口默认使用的目标。</p>
             </div>
             <div class="toolbar-actions">
@@ -7138,7 +8452,7 @@ onBeforeUnmount(() => {
 
           <div v-if="showPlatformTips" class="platform-inline-note">
             <p>OpenAI 兼容协议通常使用 `/v1/chat/completions`；Anthropic 原生协议通常使用 `/v1/messages`。</p>
-            <p>点击“新增平台”后，可直接从国外平台或国内平台预设中填充草稿，再微调模型名、密钥和路径。</p>
+            <p>平台列表优先读取 `~/.openclaw/openclaw.json` 的 `models.providers`；开启开关会切换到本地代理链接。</p>
           </div>
 
           <section class="platform-preset-section">
@@ -7165,10 +8479,10 @@ onBeforeUnmount(() => {
                     <span />
                   </label>
                 </div>
-                <p class="platform-card__endpoint">{{ platform.baseUrl }}</p>
+                <p class="platform-card__endpoint">{{ getPlatformDisplayBaseUrl(platform) }}</p>
                 <div class="platform-card__meta">
                   <span>前缀 {{ platform.pathPrefix }}</span>
-                  <span>{{ activePlatformId === platform.id ? "默认平台" : "可切换" }}</span>
+                  <span>{{ platform.enabled ? "本地代理" : "默认直连" }}</span>
                 </div>
                 <div class="platform-card__actions">
                   <button
@@ -7886,6 +9200,239 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
+    <div v-if="isLobsterInstallWizardOpen" class="platform-modal-backdrop" @click.self="closeLobsterInstallWizard">
+      <section class="platform-modal lobster-install-wizard-modal" role="dialog" aria-modal="true" aria-label="龙虾安装引导">
+        <button
+          class="platform-modal__close lobster-install-wizard__close"
+          type="button"
+          aria-label="关闭"
+          :disabled="lobsterInstallRunning"
+          @click.stop="closeLobsterInstallWizard"
+        >
+          ×
+        </button>
+
+        <div class="lobster-install-wizard__steps">
+          <div
+            v-for="step in lobsterInstallWizardSteps"
+            :key="step.id"
+            class="lobster-install-wizard__step"
+            :class="{
+              'is-active': lobsterInstallWizardStep === step.id,
+              'is-done': lobsterInstallWizardStep > step.id
+            }"
+          >
+            <span>{{ step.id }}</span>
+            <i v-if="step.id < lobsterInstallWizardSteps.length" />
+          </div>
+        </div>
+
+        <header class="lobster-install-wizard__header">
+          <h3>{{ lobsterInstallStepTitle }}</h3>
+          <p>{{ lobsterInstallStepDescription }}</p>
+        </header>
+
+        <section class="lobster-install-wizard__panel">
+          <template v-if="lobsterInstallWizardStep === 1">
+            <div class="lobster-install-wizard__welcome">
+              <h4>欢迎使用 ClawPet 引导安装</h4>
+              <p>将按 1-5 步完成检查与安装，避免 Windows 上直接执行安装命令导致卡住。</p>
+              <ul>
+                <li>先检查 Node.js / 包管理器 / OpenClaw 状态</li>
+                <li>检查通过后再执行安装命令</li>
+                <li>安装完成后自动刷新龙虾状态</li>
+                <li>若失败会保留完整输出用于排查</li>
+              </ul>
+            </div>
+          </template>
+
+          <template v-else-if="lobsterInstallWizardStep === 2">
+            <div class="lobster-install-wizard__runtime">
+              <div class="lobster-install-wizard__runtime-top">
+                <div>
+                  <h4>检查环境</h4>
+                  <p class="lobster-install-wizard__lead">先确认运行条件，再进入安装步骤。</p>
+                </div>
+                <button
+                  class="desktop-console-panel__action desktop-console-panel__action--ghost"
+                  type="button"
+                  :disabled="lobsterInstallGuideLoading"
+                  @click="refreshLobsterInstallGuide()"
+                >
+                  {{ lobsterInstallGuideLoading ? "检查中..." : "重新检查" }}
+                </button>
+              </div>
+              <div
+                class="lobster-install-wizard__runtime-summary"
+                :class="{ 'is-ready': lobsterInstallGuide?.ready, 'is-blocked': lobsterInstallGuide && !lobsterInstallGuide.ready }"
+              >
+                <span>{{ lobsterInstallGuide?.ready ? "环境检查通过，可继续下一步。" : "仍有检查项未通过，请先修复后继续。" }}</span>
+                <small>{{ lobsterInstallGuide?.checks?.length ?? 0 }} 项检查</small>
+              </div>
+
+              <div class="lobster-install-wizard__check-list">
+                <article
+                  v-for="item in lobsterInstallGuide?.checks ?? []"
+                  :key="item.id"
+                  class="lobster-install-wizard__check-item"
+                  :class="[`is-${item.status}`]"
+                >
+                  <div class="lobster-install-wizard__check-title">
+                    <strong>{{ item.title }}</strong>
+                    <span>{{ getLobsterInstallCheckStatusLabel(item.status) }}</span>
+                  </div>
+                  <p>{{ item.detail }}</p>
+                </article>
+                <div v-if="!lobsterInstallGuide && !lobsterInstallGuideLoading" class="empty-state">
+                  点击“重新检查”加载环境检查结果。
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="lobsterInstallWizardStep === 3">
+            <div class="lobster-install-wizard__provider">
+              <div class="lobster-install-wizard__provider-top">
+                <h4>AI 提供商</h4>
+                <span class="lobster-install-wizard__provider-badge" :class="{ 'is-optional': !lobsterProviderRequiresApiKey }">
+                  {{ lobsterProviderRequiresApiKey ? "需要 API 密钥" : "支持免密钥接入" }}
+                </span>
+              </div>
+              <p class="lobster-install-wizard__lead">配置您的默认模型渠道，安装完成后可直接使用。</p>
+
+              <div class="lobster-install-wizard__provider-grid">
+                <label class="lobster-install-wizard__field lobster-install-wizard__field--span2">
+                  <span>模型提供商</span>
+                  <select
+                    v-model="lobsterProviderPresetKey"
+                    @change="handleLobsterProviderPresetChange()"
+                  >
+                    <option value="">保持当前配置</option>
+                    <optgroup v-for="group in lobsterProviderGroupOptions" :key="`wizard-provider-group-${group.key}`" :label="group.label">
+                      <option v-for="preset in group.options" :key="`wizard-provider-${preset.id}`" :value="preset.id">
+                        {{ preset.name }}
+                      </option>
+                    </optgroup>
+                  </select>
+                </label>
+
+                <label class="lobster-install-wizard__field">
+                  <span>模型 ID</span>
+                  <input
+                    v-model="lobsterProviderForm.model"
+                    type="text"
+                    :placeholder="lobsterProviderModelPlaceholder"
+                    @input="lobsterProviderConfigured = false"
+                  />
+                </label>
+
+                <label class="lobster-install-wizard__field">
+                  <span>API Base URL</span>
+                  <input
+                    v-model="lobsterProviderForm.baseUrl"
+                    type="text"
+                    placeholder="https://api.openai.com"
+                    @input="lobsterProviderConfigured = false"
+                  />
+                </label>
+
+                <label v-if="lobsterProviderRequiresApiKey" class="lobster-install-wizard__field lobster-install-wizard__field--span2">
+                  <span>API 密钥</span>
+                  <div class="lobster-install-wizard__secret">
+                    <input
+                      v-model="lobsterProviderForm.apiKey"
+                      :type="lobsterProviderShowKey ? 'text' : 'password'"
+                      :placeholder="lobsterProviderApiKeyPlaceholder"
+                      @input="lobsterProviderConfigured = false"
+                    />
+                    <button
+                      type="button"
+                      class="desktop-console-panel__action desktop-console-panel__action--ghost"
+                      @click="lobsterProviderShowKey = !lobsterProviderShowKey"
+                    >
+                      {{ lobsterProviderShowKey ? "隐藏" : "显示" }}
+                    </button>
+                  </div>
+                </label>
+                <div v-else class="lobster-install-wizard__provider-no-key">
+                  当前提供商支持 OAuth 或本地调用，可留空 API 密钥。
+                </div>
+              </div>
+
+              <div class="lobster-install-wizard__provider-meta">
+                <span>协议：{{ lobsterProviderProtocolLabel }}</span>
+                <span>路径前缀：{{ lobsterProviderForm.pathPrefix }}</span>
+                <button
+                  v-if="lobsterEffectiveProviderOption?.docsUrl"
+                  type="button"
+                  class="lobster-install-wizard__provider-doc-link"
+                  @click="openLobsterProviderDocs()"
+                >
+                  查看接入文档
+                </button>
+              </div>
+
+              <button
+                class="desktop-console-panel__action lobster-install-wizard__provider-save"
+                type="button"
+                :disabled="lobsterProviderSaving || !lobsterProviderCanSave"
+                @click="saveLobsterProviderFromWizard()"
+              >
+                {{ lobsterProviderSaving ? "保存中..." : lobsterProviderConfigured ? "已保存，可继续下一步" : "验证并保存" }}
+              </button>
+              <small class="lobster-install-wizard__provider-tip">您的 API 密钥仅保存在本地机器。</small>
+            </div>
+          </template>
+
+          <template v-else-if="lobsterInstallWizardStep === 4">
+            <div class="lobster-install-wizard__running">
+              <h4>执行安装</h4>
+              <div class="lobster-install-wizard__spinner" />
+              <p>正在执行安装，请稍候...</p>
+              <small>安装过程中请勿关闭窗口。</small>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="lobster-install-wizard__result" :class="{ 'is-success': lobsterInstallFinishedResult?.success, 'is-failed': lobsterInstallFinishedResult && !lobsterInstallFinishedResult.success }">
+              <strong>{{ lobsterInstallFinishedResult?.success ? "安装完成" : "安装失败" }}</strong>
+              <p>{{ lobsterInstallFinishedResult?.detail || "暂无安装结果" }}</p>
+              <small v-if="lobsterInstallFinishedResult">耗时 {{ formatDuration(lobsterInstallFinishedResult.durationMs) }}</small>
+              <div v-if="lobsterInstallRuntimeLogs" class="detail-code">
+                <h4>执行输出</h4>
+                <pre>{{ lobsterInstallRuntimeLogs }}</pre>
+              </div>
+            </div>
+          </template>
+        </section>
+
+        <footer class="lobster-install-wizard__actions">
+          <button
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            :disabled="lobsterInstallRunning"
+            @click="lobsterInstallWizardStep === 1 ? closeLobsterInstallWizard() : handleLobsterInstallWizardBack()"
+          >
+            {{ lobsterInstallWizardStep === 1 ? "取消" : "返回" }}
+          </button>
+          <button
+            class="desktop-console-panel__action"
+            type="button"
+            :disabled="lobsterInstallRunning || lobsterInstallGuideLoading || !lobsterInstallCanGoNext"
+            @click="handleLobsterInstallWizardNext()"
+          >
+            {{
+              lobsterInstallWizardStep === 3
+                ? "开始安装"
+                : lobsterInstallWizardStep === 5
+                  ? "完成"
+                  : "下一步"
+            }}
+          </button>
+        </footer>
+      </section>
+    </div>
+
     <div v-if="isSystemSettingsOpen" class="platform-modal-backdrop" @click.self="closeSystemSettings">
       <div class="platform-modal system-settings-modal" role="dialog" aria-modal="true" aria-label="系统设置">
         <header class="platform-modal__header">
@@ -8029,8 +9576,9 @@ onBeforeUnmount(() => {
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
     >
       <button class="desktop-context-menu__item" type="button" @click="openChatPanel()">聊天</button>
-      <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">平台管理</button>
+      <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">代理配置</button>
       <button class="desktop-context-menu__item" type="button" @click="openConsole('bindings')">宠物绑定</button>
+      <button class="desktop-context-menu__item" type="button" @click="openLobsterConfig()">龙虾配置</button>
       <button class="desktop-context-menu__item" type="button" @click="openLogAnalysis('timeline')">日志分析</button>
       <button class="desktop-context-menu__item" type="button" @click="openSubscriptionRecommendations()">订阅推荐</button>
       <button class="desktop-context-menu__item" type="button" @click="openSystemSettings()">系统设置</button>

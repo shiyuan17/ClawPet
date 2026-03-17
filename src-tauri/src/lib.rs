@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Builder as GlobalShortcutBuilder, ShortcutState};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -79,6 +79,58 @@ struct GatewayHealthResponse {
     checked_url: Option<String>,
     detail: Option<String>,
     latency_ms: Option<u128>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LobsterBackupItem {
+    name: String,
+    path: String,
+    created_at_ms: u128,
+    size_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LobsterSnapshotResponse {
+    openclaw_installed: bool,
+    openclaw_version: Option<String>,
+    openclaw_binary: Option<String>,
+    openclaw_home: String,
+    backup_dir: String,
+    detail: String,
+    backups: Vec<LobsterBackupItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LobsterActionResult {
+    action: String,
+    command: String,
+    success: bool,
+    detail: String,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    duration_ms: u128,
+    backup_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LobsterInstallCheckItem {
+    id: String,
+    title: String,
+    status: String,
+    detail: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LobsterInstallGuideResponse {
+    os: String,
+    ready: bool,
+    checks: Vec<LobsterInstallCheckItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -197,6 +249,28 @@ struct OpenClawToolsListResponse {
     profile: String,
     profile_label: String,
     tools: Vec<OpenClawToolListItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawPlatformSnapshotItem {
+    id: String,
+    provider_id: String,
+    name: String,
+    protocol: String,
+    base_url: String,
+    path_prefix: String,
+    api_path: String,
+    api_key: String,
+    model: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawPlatformSnapshotResponse {
+    source_path: String,
+    detail: String,
+    platforms: Vec<OpenClawPlatformSnapshotItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -468,14 +542,176 @@ fn value_as_object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
 fn read_string_or_primary<'a>(value: &'a Value) -> Option<&'a str> {
     value
         .as_str()
-        .or_else(|| value_as_object(value).and_then(|obj| obj.get("primary")).and_then(Value::as_str))
+        .or_else(|| {
+            value_as_object(value)
+                .and_then(|obj| obj.get("primary"))
+                .and_then(Value::as_str)
+        })
         .map(str::trim)
         .filter(|value| !value.is_empty())
 }
 
+fn normalize_provider_id(raw: &str) -> String {
+    let mut cleaned = String::new();
+    for ch in raw.trim().chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            cleaned.push(ch.to_ascii_lowercase());
+        } else if ch == '/' || ch == ':' || ch == '.' || ch.is_whitespace() {
+            cleaned.push('-');
+        }
+    }
+
+    let normalized = cleaned
+        .trim_matches('-')
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if normalized.is_empty() {
+        "platform".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn humanize_provider_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "未命名平台".to_string();
+    }
+
+    let parts = trimmed
+        .split(|ch: char| ch == '-' || ch == '_' || ch == '/' || ch == ':' || ch == '.')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        return trimmed.to_string();
+    }
+
+    let words = parts
+        .into_iter()
+        .map(|part| {
+            let lower = part.to_ascii_lowercase();
+            match lower.as_str() {
+                "openai" => "OpenAI".to_string(),
+                "api" => "API".to_string(),
+                "ai" => "AI".to_string(),
+                "aws" => "AWS".to_string(),
+                _ => {
+                    if !part.is_ascii() {
+                        return part.to_string();
+                    }
+                    let mut chars = lower.chars();
+                    match chars.next() {
+                        Some(first) => {
+                            let mut word = first.to_ascii_uppercase().to_string();
+                            word.push_str(chars.as_str());
+                            word
+                        }
+                        None => String::new(),
+                    }
+                }
+            }
+        })
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+
+    if words.is_empty() {
+        trimmed.to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
+fn infer_platform_protocol(api_value: Option<&str>) -> String {
+    let api = api_value
+        .unwrap_or("openai-completions")
+        .to_ascii_lowercase();
+    if api.contains("anthropic") {
+        "anthropic".to_string()
+    } else {
+        "openai".to_string()
+    }
+}
+
+fn infer_platform_api_path(protocol: &str, api_value: Option<&str>, base_url: &str) -> String {
+    let api = api_value.unwrap_or("").trim().to_ascii_lowercase();
+    if api.contains("openai-responses") {
+        if base_url
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+            .ends_with("/v1")
+        {
+            return "/responses".to_string();
+        }
+        return "/v1/responses".to_string();
+    }
+
+    let normalized_base = base_url.trim_end_matches('/').to_ascii_lowercase();
+    if protocol.eq_ignore_ascii_case("anthropic") {
+        if normalized_base.ends_with("/v1") {
+            "/messages".to_string()
+        } else {
+            "/v1/messages".to_string()
+        }
+    } else if normalized_base.ends_with("/v1") {
+        "/chat/completions".to_string()
+    } else {
+        "/v1/chat/completions".to_string()
+    }
+}
+
+fn is_local_proxy_host(url: &reqwest::Url) -> bool {
+    matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
+}
+
+fn normalize_local_proxy_base_url_for_persist(base_url: &str) -> String {
+    let normalized = base_url.trim().trim_end_matches('/').to_string();
+    if normalized.is_empty() {
+        return normalized;
+    }
+
+    let Ok(mut url) = reqwest::Url::parse(&normalized) else {
+        return normalized;
+    };
+    if !is_local_proxy_host(&url) {
+        return normalized;
+    }
+
+    let mut path = url.path().trim_end_matches('/').to_string();
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with("/v1/chat/completions") {
+        path = path[..path.len() - "/v1/chat/completions".len()].to_string();
+    } else if lower.ends_with("/chat/completions") {
+        path = path[..path.len() - "/chat/completions".len()].to_string();
+    } else if lower.ends_with("/v1/responses") {
+        path = path[..path.len() - "/v1/responses".len()].to_string();
+    } else if lower.ends_with("/responses") {
+        path = path[..path.len() - "/responses".len()].to_string();
+    } else if lower.ends_with("/v1/messages") {
+        path = path[..path.len() - "/v1/messages".len()].to_string();
+    } else if lower.ends_with("/messages") {
+        path = path[..path.len() - "/messages".len()].to_string();
+    }
+
+    if path.to_ascii_lowercase().ends_with("/v1") {
+        path = path[..path.len() - "/v1".len()].to_string();
+    }
+
+    url.set_path(if path.is_empty() { "/" } else { &path });
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string().trim_end_matches('/').to_string()
+}
+
 /// 从 openclaw.json 的 bindings 中按 agentId 匹配，收集每个 agent 的 match.channel，多个用 ", " 拼接。
-fn resolve_channels_from_bindings(root: &serde_json::Map<String, Value>) -> std::collections::HashMap<String, String> {
-    let mut by_agent: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+fn resolve_channels_from_bindings(
+    root: &serde_json::Map<String, Value>,
+) -> std::collections::HashMap<String, String> {
+    let mut by_agent: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     if let Some(arr) = root.get("bindings").and_then(Value::as_array) {
         for item in arr {
             if let Some(obj) = value_as_object(item) {
@@ -492,7 +728,10 @@ fn resolve_channels_from_bindings(root: &serde_json::Map<String, Value>) -> std:
                     .map(str::trim)
                     .filter(|s| !s.is_empty());
                 if let (Some(a), Some(c)) = (agent_id, channel) {
-                    by_agent.entry(a.to_string()).or_default().push(c.to_string());
+                    by_agent
+                        .entry(a.to_string())
+                        .or_default()
+                        .push(c.to_string());
                 }
             }
         }
@@ -543,7 +782,10 @@ fn load_staff_from_runtime_dirs(
             .as_deref()
             .map(load_recent_activity_from_session_file)
             .unwrap_or((None, None));
-        let channel = channels_by_agent.get(&agent_id).cloned().unwrap_or_default();
+        let channel = channels_by_agent
+            .get(&agent_id)
+            .cloned()
+            .unwrap_or_default();
         members.push(StaffMemberSnapshot {
             agent_id: agent_id.clone(),
             display_name: agent_id.clone(),
@@ -1201,7 +1443,10 @@ fn build_source_file_item(
         .ok()
         .map(|value| value.display().to_string())
         .unwrap_or_else(|| source_path.clone());
-    let id = format!("{facet_key}-{}", relative_path.replace(['/', '\\', ' '], "-").to_lowercase());
+    let id = format!(
+        "{facet_key}-{}",
+        relative_path.replace(['/', '\\', ' '], "-").to_lowercase()
+    );
 
     Some(SourceFileSnapshotItem {
         id,
@@ -1461,7 +1706,9 @@ fn load_skill_file_items() -> Vec<SourceFileSnapshotItem> {
     let mut output = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let candidates = [
-        resolve_openclaw_home_path().join("workspace").join("skills"),
+        resolve_openclaw_home_path()
+            .join("workspace")
+            .join("skills"),
         resolve_openclaw_home_path().join("skills"),
     ];
 
@@ -1546,8 +1793,14 @@ fn openclaw_skill_id_from_path(relative_path: &str) -> String {
 
 /// OpenClaw 完整内置技能清单 (id, 描述)
 static OPENCLAW_BUILTIN_SKILLS: &[(&str, &str)] = &[
-    ("1password", "1Password 密码管理，设置并使用 1Password CLI 来管理密码"),
-    ("apple-notes", "通过 macOS 上的「备忘录」CLI 管理 Apple Notes"),
+    (
+        "1password",
+        "1Password 密码管理，设置并使用 1Password CLI 来管理密码",
+    ),
+    (
+        "apple-notes",
+        "通过 macOS 上的「备忘录」CLI 管理 Apple Notes",
+    ),
     ("apple-reminders", "通过 remindctl 的 CLI 管理苹果提醒事项"),
     ("bear-notes", "通过 grizzly CLI 搜索和管理 Bear 笔记"),
     ("blogwatcher", "博客监控，定期监听博客更新"),
@@ -1604,16 +1857,14 @@ static OPENCLAW_BUILTIN_SKILLS: &[(&str, &str)] = &[
 fn load_openclaw_skills_list() -> Result<OpenClawSkillsListResponse, String> {
     let items = load_skill_file_items();
     let config_path = resolve_openclaw_config_path();
-    let mut entries_enabled: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut entries_enabled: std::collections::HashMap<String, bool> =
+        std::collections::HashMap::new();
     if let Ok(raw) = std::fs::read_to_string(&config_path) {
         if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
             if let Some(skills_root) = parsed.get("skills").and_then(Value::as_object) {
                 if let Some(entries) = skills_root.get("entries").and_then(Value::as_object) {
                     for (key, val) in entries {
-                        let enabled = val
-                            .get("enabled")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(true);
+                        let enabled = val.get("enabled").and_then(Value::as_bool).unwrap_or(true);
                         entries_enabled.insert(key.trim().to_lowercase(), enabled);
                     }
                 }
@@ -1621,7 +1872,10 @@ fn load_openclaw_skills_list() -> Result<OpenClawSkillsListResponse, String> {
         }
     }
 
-    let source_path = resolve_openclaw_home_path().join("skills").display().to_string();
+    let source_path = resolve_openclaw_home_path()
+        .join("skills")
+        .display()
+        .to_string();
 
     // 内置技能：使用完整硬编码清单，从 entries_enabled 读取启用状态
     let built_in: Vec<OpenClawSkillListItem> = OPENCLAW_BUILTIN_SKILLS
@@ -1660,8 +1914,12 @@ fn load_openclaw_skills_list() -> Result<OpenClawSkillsListResponse, String> {
             if let Ok(skill_dirs) = std::fs::read_dir(&plugin_skills_dir) {
                 for skill_entry in skill_dirs.flatten() {
                     let skill_path = skill_entry.path();
-                    let Ok(ft) = skill_entry.file_type() else { continue };
-                    if !ft.is_dir() { continue }
+                    let Ok(ft) = skill_entry.file_type() else {
+                        continue;
+                    };
+                    if !ft.is_dir() {
+                        continue;
+                    }
                     let skill_file = skill_path.join("SKILL.md");
                     if let Some(item) = build_source_file_item(
                         &skill_file,
@@ -1689,7 +1947,11 @@ fn load_openclaw_skills_list() -> Result<OpenClawSkillsListResponse, String> {
         let key_lower = skill_id.to_lowercase();
         let enabled = entries_enabled.get(&key_lower).copied().unwrap_or(true);
         let title_is_filename = title.eq_ignore_ascii_case("SKILL.md") || title.trim().is_empty();
-        let display_name = if title_is_filename { skill_id.clone() } else { title };
+        let display_name = if title_is_filename {
+            skill_id.clone()
+        } else {
+            title
+        };
         let description = {
             let clean: String = content
                 .lines()
@@ -1703,9 +1965,20 @@ fn load_openclaw_skills_list() -> Result<OpenClawSkillsListResponse, String> {
             } else {
                 clean
             };
-            if truncated.is_empty() { "暂无描述。".to_string() } else { truncated }
+            if truncated.is_empty() {
+                "暂无描述。".to_string()
+            } else {
+                truncated
+            }
         };
-        OpenClawSkillListItem { id: item_id, name: display_name, description, enabled, relative_path, source_path }
+        OpenClawSkillListItem {
+            id: item_id,
+            name: display_name,
+            description,
+            enabled,
+            relative_path,
+            source_path,
+        }
     }
 
     // 用户安装技能：~/.openclaw/skills/ 下不在内置清单里的技能
@@ -1717,14 +1990,30 @@ fn load_openclaw_skills_list() -> Result<OpenClawSkillsListResponse, String> {
         })
         .map(|item| {
             let skill_id = openclaw_skill_id_from_path(&item.relative_path);
-            make_skill_item(skill_id, item.id, item.title, item.content, item.relative_path, item.source_path, &entries_enabled)
+            make_skill_item(
+                skill_id,
+                item.id,
+                item.title,
+                item.content,
+                item.relative_path,
+                item.source_path,
+                &entries_enabled,
+            )
         })
         .chain(
             // 插件技能（openclaw-lark 等）
             plugin_items.into_iter().map(|item| {
                 let skill_id = openclaw_skill_id_from_path(&item.relative_path);
-                make_skill_item(skill_id, item.id, item.title, item.content, item.relative_path, item.source_path, &entries_enabled)
-            })
+                make_skill_item(
+                    skill_id,
+                    item.id,
+                    item.title,
+                    item.content,
+                    item.relative_path,
+                    item.source_path,
+                    &entries_enabled,
+                )
+            }),
         )
         .collect();
 
@@ -1741,7 +2030,9 @@ fn save_openclaw_skill_enabled(skill_id: String, enabled: bool) -> Result<(), St
     let config_path = resolve_openclaw_config_path();
     let raw = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
     let mut parsed: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    let root = parsed.as_object_mut().ok_or("openclaw.json 根节点不是对象")?;
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
     let skills = root
         .entry("skills")
         .or_insert_with(|| serde_json::json!({}))
@@ -1809,7 +2100,8 @@ fn openclaw_tool_category(tool_id: &str) -> &'static str {
         "exec" | "bash" | "process" => "Runtime",
         "web_search" | "web_fetch" => "Web",
         "memory_search" | "memory_get" => "Memory",
-        "sessions_list" | "sessions_history" | "sessions_send" | "sessions_spawn" | "session_status" => "Sessions",
+        "sessions_list" | "sessions_history" | "sessions_send" | "sessions_spawn"
+        | "session_status" => "Sessions",
         "message" => "Messaging",
         "browser" | "canvas" => "UI",
         "cron" | "gateway" => "Automation",
@@ -1834,13 +2126,35 @@ fn openclaw_profile_tool_ids(profile: &str) -> std::collections::HashSet<String>
             return set;
         }
         "coding" => {
-            for id in &["read", "write", "edit", "apply_patch", "exec", "bash", "process", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status", "memory_search", "memory_get", "image"] {
+            for id in &[
+                "read",
+                "write",
+                "edit",
+                "apply_patch",
+                "exec",
+                "bash",
+                "process",
+                "sessions_list",
+                "sessions_history",
+                "sessions_send",
+                "sessions_spawn",
+                "session_status",
+                "memory_search",
+                "memory_get",
+                "image",
+            ] {
                 set.insert((*id).to_string());
             }
             return set;
         }
         "messaging" => {
-            for id in &["message", "sessions_list", "sessions_history", "sessions_send", "session_status"] {
+            for id in &[
+                "message",
+                "sessions_list",
+                "sessions_history",
+                "sessions_send",
+                "session_status",
+            ] {
                 set.insert((*id).to_string());
             }
             return set;
@@ -1856,22 +2170,33 @@ fn openclaw_resolve_tools_from_config(
     agent_obj: Option<&serde_json::Map<String, Value>>,
 ) -> (String, String, std::collections::HashSet<String>) {
     let tools_root = root.get("tools").and_then(value_as_object);
-    let _agents_list = root.get("agents").and_then(value_as_object).and_then(|o| o.get("list")).and_then(Value::as_array);
+    let _agents_list = root
+        .get("agents")
+        .and_then(value_as_object)
+        .and_then(|o| o.get("list"))
+        .and_then(Value::as_array);
     let default_profile = tools_root
         .and_then(|t| t.get("profile").and_then(Value::as_str))
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("default");
     let mut profile = default_profile.to_string();
-    let mut allow: Option<Vec<String>> = tools_root.and_then(|t| t.get("allow")).and_then(Value::as_array).map(|arr| {
-        arr.iter()
-            .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
-            .collect()
-    });
+    let mut allow: Option<Vec<String>> = tools_root
+        .and_then(|t| t.get("allow"))
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .collect()
+        });
     let mut deny: Vec<String> = tools_root
         .and_then(|t| t.get("deny"))
         .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_ascii_lowercase())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_ascii_lowercase()))
+                .collect()
+        })
         .unwrap_or_default();
 
     if let Some(agent) = agent_obj {
@@ -1883,10 +2208,20 @@ fn openclaw_resolve_tools_from_config(
                 }
             }
             if let Some(a) = tools.get("allow").and_then(Value::as_array) {
-                allow = Some(a.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).collect());
+                allow = Some(
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                        .collect(),
+                );
             }
             if let Some(d) = tools.get("deny").and_then(Value::as_array) {
-                deny = d.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_ascii_lowercase().to_string())).collect();
+                deny = d
+                    .iter()
+                    .filter_map(|v| {
+                        v.as_str()
+                            .map(|s| s.trim().to_ascii_lowercase().to_string())
+                    })
+                    .collect();
             }
         }
     }
@@ -1960,7 +2295,7 @@ fn openclaw_resolve_tools_from_config(
                         | ("automation", "cron" | "gateway")
                         | ("nodes", "nodes")
                 ) || (group == "sessions" && id.starts_with("session"))
-                  || (group == "openclaw")
+                    || (group == "openclaw")
             };
             allowed_ids.retain(|id| !in_deny_group(id.as_str()));
         } else {
@@ -1990,7 +2325,11 @@ fn load_openclaw_tools_list(agent_id: Option<String>) -> Result<OpenClawToolsLis
                 .and_then(|list| {
                     list.iter().find_map(|item| {
                         let obj = value_as_object(item)?;
-                        let aid = obj.get("id").and_then(Value::as_str).map(str::trim).unwrap_or("");
+                        let aid = obj
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .unwrap_or("");
                         if aid.eq_ignore_ascii_case(id_trim) {
                             Some(obj)
                         } else {
@@ -2040,7 +2379,9 @@ fn save_openclaw_tools_config(
     let config_path = resolve_openclaw_config_path();
     let raw = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
     let mut parsed: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    let root = parsed.as_object_mut().ok_or("openclaw.json 根节点不是对象")?;
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
 
     let scope_mode = scope
         .as_deref()
@@ -2219,7 +2560,12 @@ fn load_document_file_snapshot() -> Result<SourceFileSnapshotResponse, String> {
     let missing_count = items.len().saturating_sub(existing_count);
     Ok(SourceFileSnapshotResponse {
         source_path: resolve_workspace_main_root().display().to_string(),
-        detail: format!("已整理 {} 份核心文件（存在 {}，缺失 {}）。", items.len(), existing_count, missing_count),
+        detail: format!(
+            "已整理 {} 份核心文件（存在 {}，缺失 {}）。",
+            items.len(),
+            existing_count,
+            missing_count
+        ),
         items,
     })
 }
@@ -2236,7 +2582,10 @@ fn load_openclaw_resource_snapshot(
         let existing_count = items.iter().filter(|item| item.exists).count();
         let missing_count = items.len().saturating_sub(existing_count);
         return Ok(SourceFileSnapshotResponse {
-            source_path: resolve_openclaw_home_path().join("skills").display().to_string(),
+            source_path: resolve_openclaw_home_path()
+                .join("skills")
+                .display()
+                .to_string(),
             detail: format!(
                 "已整理 {} 份 OpenClaw skills（存在 {}，缺失 {}）。",
                 items.len(),
@@ -2728,8 +3077,8 @@ fn set_task_enabled(task_id: String, enabled: bool) -> Result<(), String> {
     let raw = std::fs::read_to_string(&source_path)
         .map_err(|err| format!("无法读取 cron/jobs.json: {}", err))?;
 
-    let mut parsed: Value = serde_json::from_str(&raw)
-        .map_err(|err| format!("cron/jobs.json 解析失败: {}", err))?;
+    let mut parsed: Value =
+        serde_json::from_str(&raw).map_err(|err| format!("cron/jobs.json 解析失败: {}", err))?;
 
     let jobs = parsed
         .get_mut("jobs")
@@ -2739,11 +3088,7 @@ fn set_task_enabled(task_id: String, enabled: bool) -> Result<(), String> {
     let mut found = false;
     for job in jobs.iter_mut() {
         if let Some(obj) = job.as_object_mut() {
-            let id = obj
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim();
+            let id = obj.get("id").and_then(Value::as_str).unwrap_or("").trim();
             if id == task_id.trim() {
                 obj.insert("enabled".to_string(), Value::Bool(enabled));
                 obj.insert(
@@ -2760,11 +3105,162 @@ fn set_task_enabled(task_id: String, enabled: bool) -> Result<(), String> {
         return Err(format!("未找到 id 为 {} 的任务。", task_id));
     }
 
-    let output = serde_json::to_string_pretty(&parsed)
-        .map_err(|err| format!("序列化失败: {}", err))?;
+    let output =
+        serde_json::to_string_pretty(&parsed).map_err(|err| format!("序列化失败: {}", err))?;
     std::fs::write(&source_path, output)
         .map_err(|err| format!("写入 cron/jobs.json 失败: {}", err))?;
 
+    Ok(())
+}
+
+#[tauri::command]
+fn load_openclaw_platforms_snapshot() -> Result<OpenClawPlatformSnapshotResponse, String> {
+    let source_path = resolve_openclaw_config_path();
+    let raw = std::fs::read_to_string(&source_path)
+        .map_err(|error| format!("无法读取 openclaw.json: {error}"))?;
+    let parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
+    let root = value_as_object(&parsed).ok_or("openclaw.json 根节点不是对象")?;
+
+    let providers = root
+        .get("models")
+        .and_then(value_as_object)
+        .and_then(|models| models.get("providers"))
+        .and_then(value_as_object)
+        .ok_or("openclaw.json 中未找到 models.providers 配置")?;
+
+    let mut platforms = Vec::new();
+    for (provider_id, item) in providers {
+        let Some(provider) = value_as_object(item) else {
+            continue;
+        };
+
+        let base_url = provider
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("")
+            .to_string();
+        if base_url.is_empty() {
+            continue;
+        }
+
+        let normalized_provider_id = normalize_provider_id(provider_id);
+        let api_kind = provider.get("api").and_then(Value::as_str);
+        let protocol = infer_platform_protocol(api_kind);
+        let api_path = infer_platform_api_path(&protocol, api_kind, &base_url);
+        let model = provider
+            .get("models")
+            .and_then(Value::as_array)
+            .and_then(|list| {
+                list.iter().find_map(|model| {
+                    value_as_object(model)
+                        .and_then(|obj| obj.get("id").and_then(Value::as_str))
+                        .or_else(|| {
+                            value_as_object(model)
+                                .and_then(|obj| obj.get("name").and_then(Value::as_str))
+                        })
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.to_string())
+                })
+            })
+            .unwrap_or_default();
+
+        let name = provider
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .or_else(|| {
+                provider
+                    .get("alias")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string())
+            })
+            .unwrap_or_else(|| humanize_provider_name(provider_id));
+        let api_key = provider
+            .get("apiKey")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+
+        platforms.push(OpenClawPlatformSnapshotItem {
+            id: format!("openclaw-provider-{normalized_provider_id}"),
+            provider_id: provider_id.to_string(),
+            name,
+            protocol,
+            base_url,
+            path_prefix: format!("/{normalized_provider_id}"),
+            api_path,
+            api_key,
+            model,
+        });
+    }
+
+    platforms.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(OpenClawPlatformSnapshotResponse {
+        source_path: source_path.display().to_string(),
+        detail: format!("已从 openclaw.json 读取 {} 个平台。", platforms.len()),
+        platforms,
+    })
+}
+
+#[tauri::command]
+fn save_openclaw_provider_base_url(provider_id: String, base_url: String) -> Result<(), String> {
+    let provider_id = provider_id.trim();
+    if provider_id.is_empty() {
+        return Err("providerId 不能为空".to_string());
+    }
+    let base_url = base_url.trim();
+    if base_url.is_empty() {
+        return Err("baseUrl 不能为空".to_string());
+    }
+    let normalized_base_url = normalize_local_proxy_base_url_for_persist(base_url);
+
+    let source_path = resolve_openclaw_config_path();
+    let raw = std::fs::read_to_string(&source_path)
+        .map_err(|error| format!("无法读取 openclaw.json: {error}"))?;
+    let mut parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+    let providers = root
+        .entry("models")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .and_then(|models| {
+            Some(
+                models
+                    .entry("providers")
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()?,
+            )
+        })
+        .ok_or("openclaw.json 的 models.providers 不是对象")?;
+
+    let target_key = providers
+        .keys()
+        .find(|key| key.eq_ignore_ascii_case(provider_id))
+        .cloned()
+        .unwrap_or_else(|| provider_id.to_string());
+
+    let provider = providers
+        .entry(target_key)
+        .or_insert_with(|| serde_json::json!({}));
+    let provider_obj = provider.as_object_mut().ok_or("provider 配置不是对象")?;
+    provider_obj.insert("baseUrl".to_string(), Value::String(normalized_base_url));
+
+    let output = serde_json::to_string_pretty(&parsed)
+        .map_err(|error| format!("序列化 openclaw.json 失败: {error}"))?;
+    std::fs::write(&source_path, output)
+        .map_err(|error| format!("写入 openclaw.json 失败: {error}"))?;
     Ok(())
 }
 
@@ -2818,9 +3314,7 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
         .filter(|value| !value.is_empty())
         .unwrap_or("default");
 
-    let channels_by_agent = root
-        .map(resolve_channels_from_bindings)
-        .unwrap_or_default();
+    let channels_by_agent = root.map(resolve_channels_from_bindings).unwrap_or_default();
 
     let mut members = Vec::new();
     if let Some(list) = agents_root
@@ -2847,10 +3341,7 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(agent_id);
-            let channel = channels_by_agent
-                .get(agent_id)
-                .cloned()
-                .unwrap_or_default();
+            let channel = channels_by_agent.get(agent_id).cloned().unwrap_or_default();
             let model = obj
                 .get("model")
                 .and_then(read_string_or_primary)
@@ -2871,7 +3362,8 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
                 .unwrap_or(default_tools_profile);
             let tools_enabled_count = root
                 .map(|root_obj| {
-                    let (_, _, allowed_ids) = openclaw_resolve_tools_from_config(root_obj, Some(obj));
+                    let (_, _, allowed_ids) =
+                        openclaw_resolve_tools_from_config(root_obj, Some(obj));
                     allowed_ids.len()
                 })
                 .unwrap_or_else(|| openclaw_profile_tool_ids(tools_profile).len());
@@ -3024,6 +3516,631 @@ fn current_timestamp_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+fn resolve_lobster_backup_root() -> PathBuf {
+    let home = resolve_openclaw_home_path();
+    home.parent()
+        .map(|parent| parent.join(".openclaw-backups"))
+        .unwrap_or_else(|| PathBuf::from(".openclaw-backups"))
+}
+
+fn metadata_modified_at_ms(metadata: &std::fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn collect_dir_size_bytes(path: &Path) -> u64 {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return 0;
+    };
+    if metadata.is_file() {
+        return metadata.len();
+    }
+    if !metadata.is_dir() {
+        return 0;
+    }
+
+    let mut total = 0_u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            total = total.saturating_add(collect_dir_size_bytes(&entry.path()));
+        }
+    }
+    total
+}
+
+fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    if !source.exists() {
+        return Err(format!("源目录不存在：{}", source.display()));
+    }
+    if !source.is_dir() {
+        return Err(format!("源路径不是目录：{}", source.display()));
+    }
+
+    std::fs::create_dir_all(target)
+        .map_err(|error| format!("创建目录失败 {}: {error}", target.display()))?;
+
+    let entries = std::fs::read_dir(source)
+        .map_err(|error| format!("读取目录失败 {}: {error}", source.display()))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取目录项失败: {error}"))?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("读取文件类型失败 {}: {error}", source_path.display()))?;
+
+        if file_type.is_dir() {
+            copy_directory_recursive(&source_path, &target_path)?;
+            continue;
+        }
+
+        if let Some(parent) = target_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("创建目录失败 {}: {error}", parent.display()))?;
+        }
+
+        std::fs::copy(&source_path, &target_path).map_err(|error| {
+            format!(
+                "复制文件失败 {} -> {}: {error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn collect_lobster_backups() -> Vec<LobsterBackupItem> {
+    let backup_root = resolve_lobster_backup_root();
+    let Ok(entries) = std::fs::read_dir(&backup_root) else {
+        return Vec::new();
+    };
+
+    let mut backups = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        backups.push(LobsterBackupItem {
+            name,
+            path: path.display().to_string(),
+            created_at_ms: metadata_modified_at_ms(&metadata),
+            size_bytes: collect_dir_size_bytes(&path),
+        });
+    }
+
+    backups.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+    backups
+}
+
+fn find_openclaw_binary_path() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    let output = Command::new("where").arg("openclaw").output().ok()?;
+
+    #[cfg(not(target_os = "windows"))]
+    let output = Command::new("which").arg("openclaw").output().ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn find_command_path(command: &str) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    let output = Command::new("where").arg(command).output().ok()?;
+
+    #[cfg(not(target_os = "windows"))]
+    let output = Command::new("which").arg(command).output().ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn is_command_available(command: &str) -> bool {
+    find_command_path(command).is_some()
+}
+
+fn read_command_output_line(command: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(command).args(args).output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            stderr
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn detect_openclaw_installation() -> (bool, Option<String>, Option<String>, String) {
+    let binary = find_openclaw_binary_path();
+    let output = Command::new("openclaw").arg("--version").output();
+
+    match output {
+        Ok(result) if result.status.success() => {
+            let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+            let version = if stdout.is_empty() {
+                if stderr.is_empty() {
+                    None
+                } else {
+                    Some(stderr)
+                }
+            } else {
+                Some(stdout)
+            };
+            (true, version, binary, "已检测到 OpenClaw CLI。".to_string())
+        }
+        Ok(result) => {
+            let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+            let detail = if stderr.is_empty() {
+                format!(
+                    "OpenClaw CLI 已找到，但执行失败（exit: {}）。",
+                    result.status.code().unwrap_or(-1)
+                )
+            } else {
+                format!("OpenClaw CLI 执行失败：{stderr}")
+            };
+            (false, None, binary, detail)
+        }
+        Err(error) => (
+            false,
+            None,
+            binary,
+            format!("未检测到 OpenClaw CLI：{error}"),
+        ),
+    }
+}
+
+fn run_shell_command(command_line: &str) -> Result<std::process::Output, String> {
+    #[cfg(target_os = "windows")]
+    let output = Command::new("cmd")
+        .args(["/C", command_line])
+        .output()
+        .map_err(|error| format!("执行命令失败：{error}"))?;
+
+    #[cfg(not(target_os = "windows"))]
+    let output = Command::new("sh")
+        .args(["-lc", command_line])
+        .output()
+        .map_err(|error| format!("执行命令失败：{error}"))?;
+
+    Ok(output)
+}
+
+fn create_lobster_shell_action_result(action: &str, command_line: &str) -> LobsterActionResult {
+    let started_at = std::time::Instant::now();
+    match run_shell_command(command_line) {
+        Ok(output) => LobsterActionResult {
+            action: action.to_string(),
+            command: command_line.to_string(),
+            success: output.status.success(),
+            detail: if output.status.success() {
+                "命令执行成功。".to_string()
+            } else {
+                format!(
+                    "命令执行失败（exit: {}）。",
+                    output.status.code().unwrap_or(-1)
+                )
+            },
+            exit_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: None,
+        },
+        Err(error) => LobsterActionResult {
+            action: action.to_string(),
+            command: command_line.to_string(),
+            success: false,
+            detail: error.clone(),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: error,
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: None,
+        },
+    }
+}
+
+fn run_lobster_install_action() -> LobsterActionResult {
+    let started_at = std::time::Instant::now();
+    let (installed, version, _, _) = detect_openclaw_installation();
+    if installed {
+        let version_text = version.unwrap_or_else(|| "未知版本".to_string());
+        return LobsterActionResult {
+            action: "install".to_string(),
+            command: "openclaw --version".to_string(),
+            success: true,
+            detail: format!("OpenClaw 已安装（{version_text}）。"),
+            exit_code: Some(0),
+            stdout: version_text,
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: None,
+        };
+    }
+
+    let candidates = [
+        "npm install -g openclaw@latest",
+        "pnpm add -g openclaw@latest",
+        "yarn global add openclaw@latest",
+    ];
+    let mut all_stdout = String::new();
+    let mut all_stderr = String::new();
+
+    for command in candidates {
+        let mut attempt = create_lobster_shell_action_result("install", command);
+        if !all_stdout.is_empty() {
+            all_stdout.push_str("\n\n");
+        }
+        all_stdout.push_str(&format!("$ {command}\n{}", attempt.stdout.trim()));
+        if !attempt.stderr.trim().is_empty() {
+            if !all_stderr.is_empty() {
+                all_stderr.push_str("\n\n");
+            }
+            all_stderr.push_str(&format!("$ {command}\n{}", attempt.stderr.trim()));
+        }
+        if attempt.success {
+            let (installed_now, version_now, _, detail_now) = detect_openclaw_installation();
+            attempt.detail = if installed_now {
+                format!(
+                    "龙虾安装完成。{}",
+                    version_now
+                        .map(|value| format!("当前版本：{value}。"))
+                        .unwrap_or_default()
+                )
+            } else {
+                format!("安装命令执行成功，但版本检查未通过：{detail_now}")
+            };
+            attempt.stdout = all_stdout;
+            if !all_stderr.is_empty() {
+                attempt.stderr = all_stderr;
+            }
+            attempt.duration_ms = started_at.elapsed().as_millis();
+            return attempt;
+        }
+    }
+
+    LobsterActionResult {
+        action: "install".to_string(),
+        command: "npm install -g openclaw@latest".to_string(),
+        success: false,
+        detail: "龙虾安装失败，请检查 Node/npm 权限或网络后重试。".to_string(),
+        exit_code: None,
+        stdout: all_stdout,
+        stderr: all_stderr,
+        duration_ms: started_at.elapsed().as_millis(),
+        backup_path: None,
+    }
+}
+
+fn run_lobster_upgrade_action() -> LobsterActionResult {
+    let started_at = std::time::Instant::now();
+    let candidates = [
+        "npm install -g openclaw@latest",
+        "pnpm add -g openclaw@latest",
+        "yarn global add openclaw@latest",
+    ];
+    let mut all_stdout = String::new();
+    let mut all_stderr = String::new();
+
+    for command in candidates {
+        let mut attempt = create_lobster_shell_action_result("upgrade", command);
+        if !all_stdout.is_empty() {
+            all_stdout.push_str("\n\n");
+        }
+        all_stdout.push_str(&format!("$ {command}\n{}", attempt.stdout.trim()));
+        if !attempt.stderr.trim().is_empty() {
+            if !all_stderr.is_empty() {
+                all_stderr.push_str("\n\n");
+            }
+            all_stderr.push_str(&format!("$ {command}\n{}", attempt.stderr.trim()));
+        }
+        if attempt.success {
+            let (_, version_now, _, _) = detect_openclaw_installation();
+            attempt.detail = format!(
+                "龙虾升级完成。{}",
+                version_now
+                    .map(|value| format!("当前版本：{value}。"))
+                    .unwrap_or_default()
+            );
+            attempt.stdout = all_stdout;
+            if !all_stderr.is_empty() {
+                attempt.stderr = all_stderr;
+            }
+            attempt.duration_ms = started_at.elapsed().as_millis();
+            return attempt;
+        }
+    }
+
+    LobsterActionResult {
+        action: "upgrade".to_string(),
+        command: "npm install -g openclaw@latest".to_string(),
+        success: false,
+        detail: "龙虾升级失败，请检查 Node/npm 权限或网络后重试。".to_string(),
+        exit_code: None,
+        stdout: all_stdout,
+        stderr: all_stderr,
+        duration_ms: started_at.elapsed().as_millis(),
+        backup_path: None,
+    }
+}
+
+fn run_lobster_restart_gateway_action() -> LobsterActionResult {
+    let started_at = std::time::Instant::now();
+    let mut primary =
+        create_lobster_shell_action_result("restart_gateway", "openclaw gateway restart");
+    if primary.success {
+        primary.detail = "网关重启完成。".to_string();
+        primary.duration_ms = started_at.elapsed().as_millis();
+        return primary;
+    }
+
+    let mut fallback = create_lobster_shell_action_result(
+        "restart_gateway",
+        "openclaw gateway stop && openclaw gateway start",
+    );
+    if fallback.success {
+        fallback.detail = "已通过 stop/start 方式完成网关重启。".to_string();
+        if !primary.stderr.trim().is_empty() {
+            fallback.stderr = format!(
+                "初次命令失败（openclaw gateway restart）:\n{}\n\n{}",
+                primary.stderr.trim(),
+                fallback.stderr.trim()
+            );
+        }
+        fallback.duration_ms = started_at.elapsed().as_millis();
+        return fallback;
+    }
+
+    LobsterActionResult {
+        action: "restart_gateway".to_string(),
+        command: "openclaw gateway restart".to_string(),
+        success: false,
+        detail: "网关重启失败，请确认 openclaw 可执行且配置正确。".to_string(),
+        exit_code: fallback.exit_code.or(primary.exit_code),
+        stdout: format!(
+            "首次尝试:\n{}\n\n回退尝试:\n{}",
+            primary.stdout.trim(),
+            fallback.stdout.trim()
+        ),
+        stderr: format!(
+            "首次尝试:\n{}\n\n回退尝试:\n{}",
+            primary.stderr.trim(),
+            fallback.stderr.trim()
+        ),
+        duration_ms: started_at.elapsed().as_millis(),
+        backup_path: None,
+    }
+}
+
+fn run_lobster_backup_action() -> LobsterActionResult {
+    let started_at = std::time::Instant::now();
+    let openclaw_home = resolve_openclaw_home_path();
+    if !openclaw_home.exists() {
+        return LobsterActionResult {
+            action: "backup".to_string(),
+            command: "backup openclaw home".to_string(),
+            success: false,
+            detail: format!("未找到龙虾目录：{}", openclaw_home.display()),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: None,
+        };
+    }
+
+    let backup_root = resolve_lobster_backup_root();
+    if let Err(error) = std::fs::create_dir_all(&backup_root) {
+        return LobsterActionResult {
+            action: "backup".to_string(),
+            command: "backup openclaw home".to_string(),
+            success: false,
+            detail: format!("创建备份目录失败 {}: {error}", backup_root.display()),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: None,
+        };
+    }
+
+    let backup_name = format!("openclaw-backup-{}", current_timestamp_millis());
+    let backup_path = backup_root.join(&backup_name);
+    if let Err(error) = copy_directory_recursive(&openclaw_home, &backup_path) {
+        return LobsterActionResult {
+            action: "backup".to_string(),
+            command: "backup openclaw home".to_string(),
+            success: false,
+            detail: error,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: None,
+        };
+    }
+
+    let size_mb = (collect_dir_size_bytes(&backup_path) as f64) / (1024.0 * 1024.0);
+    LobsterActionResult {
+        action: "backup".to_string(),
+        command: "backup openclaw home".to_string(),
+        success: true,
+        detail: format!("备份完成：{}（{size_mb:.2} MB）", backup_path.display()),
+        exit_code: Some(0),
+        stdout: String::new(),
+        stderr: String::new(),
+        duration_ms: started_at.elapsed().as_millis(),
+        backup_path: Some(backup_path.display().to_string()),
+    }
+}
+
+fn run_lobster_restore_action(backup_path: Option<String>) -> LobsterActionResult {
+    let started_at = std::time::Instant::now();
+    let selected_backup = backup_path
+        .and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(trimmed))
+            }
+        })
+        .or_else(|| {
+            collect_lobster_backups()
+                .first()
+                .map(|item| PathBuf::from(&item.path))
+        });
+
+    let Some(selected_backup) = selected_backup else {
+        return LobsterActionResult {
+            action: "restore".to_string(),
+            command: "restore openclaw backup".to_string(),
+            success: false,
+            detail: "未找到可恢复的备份。".to_string(),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: None,
+        };
+    };
+
+    if !selected_backup.exists() || !selected_backup.is_dir() {
+        return LobsterActionResult {
+            action: "restore".to_string(),
+            command: "restore openclaw backup".to_string(),
+            success: false,
+            detail: format!("备份目录不存在：{}", selected_backup.display()),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: Some(selected_backup.display().to_string()),
+        };
+    }
+
+    let openclaw_home = resolve_openclaw_home_path();
+    let restore_parent = openclaw_home
+        .parent()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let home_name = openclaw_home
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "openclaw".to_string());
+    let restore_stamp = current_timestamp_millis();
+    let stage_path = restore_parent.join(format!(".{home_name}.restore-stage-{restore_stamp}"));
+    let old_backup_path = restore_parent.join(format!(".{home_name}.pre-restore-{restore_stamp}"));
+
+    if stage_path.exists() {
+        let _ = std::fs::remove_dir_all(&stage_path);
+    }
+
+    if let Err(error) = copy_directory_recursive(&selected_backup, &stage_path) {
+        return LobsterActionResult {
+            action: "restore".to_string(),
+            command: "restore openclaw backup".to_string(),
+            success: false,
+            detail: format!("复制恢复内容失败：{error}"),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: Some(selected_backup.display().to_string()),
+        };
+    }
+
+    if openclaw_home.exists() {
+        if let Err(error) = std::fs::rename(&openclaw_home, &old_backup_path) {
+            let _ = std::fs::remove_dir_all(&stage_path);
+            return LobsterActionResult {
+                action: "restore".to_string(),
+                command: "restore openclaw backup".to_string(),
+                success: false,
+                detail: format!("保存当前目录失败：{error}"),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                duration_ms: started_at.elapsed().as_millis(),
+                backup_path: Some(selected_backup.display().to_string()),
+            };
+        }
+    }
+
+    if let Err(error) = std::fs::rename(&stage_path, &openclaw_home) {
+        if !openclaw_home.exists() && old_backup_path.exists() {
+            let _ = std::fs::rename(&old_backup_path, &openclaw_home);
+        }
+        return LobsterActionResult {
+            action: "restore".to_string(),
+            command: "restore openclaw backup".to_string(),
+            success: false,
+            detail: format!("应用恢复目录失败：{error}"),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: Some(selected_backup.display().to_string()),
+        };
+    }
+
+    let old_path_hint = if old_backup_path.exists() {
+        format!("旧目录已保留：{}", old_backup_path.display())
+    } else {
+        "恢复前目录不存在。".to_string()
+    };
+
+    LobsterActionResult {
+        action: "restore".to_string(),
+        command: "restore openclaw backup".to_string(),
+        success: true,
+        detail: format!(
+            "已从 {} 恢复龙虾配置。{}",
+            selected_backup.display(),
+            old_path_hint
+        ),
+        exit_code: Some(0),
+        stdout: String::new(),
+        stderr: String::new(),
+        duration_ms: started_at.elapsed().as_millis(),
+        backup_path: Some(selected_backup.display().to_string()),
+    }
 }
 
 fn read_http_request(
@@ -3376,9 +4493,7 @@ fn get_available_monitors(app: tauri::AppHandle) -> Result<Vec<MonitorInfo>, Str
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
-    let monitors = window
-        .available_monitors()
-        .map_err(|e| e.to_string())?;
+    let monitors = window.available_monitors().map_err(|e| e.to_string())?;
     let list: Vec<MonitorInfo> = monitors
         .into_iter()
         .map(|m| {
@@ -3400,9 +4515,7 @@ fn move_window_to_monitor(app: tauri::AppHandle, index: usize) -> Result<(), Str
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
-    let monitors = window
-        .available_monitors()
-        .map_err(|e| e.to_string())?;
+    let monitors = window.available_monitors().map_err(|e| e.to_string())?;
     let monitor = monitors
         .into_iter()
         .nth(index)
@@ -3424,14 +4537,18 @@ struct WindowInnerPosition {
     y: f64,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ConsoleWindowOpenPayload {
+    section: String,
+}
+
 #[tauri::command]
 fn get_window_inner_position(app: tauri::AppHandle) -> Result<WindowInnerPosition, String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
-    let pos = window
-        .inner_position()
-        .map_err(|e| e.to_string())?;
+    let pos = window.inner_position().map_err(|e| e.to_string())?;
     Ok(WindowInnerPosition {
         x: pos.x as f64,
         y: pos.y as f64,
@@ -3440,23 +4557,31 @@ fn get_window_inner_position(app: tauri::AppHandle) -> Result<WindowInnerPositio
 
 #[tauri::command]
 fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("console") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
-    }
-
     let section = section
         .as_deref()
         .map(str::trim)
         .filter(|value| matches!(*value, "overview" | "platforms" | "staff" | "tasks"))
         .unwrap_or("platforms");
-    let url = format!("index.html?window=console&section={section}");
+    let payload = ConsoleWindowOpenPayload {
+        section: section.to_string(),
+    };
+
+    if let Some(window) = app.get_webview_window("console") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("clawpet://console-open", payload);
+        return Ok(());
+    }
+
+    let init_script = format!(
+        "window.__CLAWPET_CONSOLE_MODE = true; window.__CLAWPET_CONSOLE_SECTION = {};",
+        serde_json::to_string(section).unwrap_or_else(|_| "\"platforms\"".to_string())
+    );
 
     let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
         "console",
-        tauri::WebviewUrl::App(url.into()),
+        tauri::WebviewUrl::App("index.html".into()),
     )
     .title("ClawPet Platform Console")
     .inner_size(1200.0, 820.0)
@@ -3470,8 +4595,9 @@ fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result
     .shadow(true)
     .always_on_top(false)
     .skip_taskbar(false)
-    .focused(true)
-    .visible(true);
+    .focused(false)
+    .visible(false)
+    .initialization_script(&init_script);
 
     // macOS: 隐藏标题栏区域，仅保留窗口控制按钮（红黄绿）
     #[cfg(target_os = "macos")]
@@ -3479,10 +4605,11 @@ fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result
         builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
     }
 
-    builder
-    .build()
-    .map(|_| ())
-    .map_err(|error| format!("failed to open console window: {error}"))
+    let window = builder
+        .build()
+        .map_err(|error| format!("failed to open console window: {error}"))?;
+    let _ = window.emit("clawpet://console-open", payload);
+    Ok(())
 }
 
 #[tauri::command]
@@ -3514,6 +4641,84 @@ fn toggle_main_window_visibility(app: &tauri::AppHandle) {
 
     let _ = window.show();
     let _ = window.set_always_on_top(true);
+}
+
+#[cfg(target_os = "windows")]
+fn reinforce_main_window_overlay(app: tauri::AppHandle) {
+    thread::spawn(move || {
+        for delay_ms in [300u64, 800, 2000] {
+            thread::sleep(Duration::from_millis(delay_ms));
+
+            let Some(window) = app.get_webview_window("main") else {
+                return;
+            };
+
+            let _ = window.set_decorations(false);
+            let _ = window.set_shadow(false);
+            let _ = window.set_always_on_top(true);
+
+            unsafe {
+                use windows::Win32::Foundation::HWND;
+                use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
+                use windows::Win32::UI::Controls::MARGINS;
+                use windows::Win32::UI::WindowsAndMessaging::*;
+
+                if let Ok(raw) = window.hwnd() {
+                    let hwnd = HWND(raw.0 as *mut _);
+
+                    let style = GetWindowLongW(hwnd, GWL_STYLE);
+                    SetWindowLongW(
+                        hwnd,
+                        GWL_STYLE,
+                        style & !(WS_CAPTION.0 as i32) & !(WS_THICKFRAME.0 as i32),
+                    );
+
+                    // 扩展玻璃区域到整个客户区，实现真正的透明背景
+                    let margins = MARGINS {
+                        cxLeftWidth: -1,
+                        cxRightWidth: -1,
+                        cyTopHeight: -1,
+                        cyBottomHeight: -1,
+                    };
+                    let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+                    let _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                    );
+                }
+            }
+
+            let _ = window.with_webview(|webview| unsafe {
+                use webview2_com::Microsoft::Web::WebView2::Win32::*;
+                use windows::core::Interface;
+
+                let controller = webview.controller();
+                if let Ok(c2) = controller.cast::<ICoreWebView2Controller2>() {
+                    let _ = c2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+                        A: 0,
+                        R: 0,
+                        G: 0,
+                        B: 0,
+                    });
+                }
+            });
+
+            if let Ok(size) = window.inner_size() {
+                if size.height > 1 {
+                    let nudged = tauri::PhysicalSize::new(size.width, size.height - 1);
+                    let _ = window.set_size(tauri::Size::Physical(nudged));
+                    thread::sleep(Duration::from_millis(50));
+                    let _ = window.set_size(tauri::Size::Physical(size));
+                }
+            }
+        }
+    });
 }
 
 fn load_agent_context_messages(agent_id: &str) -> Vec<OpenClawMessage> {
@@ -3615,10 +4820,7 @@ async fn openclaw_chat(
     protocol: Option<String>,
     agent_id: Option<String>,
 ) -> Result<OpenClawResponse, String> {
-    let effective_agent_id = agent_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
+    let effective_agent_id = agent_id.as_deref().map(str::trim).filter(|v| !v.is_empty());
 
     let mut final_messages = Vec::new();
     if let Some(aid) = effective_agent_id {
@@ -3639,9 +4841,7 @@ async fn openclaw_chat(
     let api_key = api_key.filter(|value| !value.trim().is_empty());
     let model = model
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            effective_agent_id.and_then(resolve_agent_model_from_config)
-        })
+        .or_else(|| effective_agent_id.and_then(resolve_agent_model_from_config))
         .or_else(|| std::env::var("OPENCLAW_MODEL").ok());
 
     let agent_id_owned = effective_agent_id.map(|s| s.to_string());
@@ -3660,16 +4860,16 @@ async fn openclaw_chat(
             request = request.header("x-api-key", api_key);
         }
         request = request.header("anthropic-version", "2023-06-01");
-    } else if let Some(token) = gateway_token
-        .as_deref()
-        .filter(|token| !token.trim().is_empty())
-    {
-        request = request.header(AUTHORIZATION, format!("Bearer {token}"));
     } else if let Some(api_key) = api_key
         .as_deref()
         .filter(|api_key| !api_key.trim().is_empty())
     {
         request = request.header(AUTHORIZATION, format!("Bearer {api_key}"));
+    } else if let Some(token) = gateway_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+    {
+        request = request.header(AUTHORIZATION, format!("Bearer {token}"));
     }
 
     request = if request_protocol == "anthropic" {
@@ -3704,9 +4904,16 @@ async fn openclaw_chat(
             messages: anthropic_messages,
         })
     } else if is_openai_compatible {
-        request.json(&OpenAiChatRequest { model, messages: final_messages, agent_id: agent_id_owned.clone() })
+        request.json(&OpenAiChatRequest {
+            model,
+            messages: final_messages,
+            agent_id: agent_id_owned.clone(),
+        })
     } else {
-        request.json(&OpenClawRequest { messages: final_messages, agent_id: agent_id_owned.clone() })
+        request.json(&OpenClawRequest {
+            messages: final_messages,
+            agent_id: agent_id_owned.clone(),
+        })
     };
 
     let response = request
@@ -3791,6 +4998,173 @@ async fn openclaw_chat(
         raw,
         usage,
     })
+}
+
+#[tauri::command]
+fn load_lobster_snapshot() -> Result<LobsterSnapshotResponse, String> {
+    let (installed, version, binary, detail) = detect_openclaw_installation();
+    let openclaw_home = resolve_openclaw_home_path();
+    let backup_dir = resolve_lobster_backup_root();
+    Ok(LobsterSnapshotResponse {
+        openclaw_installed: installed,
+        openclaw_version: version,
+        openclaw_binary: binary,
+        openclaw_home: openclaw_home.display().to_string(),
+        backup_dir: backup_dir.display().to_string(),
+        detail,
+        backups: collect_lobster_backups(),
+    })
+}
+
+#[tauri::command]
+fn load_lobster_install_guide() -> Result<LobsterInstallGuideResponse, String> {
+    let mut checks: Vec<LobsterInstallCheckItem> = Vec::new();
+
+    let (openclaw_installed, openclaw_version, _, openclaw_detail) = detect_openclaw_installation();
+    checks.push(LobsterInstallCheckItem {
+        id: "openclaw".to_string(),
+        title: "OpenClaw CLI".to_string(),
+        status: if openclaw_installed {
+            "success".to_string()
+        } else {
+            "warning".to_string()
+        },
+        detail: if openclaw_installed {
+            openclaw_version
+                .map(|value| format!("已安装，当前版本：{value}"))
+                .unwrap_or_else(|| "已安装，版本号待确认。".to_string())
+        } else {
+            format!("尚未安装，将在下一步执行安装。{openclaw_detail}")
+        },
+    });
+
+    let node_ready = is_command_available("node");
+    checks.push(LobsterInstallCheckItem {
+        id: "nodejs".to_string(),
+        title: "Node.js 运行环境".to_string(),
+        status: if node_ready {
+            "success".to_string()
+        } else {
+            "failed".to_string()
+        },
+        detail: if node_ready {
+            read_command_output_line("node", &["-v"])
+                .map(|version| format!("检测通过：{version}"))
+                .unwrap_or_else(|| "检测通过：已找到 node 命令。".to_string())
+        } else {
+            "未检测到 node 命令，请先安装 Node.js LTS（建议 18+）。".to_string()
+        },
+    });
+
+    let npm_ready = is_command_available("npm");
+    let pnpm_ready = is_command_available("pnpm");
+    let yarn_ready = is_command_available("yarn");
+    let mut managers = Vec::new();
+    if npm_ready {
+        managers.push("npm");
+    }
+    if pnpm_ready {
+        managers.push("pnpm");
+    }
+    if yarn_ready {
+        managers.push("yarn");
+    }
+    let manager_detail = if managers.is_empty() {
+        "未检测到 npm / pnpm / yarn，请先安装 npm（随 Node.js 一并安装）。".to_string()
+    } else {
+        format!("可用包管理器：{}。", managers.join(" / "))
+    };
+    checks.push(LobsterInstallCheckItem {
+        id: "package-manager".to_string(),
+        title: "包管理器".to_string(),
+        status: if managers.is_empty() {
+            "failed".to_string()
+        } else {
+            "success".to_string()
+        },
+        detail: manager_detail,
+    });
+
+    if npm_ready {
+        let prefix = read_command_output_line("npm", &["config", "get", "prefix"]);
+        #[cfg(target_os = "windows")]
+        let npm_prefix_warning = prefix
+            .as_ref()
+            .map(|value| value.to_ascii_lowercase().contains("program files"))
+            .unwrap_or(false);
+        #[cfg(not(target_os = "windows"))]
+        let npm_prefix_warning = false;
+
+        checks.push(LobsterInstallCheckItem {
+            id: "npm-prefix".to_string(),
+            title: "全局安装目录权限".to_string(),
+            status: if npm_prefix_warning {
+                "warning".to_string()
+            } else {
+                "success".to_string()
+            },
+            detail: match prefix {
+                Some(value) if npm_prefix_warning => {
+                    format!("npm prefix 为 {value}，可能需要管理员权限，建议以管理员身份运行。")
+                }
+                Some(value) => format!("npm prefix：{value}"),
+                None => "无法读取 npm prefix，可继续安装并观察结果。".to_string(),
+            },
+        });
+    }
+
+    checks.push(LobsterInstallCheckItem {
+        id: "network".to_string(),
+        title: "网络与镜像".to_string(),
+        status: "warning".to_string(),
+        detail: "若安装长时间无响应，请先检查网络代理，或配置 npm 镜像后再安装。".to_string(),
+    });
+
+    let ready = !checks.iter().any(|item| item.status == "failed");
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+
+    Ok(LobsterInstallGuideResponse {
+        os: os.to_string(),
+        ready,
+        checks,
+    })
+}
+
+#[tauri::command]
+fn run_lobster_action(
+    action: String,
+    backup_path: Option<String>,
+) -> Result<LobsterActionResult, String> {
+    let normalized = action.trim().to_ascii_lowercase();
+    let result = match normalized.as_str() {
+        "install" => run_lobster_install_action(),
+        "restart_gateway" => run_lobster_restart_gateway_action(),
+        "auto_fix" => {
+            let mut output = create_lobster_shell_action_result(
+                "auto_fix",
+                "openclaw doctor --fix --yes --non-interactive",
+            );
+            output.detail = if output.success {
+                "自动修复执行完成。".to_string()
+            } else {
+                "自动修复执行失败，请查看日志输出。".to_string()
+            };
+            output
+        }
+        "backup" => run_lobster_backup_action(),
+        "restore" => run_lobster_restore_action(backup_path),
+        "upgrade" => run_lobster_upgrade_action(),
+        _ => {
+            return Err(format!("不支持的龙虾操作：{action}"));
+        }
+    };
+    Ok(result)
 }
 
 #[tauri::command]
@@ -3897,6 +5271,10 @@ fn open_external_url(url: String) -> Result<(), String> {
 pub fn run() {
     load_openclaw_env();
 
+    // WebView2 必须在创建前设置透明背景，否则会显示默认灰底
+    #[cfg(target_os = "windows")]
+    std::env::set_var("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", "0x00000000");
+
     tauri::Builder::default()
         .plugin(
             GlobalShortcutBuilder::new()
@@ -3919,8 +5297,13 @@ pub fn run() {
             start_console_window_drag,
             openclaw_chat,
             sync_local_proxy,
+            load_lobster_snapshot,
+            load_lobster_install_guide,
+            run_lobster_action,
             check_openclaw_gateway,
             read_local_audio_file,
+            load_openclaw_platforms_snapshot,
+            save_openclaw_provider_base_url,
             load_openclaw_message_logs,
             load_staff_snapshot,
             load_task_snapshot,
@@ -3937,9 +5320,13 @@ pub fn run() {
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_decorations(false);
                 let _ = window.set_always_on_top(true);
                 let _ = window.set_shadow(false);
                 let _ = window.set_skip_taskbar(false);
+                // Keep the desktop pet window truly transparent on Windows.
+                // Applying a full-window system blur here turns the overlay into
+                // an opaque dark layer instead of showing the desktop through it.
                 if let Ok(Some(monitor)) = window.current_monitor() {
                     let size = monitor.size();
                     let position = monitor.position();
@@ -3947,6 +5334,9 @@ pub fn run() {
                     let _ = window.set_size(tauri::Size::Physical(*size));
                 }
             }
+
+            #[cfg(target_os = "windows")]
+            reinforce_main_window_overlay(app.handle().clone());
 
             Ok(())
         })

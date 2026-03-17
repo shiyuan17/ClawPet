@@ -236,7 +236,7 @@ export async function sendOpenClawChat(messages: OpenClawMessage[], options: Ope
     return normalizeResponse(result);
   }
 
-  if (!options.endpoint && runtime?.__TAURI__?.core?.invoke) {
+  if (runtime?.__TAURI__?.core?.invoke) {
     try {
       const result = await runtime.__TAURI__.core.invoke("openclaw_chat", {
         messages,
