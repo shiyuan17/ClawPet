@@ -578,6 +578,7 @@ const localRequestLogs = ref<RequestLog[]>([]);
 const runtimeRequestLogs = ref<RequestLog[]>([]);
 const platforms = ref<PlatformConfig[]>([]);
 const staffMembers = ref<StaffMemberSnapshot[]>([]);
+const recentOutputModalMemberId = ref<string | null>(null);
 const petBindingCode = ref("");
 const bindingCodeDraft = ref("");
 const incomingBindingCode = ref("");
@@ -1281,6 +1282,10 @@ const selectedDocumentRecord = computed(
 const activeResourceMember = computed(
   () => staffMembers.value.find((member) => member.agentId === activeResourceMemberId.value) ?? null
 );
+const activeRecentOutputMember = computed(
+  () => staffMembers.value.find((member) => member.agentId === recentOutputModalMemberId.value) ?? null
+);
+const recentOutputModalTitle = computed(() => `${activeRecentOutputMember.value?.displayName ?? "员工"} · 最近产出`);
 const activeResourceModalTitle = computed(() => {
   if (activeResourceModal.value === "memory") return "记忆";
   if (activeResourceModal.value === "skill") return "技能";
@@ -3233,6 +3238,12 @@ function handleEscape(event: KeyboardEvent) {
     return;
   }
 
+  if (activeRecentOutputMember.value) {
+    closeRecentOutputModal();
+    event.preventDefault();
+    return;
+  }
+
   if (sessionOverlayLog.value) {
     sessionOverlayLogId.value = null;
     event.preventDefault();
@@ -3292,6 +3303,10 @@ function handleContextMenu(event: MouseEvent) {
 }
 
 function handleWindowPointerDown(event: PointerEvent) {
+  if (activeRecentOutputMember.value && event.target instanceof HTMLElement && event.target.closest(".recent-output-modal")) {
+    return;
+  }
+
   if (sessionOverlayLog.value && event.target instanceof HTMLElement && event.target.closest(".session-log-overlay")) {
     return;
   }
@@ -3987,6 +4002,195 @@ function getStaffRoleLabel(member: StaffMemberSnapshot) {
   return member.roleLabel || member.agentId;
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeHtmlAttr(value: string) {
+  return escapeHtml(value).replace(/`/g, "&#96;");
+}
+
+function sanitizeMarkdownHref(rawHref: string): string | null {
+  const href = rawHref.trim();
+  if (!href) {
+    return null;
+  }
+
+  if (href.startsWith("/") || href.startsWith("./") || href.startsWith("../") || href.startsWith("#")) {
+    return href;
+  }
+
+  try {
+    const parsed = new URL(href);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:") {
+      return href;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function createMarkdownTokenStore() {
+  const tokens: string[] = [];
+  return {
+    stash(html: string) {
+      const key = `\u0000${tokens.length}\u0000`;
+      tokens.push(html);
+      return key;
+    },
+    restore(text: string) {
+      return text.replace(/\u0000(\d+)\u0000/g, (_, index) => tokens[Number(index)] ?? "");
+    }
+  };
+}
+
+function renderInlineMarkdown(raw: string) {
+  const store = createMarkdownTokenStore();
+  let text = raw;
+
+  text = text.replace(/`([^`\n]+)`/g, (_, code: string) => store.stash(`<code>${escapeHtml(code)}</code>`));
+  text = text.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, (_, label: string, href: string) => {
+    const safeHref = sanitizeMarkdownHref(href);
+    if (!safeHref) {
+      return store.stash(escapeHtml(label));
+    }
+    return store.stash(
+      `<a href="${escapeHtmlAttr(safeHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+    );
+  });
+
+  text = escapeHtml(text);
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
+  text = text.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+  text = text.replace(/_([^_\n]+)_/g, "<em>$1</em>");
+  text = text.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+
+  return store.restore(text);
+}
+
+function renderMarkdown(raw: string) {
+  const normalized = raw.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return "<p>暂无产出。</p>";
+  }
+
+  const lines = normalized.split("\n");
+  const blocks: string[] = [];
+  const paragraphLines: string[] = [];
+  const quoteLines: string[] = [];
+  const listItems: string[] = [];
+  let listType: "ul" | "ol" | null = null;
+
+  function flushParagraph() {
+    if (paragraphLines.length === 0) return;
+    blocks.push(`<p>${paragraphLines.map((line) => renderInlineMarkdown(line)).join("<br />")}</p>`);
+    paragraphLines.length = 0;
+  }
+
+  function flushQuote() {
+    if (quoteLines.length === 0) return;
+    blocks.push(`<blockquote><p>${quoteLines.map((line) => renderInlineMarkdown(line)).join("<br />")}</p></blockquote>`);
+    quoteLines.length = 0;
+  }
+
+  function flushList() {
+    if (!listType || listItems.length === 0) return;
+    blocks.push(`<${listType}>${listItems.map((item) => `<li>${item}</li>`).join("")}</${listType}>`);
+    listItems.length = 0;
+    listType = null;
+  }
+
+  for (const line of lines) {
+    const trimmedRight = line.trimEnd();
+    if (!trimmedRight.trim()) {
+      flushParagraph();
+      flushQuote();
+      flushList();
+      continue;
+    }
+
+    const headingMatch = trimmedRight.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushQuote();
+      flushList();
+      const level = headingMatch[1].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+      continue;
+    }
+
+    const quoteMatch = trimmedRight.match(/^>\s?(.*)$/);
+    if (quoteMatch) {
+      flushParagraph();
+      flushList();
+      quoteLines.push(quoteMatch[1]);
+      continue;
+    }
+
+    const unorderedMatch = trimmedRight.match(/^[-*+]\s+(.+)$/);
+    if (unorderedMatch) {
+      flushParagraph();
+      flushQuote();
+      if (listType !== "ul") {
+        flushList();
+        listType = "ul";
+      }
+      listItems.push(renderInlineMarkdown(unorderedMatch[1]));
+      continue;
+    }
+
+    const orderedMatch = trimmedRight.match(/^\d+\.\s+(.+)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      flushQuote();
+      if (listType !== "ol") {
+        flushList();
+        listType = "ol";
+      }
+      listItems.push(renderInlineMarkdown(orderedMatch[1]));
+      continue;
+    }
+
+    flushQuote();
+    flushList();
+    paragraphLines.push(trimmedRight);
+  }
+
+  flushParagraph();
+  flushQuote();
+  flushList();
+
+  return blocks.join("");
+}
+
+function hasRecentOutput(member: StaffMemberSnapshot) {
+  return member.recentOutput.trim().length > 0;
+}
+
+function openRecentOutputModal(member: StaffMemberSnapshot) {
+  if (!hasRecentOutput(member)) {
+    return;
+  }
+  recentOutputModalMemberId.value = member.agentId;
+  void syncCursorPassThrough();
+}
+
+function closeRecentOutputModal() {
+  recentOutputModalMemberId.value = null;
+  void syncCursorPassThrough();
+}
+
+function renderStaffRecentOutputMarkdown(output: string) {
+  return renderMarkdown(output);
+}
+
 function normalizeStaffFacet(value: string) {
   return value.trim().toLowerCase();
 }
@@ -4090,6 +4294,9 @@ async function refreshStaffSnapshot() {
   try {
     const result = (await invoke("load_staff_snapshot")) as StaffSnapshotResponse;
     staffMembers.value = Array.isArray(result.members) ? result.members : [];
+    if (recentOutputModalMemberId.value && !staffMembers.value.some((member) => member.agentId === recentOutputModalMemberId.value)) {
+      closeRecentOutputModal();
+    }
     boundPets.value = boundPets.value.map((pet) => ({
       ...pet,
       capabilities: createBoundPetCapabilities(pet.capabilities)
@@ -4100,6 +4307,7 @@ async function refreshStaffSnapshot() {
     staffMissionStatement.value = result.missionStatement || staffMissionStatement.value;
   } catch (error) {
     staffMembers.value = [];
+    closeRecentOutputModal();
     staffSnapshotSourcePath.value = "";
     staffSnapshotDetail.value = error instanceof Error ? error.message : "员工配置读取失败。";
   }
@@ -4550,6 +4758,7 @@ async function syncCursorPassThrough() {
   }
 
   const isAnyModalOpen =
+    !!activeRecentOutputMember.value ||
     (activeResourceModal.value && activeResourceMember.value) ||
     !!sessionOverlayLog.value ||
     isPlatformModalOpen.value ||
@@ -6500,7 +6709,20 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="staff-brief-row">
                   <dt>最近产出</dt>
-                  <dd class="staff-brief-row__recent-output">{{ member.recentOutput }}</dd>
+                  <dd class="staff-brief-row__recent-output">
+                    <div
+                      class="staff-markdown-output"
+                      v-html="renderStaffRecentOutputMarkdown(member.recentOutput)"
+                    />
+                    <button
+                      v-if="hasRecentOutput(member)"
+                      class="staff-brief-row__toggle"
+                      type="button"
+                      @click="openRecentOutputModal(member)"
+                    >
+                      查看完整产出
+                    </button>
+                  </dd>
                 </div>
                 <div class="staff-brief-row">
                   <dt>是否在排班里</dt>
@@ -6809,8 +7031,26 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
-      <div v-if="!isConsoleWindowMode" class="desktop-console-panel__resize-handle" @pointerdown="handlePanelResizeStart" />
-    </section>
+    <div v-if="!isConsoleWindowMode" class="desktop-console-panel__resize-handle" @pointerdown="handlePanelResizeStart" />
+  </section>
+
+    <div v-if="activeRecentOutputMember" class="platform-modal-backdrop" @click.self="closeRecentOutputModal">
+      <section class="platform-modal recent-output-modal" role="dialog" aria-modal="true" :aria-label="recentOutputModalTitle">
+        <header class="platform-modal__header">
+          <div>
+            <strong>{{ recentOutputModalTitle }}</strong>
+            <p>完整 Markdown 产出内容</p>
+          </div>
+          <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop="closeRecentOutputModal">×</button>
+        </header>
+        <div class="recent-output-modal__content">
+          <div
+            class="staff-markdown-output staff-markdown-output--modal is-expanded"
+            v-html="renderStaffRecentOutputMarkdown(activeRecentOutputMember.recentOutput)"
+          />
+        </div>
+      </section>
+    </div>
 
     <div v-if="sessionOverlayLog" class="platform-modal-backdrop" @click.self="closeSessionLogOverlay">
       <section class="platform-modal session-log-overlay">
