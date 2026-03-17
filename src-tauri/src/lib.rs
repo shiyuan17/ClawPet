@@ -275,6 +275,57 @@ struct OpenClawPlatformSnapshotResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct OpenClawChannelAccountSnapshotItem {
+    account_id: String,
+    name: String,
+    configured: bool,
+    status: String,
+    is_default: bool,
+    agent_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawChannelGroupSnapshotItem {
+    channel_type: String,
+    default_account_id: String,
+    status: String,
+    accounts: Vec<OpenClawChannelAccountSnapshotItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawChannelAccountsSnapshotResponse {
+    source_path: String,
+    detail: String,
+    channels: Vec<OpenClawChannelGroupSnapshotItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawChannelConfigPayload {
+    channel_type: String,
+    account_id: Option<String>,
+    config: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawChannelBindingPayload {
+    channel_type: String,
+    account_id: String,
+    agent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawChannelAccountPayload {
+    channel_type: String,
+    account_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OpenClawMessageLogItem {
     id: String,
     session_id: String,
@@ -371,6 +422,17 @@ struct LocalProxyPlatform {
     protocol: String,
     base_url: String,
     path_prefix: String,
+    api_key: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawProviderConfigPayload {
+    provider_id: String,
+    name: String,
+    protocol: String,
+    base_url: String,
+    model: String,
     api_key: String,
 }
 
@@ -706,6 +768,17 @@ fn normalize_local_proxy_base_url_for_persist(base_url: &str) -> String {
     url.to_string().trim_end_matches('/').to_string()
 }
 
+fn write_openclaw_config_value(source_path: &Path, parsed: &Value) -> Result<(), String> {
+    if let Some(parent) = source_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("创建 openclaw 配置目录失败: {error}"))?;
+    }
+    let output = serde_json::to_string_pretty(parsed)
+        .map_err(|error| format!("序列化 openclaw.json 失败: {error}"))?;
+    std::fs::write(source_path, output).map_err(|error| format!("写入 openclaw.json 失败: {error}"))?;
+    Ok(())
+}
+
 /// 从 openclaw.json 的 bindings 中按 agentId 匹配，收集每个 agent 的 match.channel，多个用 ", " 拼接。
 fn resolve_channels_from_bindings(
     root: &serde_json::Map<String, Value>,
@@ -740,6 +813,566 @@ fn resolve_channels_from_bindings(
         .into_iter()
         .map(|(k, v)| (k, v.join(", ")))
         .collect()
+}
+
+fn normalize_channel_identifier(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase()
+}
+
+fn normalize_account_identifier(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase()
+}
+
+fn channel_account_binding_key(channel_type: &str, account_id: &str) -> String {
+    format!(
+        "{}:{}",
+        normalize_channel_identifier(channel_type),
+        normalize_account_identifier(account_id)
+    )
+}
+
+fn resolve_channel_binding_maps(
+    root: &serde_json::Map<String, Value>,
+) -> (
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, String>,
+) {
+    let mut channel_to_agent = std::collections::HashMap::new();
+    let mut account_to_agent = std::collections::HashMap::new();
+    let Some(bindings) = root.get("bindings").and_then(Value::as_array) else {
+        return (channel_to_agent, account_to_agent);
+    };
+
+    for item in bindings {
+        let Some(binding_obj) = item.as_object() else {
+            continue;
+        };
+        let Some(agent_id) = binding_obj
+            .get("agentId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(channel_type) = binding_obj
+            .get("match")
+            .and_then(Value::as_object)
+            .and_then(|match_obj| match_obj.get("channel"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+
+        let normalized_channel = normalize_channel_identifier(channel_type);
+        let account_id = binding_obj
+            .get("match")
+            .and_then(Value::as_object)
+            .and_then(|match_obj| match_obj.get("accountId"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        if let Some(account_id) = account_id {
+            account_to_agent.insert(
+                channel_account_binding_key(&normalized_channel, account_id),
+                agent_id.to_string(),
+            );
+        } else {
+            channel_to_agent.insert(normalized_channel, agent_id.to_string());
+        }
+    }
+
+    (channel_to_agent, account_to_agent)
+}
+
+fn is_channel_section_reserved_key(key: &str) -> bool {
+    matches!(key, "accounts" | "defaultAccount" | "enabled")
+}
+
+fn channel_payload_has_content(payload: &serde_json::Map<String, Value>) -> bool {
+    payload.iter().any(|(key, value)| {
+        if key == "enabled" {
+            return false;
+        }
+        match value {
+            Value::Null => false,
+            Value::String(text) => !text.trim().is_empty(),
+            Value::Array(items) => !items.is_empty(),
+            Value::Object(obj) => !obj.is_empty(),
+            _ => true,
+        }
+    })
+}
+
+fn migrate_legacy_channel_section_to_accounts(section_obj: &mut serde_json::Map<String, Value>) {
+    let has_accounts = section_obj
+        .get("accounts")
+        .and_then(Value::as_object)
+        .map(|accounts| !accounts.is_empty())
+        .unwrap_or(false);
+    if has_accounts {
+        if !section_obj.contains_key("defaultAccount") {
+            section_obj.insert(
+                "defaultAccount".to_string(),
+                Value::String("default".to_string()),
+            );
+        }
+        return;
+    }
+
+    let legacy_payload = section_obj
+        .iter()
+        .filter(|(key, _)| !is_channel_section_reserved_key(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<serde_json::Map<String, Value>>();
+
+    if legacy_payload.is_empty() {
+        return;
+    }
+
+    let default_account_id = section_obj
+        .get("defaultAccount")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default")
+        .to_string();
+
+    let mut account_payload = legacy_payload.clone();
+    if let Some(enabled) = section_obj.get("enabled").and_then(Value::as_bool) {
+        account_payload.insert("enabled".to_string(), Value::Bool(enabled));
+    }
+
+    let mut accounts = serde_json::Map::new();
+    accounts.insert(default_account_id.clone(), Value::Object(account_payload));
+    section_obj.insert("accounts".to_string(), Value::Object(accounts));
+    section_obj.insert("defaultAccount".to_string(), Value::String(default_account_id));
+
+    let legacy_keys = legacy_payload.keys().cloned().collect::<Vec<_>>();
+    for key in legacy_keys {
+        section_obj.remove(&key);
+    }
+}
+
+fn mirror_default_account_to_channel_section(section_obj: &mut serde_json::Map<String, Value>) {
+    let default_account_id = section_obj
+        .get("defaultAccount")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default")
+        .to_string();
+    let default_payload = section_obj
+        .get("accounts")
+        .and_then(Value::as_object)
+        .and_then(|accounts| accounts.get(&default_account_id))
+        .and_then(Value::as_object)
+        .cloned();
+
+    let removable_keys = section_obj
+        .keys()
+        .filter(|key| !is_channel_section_reserved_key(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in removable_keys {
+        section_obj.remove(&key);
+    }
+
+    if let Some(default_payload) = default_payload {
+        for (key, value) in default_payload {
+            if key == "enabled" {
+                continue;
+            }
+            section_obj.insert(key, value);
+        }
+    }
+
+    section_obj.insert("enabled".to_string(), Value::Bool(true));
+}
+
+fn ensure_channel_plugin_allowlist(
+    root: &mut serde_json::Map<String, Value>,
+    channel_type: &str,
+) -> Result<(), String> {
+    let plugin_id = match normalize_channel_identifier(channel_type).as_str() {
+        "feishu" => Some("openclaw-lark"),
+        "dingtalk" => Some("dingtalk"),
+        "wecom" => Some("wecom"),
+        "qqbot" => Some("qqbot"),
+        "whatsapp" => Some("whatsapp"),
+        _ => None,
+    };
+
+    let Some(plugin_id) = plugin_id else {
+        return Ok(());
+    };
+
+    if !matches!(root.get("plugins"), Some(Value::Object(_))) {
+        root.insert(
+            "plugins".to_string(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    let Some(plugins_obj) = root.get_mut("plugins").and_then(Value::as_object_mut) else {
+        return Err("plugins 配置不是对象".to_string());
+    };
+
+    plugins_obj.insert("enabled".to_string(), Value::Bool(true));
+
+    if !matches!(plugins_obj.get("allow"), Some(Value::Array(_))) {
+        plugins_obj.insert("allow".to_string(), Value::Array(Vec::new()));
+    }
+    if let Some(allow_arr) = plugins_obj.get_mut("allow").and_then(Value::as_array_mut) {
+        let exists = allow_arr
+            .iter()
+            .any(|item| item.as_str().map(str::trim).map(|value| value.eq_ignore_ascii_case(plugin_id)).unwrap_or(false));
+        if !exists {
+            allow_arr.push(Value::String(plugin_id.to_string()));
+        }
+    }
+
+    if !matches!(plugins_obj.get("entries"), Some(Value::Object(_))) {
+        plugins_obj.insert(
+            "entries".to_string(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    if let Some(entries_obj) = plugins_obj.get_mut("entries").and_then(Value::as_object_mut) {
+        if !matches!(entries_obj.get(plugin_id), Some(Value::Object(_))) {
+            entries_obj.insert(
+                plugin_id.to_string(),
+                Value::Object(serde_json::Map::<String, Value>::new()),
+            );
+        }
+        if let Some(entry_obj) = entries_obj.get_mut(plugin_id).and_then(Value::as_object_mut) {
+            entry_obj.insert("enabled".to_string(), Value::Bool(true));
+        }
+    }
+
+    Ok(())
+}
+
+fn clear_all_channel_bindings(
+    root: &mut serde_json::Map<String, Value>,
+    channel_type: &str,
+) {
+    let normalized_channel = normalize_channel_identifier(channel_type);
+    let Some(bindings) = root.get_mut("bindings").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    bindings.retain(|item| {
+        let Some(binding_obj) = item.as_object() else {
+            return true;
+        };
+        let Some(existing_channel) = binding_obj
+            .get("match")
+            .and_then(Value::as_object)
+            .and_then(|match_obj| match_obj.get("channel"))
+            .and_then(Value::as_str)
+        else {
+            return true;
+        };
+
+        normalize_channel_identifier(existing_channel) != normalized_channel
+    });
+
+    if bindings.is_empty() {
+        root.remove("bindings");
+    }
+}
+
+fn upsert_channel_binding(
+    root: &mut serde_json::Map<String, Value>,
+    channel_type: &str,
+    account_id: Option<&str>,
+    agent_id: Option<&str>,
+) {
+    let normalized_channel = normalize_channel_identifier(channel_type);
+    if normalized_channel.is_empty() {
+        return;
+    }
+    let normalized_account = account_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_account_identifier);
+    let normalized_agent = agent_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    let existing_bindings = root
+        .get("bindings")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut next_bindings = Vec::new();
+
+    for item in existing_bindings {
+        let Some(binding_obj) = item.as_object() else {
+            next_bindings.push(item);
+            continue;
+        };
+        let Some(match_obj) = binding_obj.get("match").and_then(Value::as_object) else {
+            next_bindings.push(item);
+            continue;
+        };
+        let Some(existing_channel) = match_obj.get("channel").and_then(Value::as_str) else {
+            next_bindings.push(item);
+            continue;
+        };
+
+        if normalize_channel_identifier(existing_channel) != normalized_channel {
+            next_bindings.push(item);
+            continue;
+        }
+
+        let existing_agent = binding_obj
+            .get("agentId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let existing_account = match_obj
+            .get("accountId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(normalize_account_identifier);
+
+        if let Some(ref target_agent) = normalized_agent {
+            if !target_agent.is_empty() && existing_agent.eq_ignore_ascii_case(target_agent) {
+                continue;
+            }
+        }
+
+        match normalized_account.as_deref() {
+            Some(target_account) => {
+                if existing_account.as_deref() == Some(target_account) {
+                    continue;
+                }
+            }
+            None => {
+                if existing_account.is_none() {
+                    continue;
+                }
+            }
+        }
+
+        next_bindings.push(item);
+    }
+
+    if let Some(agent_id) = normalized_agent {
+        let mut match_obj = serde_json::Map::new();
+        match_obj.insert("channel".to_string(), Value::String(normalized_channel.clone()));
+        if let Some(account_id) = normalized_account {
+            match_obj.insert("accountId".to_string(), Value::String(account_id));
+        }
+
+        let mut binding_obj = serde_json::Map::new();
+        binding_obj.insert("agentId".to_string(), Value::String(agent_id));
+        binding_obj.insert("match".to_string(), Value::Object(match_obj));
+        next_bindings.push(Value::Object(binding_obj));
+    }
+
+    if next_bindings.is_empty() {
+        root.remove("bindings");
+    } else {
+        root.insert("bindings".to_string(), Value::Array(next_bindings));
+    }
+}
+
+fn build_channel_account_config(
+    channel_type: &str,
+    incoming: &std::collections::HashMap<String, String>,
+    existing: Option<&serde_json::Map<String, Value>>,
+) -> serde_json::Map<String, Value> {
+    let mut config = existing.cloned().unwrap_or_default();
+    for (raw_key, raw_value) in incoming {
+        let key = raw_key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let value = raw_value.trim();
+        if value.is_empty() {
+            config.remove(key);
+        } else {
+            config.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+
+    let normalized_channel = normalize_channel_identifier(channel_type);
+
+    if normalized_channel == "telegram" {
+        if let Some(allowed_users) = incoming.get("allowedUsers") {
+            let users = allowed_users
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| Value::String(value.to_string()))
+                .collect::<Vec<_>>();
+            if users.is_empty() {
+                config.remove("allowFrom");
+            } else {
+                config.insert("allowFrom".to_string(), Value::Array(users));
+            }
+        }
+    }
+
+    if normalized_channel == "discord" {
+        config.insert(
+            "groupPolicy".to_string(),
+            Value::String("allowlist".to_string()),
+        );
+        config.insert(
+            "dm".to_string(),
+            serde_json::json!({ "enabled": false }),
+        );
+        config.insert(
+            "retry".to_string(),
+            serde_json::json!({
+                "attempts": 3,
+                "minDelayMs": 500,
+                "maxDelayMs": 30000,
+                "jitter": 0.1
+            }),
+        );
+
+        let guild_id = incoming
+            .get("guildId")
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let channel_id = incoming
+            .get("channelId")
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        if let Some(guild_id) = guild_id {
+            let channel_rule = if let Some(channel_id) = channel_id {
+                serde_json::json!({ channel_id: { "allow": true, "requireMention": true } })
+            } else {
+                serde_json::json!({ "*": { "allow": true, "requireMention": true } })
+            };
+            config.insert(
+                "guilds".to_string(),
+                serde_json::json!({
+                    guild_id: {
+                        "users": ["*"],
+                        "requireMention": true,
+                        "channels": channel_rule
+                    }
+                }),
+            );
+        }
+        config.remove("guildId");
+        config.remove("channelId");
+    }
+
+    if normalized_channel == "feishu" || normalized_channel == "wecom" {
+        let dm_policy = config
+            .get("dmPolicy")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("open")
+            .to_string();
+        config.insert("dmPolicy".to_string(), Value::String(dm_policy.clone()));
+
+        let mut allow_from = config
+            .get("allowFrom")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec!["*".to_string()]);
+        if dm_policy == "open" && !allow_from.iter().any(|value| value == "*") {
+            allow_from.push("*".to_string());
+        }
+        config.insert(
+            "allowFrom".to_string(),
+            Value::Array(
+                allow_from
+                    .into_iter()
+                    .map(Value::String)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+    }
+
+    config.insert("enabled".to_string(), Value::Bool(true));
+    config
+}
+
+fn extract_channel_form_values(
+    channel_type: &str,
+    account_obj: &serde_json::Map<String, Value>,
+) -> std::collections::HashMap<String, String> {
+    let mut values = std::collections::HashMap::new();
+    let normalized_channel = normalize_channel_identifier(channel_type);
+
+    for (key, value) in account_obj {
+        if key == "enabled"
+            || key == "accounts"
+            || key == "defaultAccount"
+            || key == "guilds"
+            || key == "allowFrom"
+            || key == "groupPolicy"
+            || key == "dm"
+            || key == "retry"
+            || key == "dmPolicy"
+        {
+            continue;
+        }
+        if let Some(text) = value.as_str().map(str::trim).filter(|text| !text.is_empty()) {
+            values.insert(key.to_string(), text.to_string());
+        }
+    }
+
+    if normalized_channel == "telegram" {
+        if !values.contains_key("allowedUsers") {
+            if let Some(users) = account_obj.get("allowFrom").and_then(Value::as_array) {
+                let merged = users
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if !merged.is_empty() {
+                    values.insert("allowedUsers".to_string(), merged);
+                }
+            }
+        }
+    } else if normalized_channel == "discord" {
+        if let Some(guilds) = account_obj.get("guilds").and_then(Value::as_object) {
+            if let Some((guild_id, guild_obj)) = guilds.iter().next() {
+                if !guild_id.trim().is_empty() {
+                    values.insert("guildId".to_string(), guild_id.to_string());
+                }
+                if let Some(channels) = guild_obj.get("channels").and_then(Value::as_object) {
+                    if let Some((channel_id, _)) = channels.iter().find(|(key, _)| *key != "*") {
+                        if !channel_id.trim().is_empty() {
+                            values.insert("channelId".to_string(), channel_id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    values
 }
 
 fn load_staff_from_runtime_dirs(
@@ -3212,6 +3845,408 @@ fn load_openclaw_platforms_snapshot() -> Result<OpenClawPlatformSnapshotResponse
 }
 
 #[tauri::command]
+fn load_openclaw_channel_accounts_snapshot() -> Result<OpenClawChannelAccountsSnapshotResponse, String> {
+    let source_path = resolve_openclaw_config_path();
+    let raw = match std::fs::read_to_string(&source_path) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(OpenClawChannelAccountsSnapshotResponse {
+                source_path: source_path.display().to_string(),
+                detail: "openclaw.json 未找到，当前没有可读取的频道配置。".to_string(),
+                channels: Vec::new(),
+            })
+        }
+    };
+
+    let parsed: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(OpenClawChannelAccountsSnapshotResponse {
+                source_path: source_path.display().to_string(),
+                detail: "openclaw.json 解析失败，当前无法读取频道配置。".to_string(),
+                channels: Vec::new(),
+            })
+        }
+    };
+    let Some(root) = value_as_object(&parsed) else {
+        return Ok(OpenClawChannelAccountsSnapshotResponse {
+            source_path: source_path.display().to_string(),
+            detail: "openclaw.json 根节点不是对象。".to_string(),
+            channels: Vec::new(),
+        });
+    };
+
+    let (channel_to_agent, account_to_agent) = resolve_channel_binding_maps(root);
+    let mut channel_groups = Vec::new();
+
+    if let Some(channels_obj) = root.get("channels").and_then(Value::as_object) {
+        for (channel_type, section_value) in channels_obj {
+            let Some(section_obj) = section_value.as_object() else {
+                continue;
+            };
+            if section_obj.get("enabled").and_then(Value::as_bool) == Some(false) {
+                continue;
+            }
+
+            let mut section_clone = section_obj.clone();
+            migrate_legacy_channel_section_to_accounts(&mut section_clone);
+            let default_account_id = section_clone
+                .get("defaultAccount")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("default")
+                .to_string();
+            let mut accounts = Vec::new();
+            if let Some(accounts_obj) = section_clone.get("accounts").and_then(Value::as_object) {
+                for (account_id, account_value) in accounts_obj {
+                    let Some(account_obj) = account_value.as_object() else {
+                        continue;
+                    };
+                    let enabled = account_obj.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+                    let configured = enabled && channel_payload_has_content(account_obj);
+                    let status = if configured { "connected" } else { "disconnected" }.to_string();
+                    let normalized_channel = normalize_channel_identifier(channel_type);
+                    let binding_key = channel_account_binding_key(channel_type, account_id);
+                    let agent_id = account_to_agent
+                        .get(&binding_key)
+                        .cloned()
+                        .or_else(|| {
+                            if account_id.eq_ignore_ascii_case("default") {
+                                channel_to_agent.get(&normalized_channel).cloned()
+                            } else {
+                                None
+                            }
+                        });
+
+                    accounts.push(OpenClawChannelAccountSnapshotItem {
+                        account_id: account_id.to_string(),
+                        name: if account_id.eq_ignore_ascii_case("default") {
+                            "主账号".to_string()
+                        } else {
+                            account_id.to_string()
+                        },
+                        configured,
+                        status,
+                        is_default: account_id.eq_ignore_ascii_case(&default_account_id),
+                        agent_id,
+                    });
+                }
+            }
+
+            if accounts.is_empty() {
+                continue;
+            }
+
+            accounts.sort_by(|left, right| {
+                if left.is_default {
+                    return std::cmp::Ordering::Less;
+                }
+                if right.is_default {
+                    return std::cmp::Ordering::Greater;
+                }
+                left.account_id.cmp(&right.account_id)
+            });
+
+            let group_status = if accounts.iter().any(|item| item.status == "connected") {
+                "connected"
+            } else {
+                "disconnected"
+            };
+
+            channel_groups.push(OpenClawChannelGroupSnapshotItem {
+                channel_type: channel_type.to_string(),
+                default_account_id: default_account_id.to_string(),
+                status: group_status.to_string(),
+                accounts,
+            });
+        }
+    }
+
+    channel_groups.sort_by(|left, right| left.channel_type.cmp(&right.channel_type));
+    Ok(OpenClawChannelAccountsSnapshotResponse {
+        source_path: source_path.display().to_string(),
+        detail: format!("已读取 {} 个已配置频道。", channel_groups.len()),
+        channels: channel_groups,
+    })
+}
+
+#[tauri::command]
+fn load_openclaw_channel_form_values(
+    channel_type: String,
+    account_id: Option<String>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let source_path = resolve_openclaw_config_path();
+    let raw = match std::fs::read_to_string(&source_path) {
+        Ok(value) => value,
+        Err(_) => return Ok(std::collections::HashMap::new()),
+    };
+    let parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
+    let root = value_as_object(&parsed).ok_or("openclaw.json 根节点不是对象")?;
+    let normalized_channel = normalize_channel_identifier(&channel_type);
+    if normalized_channel.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let Some(section_obj) = root
+        .get("channels")
+        .and_then(Value::as_object)
+        .and_then(|channels| channels.get(&normalized_channel))
+        .and_then(Value::as_object)
+    else {
+        return Ok(std::collections::HashMap::new());
+    };
+
+    let mut section_clone = section_obj.clone();
+    migrate_legacy_channel_section_to_accounts(&mut section_clone);
+    let resolved_account_id = account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default");
+
+    if let Some(account_obj) = section_clone
+        .get("accounts")
+        .and_then(Value::as_object)
+        .and_then(|accounts| accounts.get(resolved_account_id))
+        .and_then(Value::as_object)
+    {
+        return Ok(extract_channel_form_values(
+            &normalized_channel,
+            account_obj,
+        ));
+    }
+
+    return Ok(extract_channel_form_values(
+        &normalized_channel,
+        &section_clone,
+    ));
+}
+
+#[tauri::command]
+fn save_openclaw_channel_config(payload: OpenClawChannelConfigPayload) -> Result<(), String> {
+    let source_path = resolve_openclaw_config_path();
+    let mut parsed = match std::fs::read_to_string(&source_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    if !parsed.is_object() {
+        parsed = serde_json::json!({});
+    }
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+
+    let normalized_channel = normalize_channel_identifier(&payload.channel_type);
+    if normalized_channel.is_empty() {
+        return Err("channelType 不能为空".to_string());
+    }
+
+    ensure_channel_plugin_allowlist(root, &normalized_channel)?;
+
+    if normalized_channel == "whatsapp" {
+        return write_openclaw_config_value(&source_path, &parsed);
+    }
+
+    if !matches!(root.get("channels"), Some(Value::Object(_))) {
+        root.insert(
+            "channels".to_string(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    let channels_obj = root
+        .get_mut("channels")
+        .and_then(Value::as_object_mut)
+        .ok_or("channels 不是对象")?;
+
+    if !matches!(channels_obj.get(&normalized_channel), Some(Value::Object(_))) {
+        channels_obj.insert(
+            normalized_channel.clone(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    let section_obj = channels_obj
+        .get_mut(&normalized_channel)
+        .and_then(Value::as_object_mut)
+        .ok_or("channels.<channelType> 不是对象")?;
+    migrate_legacy_channel_section_to_accounts(section_obj);
+
+    if !matches!(section_obj.get("accounts"), Some(Value::Object(_))) {
+        section_obj.insert(
+            "accounts".to_string(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    let accounts_obj = section_obj
+        .get_mut("accounts")
+        .and_then(Value::as_object_mut)
+        .ok_or("channels.<channelType>.accounts 不是对象")?;
+
+    let resolved_account_id = payload
+        .account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default")
+        .to_string();
+    let existing_account_obj = accounts_obj
+        .get(&resolved_account_id)
+        .and_then(Value::as_object);
+    let next_account_obj =
+        build_channel_account_config(&normalized_channel, &payload.config, existing_account_obj);
+    accounts_obj.insert(resolved_account_id.clone(), Value::Object(next_account_obj));
+
+    if section_obj
+        .get("defaultAccount")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        section_obj.insert(
+            "defaultAccount".to_string(),
+            Value::String(resolved_account_id),
+        );
+    }
+    section_obj.insert("enabled".to_string(), Value::Bool(true));
+    mirror_default_account_to_channel_section(section_obj);
+
+    write_openclaw_config_value(&source_path, &parsed)
+}
+
+#[tauri::command]
+fn save_openclaw_channel_binding(payload: OpenClawChannelBindingPayload) -> Result<(), String> {
+    let source_path = resolve_openclaw_config_path();
+    let mut parsed = match std::fs::read_to_string(&source_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    if !parsed.is_object() {
+        parsed = serde_json::json!({});
+    }
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+
+    let normalized_channel = normalize_channel_identifier(&payload.channel_type);
+    let normalized_account = payload.account_id.trim();
+    if normalized_channel.is_empty() || normalized_account.is_empty() {
+        return Err("channelType 与 accountId 不能为空".to_string());
+    }
+
+    upsert_channel_binding(
+        root,
+        &normalized_channel,
+        Some(normalized_account),
+        payload.agent_id.as_deref(),
+    );
+    write_openclaw_config_value(&source_path, &parsed)
+}
+
+#[tauri::command]
+fn delete_openclaw_channel_account_config(payload: OpenClawChannelAccountPayload) -> Result<(), String> {
+    let source_path = resolve_openclaw_config_path();
+    let raw = match std::fs::read_to_string(&source_path) {
+        Ok(value) => value,
+        Err(_) => return Ok(()),
+    };
+    let mut parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+
+    let normalized_channel = normalize_channel_identifier(&payload.channel_type);
+    let normalized_account = payload.account_id.trim().to_string();
+    if normalized_channel.is_empty() || normalized_account.is_empty() {
+        return Err("channelType 与 accountId 不能为空".to_string());
+    }
+
+    let mut removed = false;
+    if let Some(channels_obj) = root.get_mut("channels").and_then(Value::as_object_mut) {
+        let mut remove_channel = false;
+        if let Some(section_obj) = channels_obj
+            .get_mut(&normalized_channel)
+            .and_then(Value::as_object_mut)
+        {
+            migrate_legacy_channel_section_to_accounts(section_obj);
+            let default_account_id_before = section_obj
+                .get("defaultAccount")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string();
+            if let Some(accounts_obj) = section_obj
+                .get_mut("accounts")
+                .and_then(Value::as_object_mut)
+            {
+                if accounts_obj.remove(&normalized_account).is_some() {
+                    removed = true;
+                    if accounts_obj.is_empty() {
+                        remove_channel = true;
+                    } else {
+                        let default_matches_removed = !default_account_id_before.is_empty()
+                            && default_account_id_before.eq_ignore_ascii_case(&normalized_account);
+                        if default_matches_removed {
+                            let mut next_default_ids = accounts_obj.keys().cloned().collect::<Vec<_>>();
+                            next_default_ids.sort();
+                            if let Some(next_default) = next_default_ids.first() {
+                                section_obj.insert(
+                                    "defaultAccount".to_string(),
+                                    Value::String(next_default.to_string()),
+                                );
+                            }
+                        }
+                        mirror_default_account_to_channel_section(section_obj);
+                    }
+                }
+            }
+        }
+        if remove_channel {
+            channels_obj.remove(&normalized_channel);
+        }
+    }
+
+    if !removed {
+        return Ok(());
+    }
+
+    upsert_channel_binding(
+        root,
+        &normalized_channel,
+        Some(&normalized_account),
+        None,
+    );
+    write_openclaw_config_value(&source_path, &parsed)
+}
+
+#[tauri::command]
+fn delete_openclaw_channel_config(channel_type: String) -> Result<(), String> {
+    let source_path = resolve_openclaw_config_path();
+    let raw = match std::fs::read_to_string(&source_path) {
+        Ok(value) => value,
+        Err(_) => return Ok(()),
+    };
+    let mut parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+
+    let normalized_channel = normalize_channel_identifier(&channel_type);
+    if normalized_channel.is_empty() {
+        return Err("channelType 不能为空".to_string());
+    }
+
+    if let Some(channels_obj) = root.get_mut("channels").and_then(Value::as_object_mut) {
+        channels_obj.remove(&normalized_channel);
+    }
+    clear_all_channel_bindings(root, &normalized_channel);
+    write_openclaw_config_value(&source_path, &parsed)
+}
+
+#[tauri::command]
 fn save_openclaw_provider_base_url(provider_id: String, base_url: String) -> Result<(), String> {
     let provider_id = provider_id.trim();
     if provider_id.is_empty() {
@@ -3256,6 +4291,93 @@ fn save_openclaw_provider_base_url(provider_id: String, base_url: String) -> Res
         .or_insert_with(|| serde_json::json!({}));
     let provider_obj = provider.as_object_mut().ok_or("provider 配置不是对象")?;
     provider_obj.insert("baseUrl".to_string(), Value::String(normalized_base_url));
+
+    let output = serde_json::to_string_pretty(&parsed)
+        .map_err(|error| format!("序列化 openclaw.json 失败: {error}"))?;
+    std::fs::write(&source_path, output)
+        .map_err(|error| format!("写入 openclaw.json 失败: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn save_openclaw_provider_config(config: OpenClawProviderConfigPayload) -> Result<(), String> {
+    let normalized_provider_id = normalize_provider_id(config.provider_id.trim());
+    if normalized_provider_id.is_empty() {
+        return Err("providerId 不能为空".to_string());
+    }
+
+    let base_url = config.base_url.trim();
+    if base_url.is_empty() {
+        return Err("baseUrl 不能为空".to_string());
+    }
+    let normalized_base_url = normalize_local_proxy_base_url_for_persist(base_url);
+
+    let model = config.model.trim();
+    if model.is_empty() {
+        return Err("model 不能为空".to_string());
+    }
+
+    let normalized_name = if config.name.trim().is_empty() {
+        humanize_provider_name(&normalized_provider_id)
+    } else {
+        config.name.trim().to_string()
+    };
+    let api_kind = if config.protocol.trim().eq_ignore_ascii_case("anthropic") {
+        "anthropic-messages"
+    } else {
+        "openai-completions"
+    };
+    let api_key = config.api_key.trim().to_string();
+
+    let source_path = resolve_openclaw_config_path();
+    let raw = std::fs::read_to_string(&source_path)
+        .map_err(|error| format!("无法读取 openclaw.json: {error}"))?;
+    let mut parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+    let providers = root
+        .entry("models")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .and_then(|models| {
+            Some(
+                models
+                    .entry("providers")
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()?,
+            )
+        })
+        .ok_or("openclaw.json 的 models.providers 不是对象")?;
+
+    let target_key = providers
+        .keys()
+        .find(|key| key.eq_ignore_ascii_case(&normalized_provider_id))
+        .cloned()
+        .unwrap_or_else(|| normalized_provider_id.to_string());
+    let provider = providers
+        .entry(target_key.clone())
+        .or_insert_with(|| serde_json::json!({}));
+    let provider_obj = provider
+        .as_object_mut()
+        .ok_or("provider 配置不是对象")?;
+    provider_obj.insert("name".to_string(), Value::String(normalized_name));
+    provider_obj.insert("api".to_string(), Value::String(api_kind.to_string()));
+    provider_obj.insert("baseUrl".to_string(), Value::String(normalized_base_url));
+    provider_obj.insert("apiKey".to_string(), Value::String(api_key));
+    provider_obj.insert(
+        "models".to_string(),
+        serde_json::json!([{
+            "id": model,
+            "name": model
+        }]),
+    );
+
+    if let Some(models_obj) = root.get_mut("models").and_then(Value::as_object_mut) {
+        let default_model_ref = format!("{}/{}", target_key, model);
+        models_obj.insert("default".to_string(), Value::String(default_model_ref));
+    }
 
     let output = serde_json::to_string_pretty(&parsed)
         .map_err(|error| format!("序列化 openclaw.json 失败: {error}"))?;
@@ -4560,7 +5682,7 @@ fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result
     let section = section
         .as_deref()
         .map(str::trim)
-        .filter(|value| matches!(*value, "overview" | "platforms" | "staff" | "tasks"))
+        .filter(|value| matches!(*value, "overview" | "platforms" | "staff" | "channels" | "bindings" | "tasks"))
         .unwrap_or("platforms");
     let payload = ConsoleWindowOpenPayload {
         section: section.to_string(),
@@ -5303,7 +6425,14 @@ pub fn run() {
             check_openclaw_gateway,
             read_local_audio_file,
             load_openclaw_platforms_snapshot,
+            load_openclaw_channel_accounts_snapshot,
+            load_openclaw_channel_form_values,
+            save_openclaw_channel_config,
+            save_openclaw_channel_binding,
+            delete_openclaw_channel_account_config,
+            delete_openclaw_channel_config,
             save_openclaw_provider_base_url,
+            save_openclaw_provider_config,
             load_openclaw_message_logs,
             load_staff_snapshot,
             load_task_snapshot,
@@ -5319,6 +6448,14 @@ pub fn run() {
             open_external_url
         ])
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_autostart::init(
+                    tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                    None::<Vec<&str>>,
+                ))
+                .map_err(|error| error.to_string())?;
+
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_decorations(false);
                 let _ = window.set_always_on_top(true);

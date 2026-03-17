@@ -31,6 +31,13 @@ import theBodyRisesAndFallsConfig from "../images/animate/the_body_rises_and_fal
 import theBodyRisesAndFallsSprite from "../images/animate/the_body_rises_and_falls/sprite.png";
 import winkQuietlyConfig from "../images/animate/wink_quietly/index.json";
 import winkQuietlySprite from "../images/animate/wink_quietly/sprite.png";
+import feishuChannelIcon from "../images/channels/feishu.svg";
+import telegramChannelIcon from "../images/channels/telegram.svg";
+import discordChannelIcon from "../images/channels/discord.svg";
+import whatsappChannelIcon from "../images/channels/whatsapp.svg";
+import dingtalkChannelIcon from "../images/channels/dingtalk.svg";
+import wecomChannelIcon from "../images/channels/wecom.svg";
+import qqBotChannelIcon from "../images/channels/qq.svg";
 import { usePetSound } from "../composables/usePetSound";
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
 import {
@@ -90,8 +97,55 @@ type ConsoleSection =
   | "overview"
   | "platforms"
   | "staff"
+  | "channels"
   | "bindings"
   | "tasks";
+
+type MessageChannelType = "feishu" | "telegram" | "discord" | "whatsapp" | "dingtalk" | "wecom" | "qqbot";
+
+type MessageChannelField = {
+  key: string;
+  label: string;
+  placeholder: string;
+  required?: boolean;
+  secret?: boolean;
+  description?: string;
+  envVar?: string;
+};
+
+type MessageChannelCatalogItem = {
+  id: MessageChannelType;
+  name: string;
+  description: string;
+  icon: string;
+  plugin?: boolean;
+  featured?: boolean;
+  docsUrl?: string;
+  instructions?: string[];
+  fields?: MessageChannelField[];
+};
+
+type ChannelAccountSnapshotItem = {
+  accountId: string;
+  name: string;
+  configured: boolean;
+  status: "connected" | "connecting" | "disconnected" | "error" | string;
+  isDefault: boolean;
+  agentId?: string;
+};
+
+type ChannelGroupSnapshotItem = {
+  channelType: string;
+  defaultAccountId: string;
+  status: "connected" | "connecting" | "disconnected" | "error" | string;
+  accounts: ChannelAccountSnapshotItem[];
+};
+
+type ChannelAccountsSnapshotResponse = {
+  sourcePath: string;
+  detail: string;
+  channels: ChannelGroupSnapshotItem[];
+};
 
 type ResourceModalKind = "memory" | "skill" | "tool";
 
@@ -435,10 +489,12 @@ type LobsterInstallGuideResponse = {
 };
 
 type LobsterInstallWizardStep = 1 | 2 | 3 | 4 | 5;
+type LobsterInstallComponentStatus = "pending" | "installing" | "installed" | "failed";
 
 type LobsterProviderOption = {
   id: string;
   name: string;
+  icon?: string;
   group: "official" | "compatible" | "cn" | "local" | "custom";
   protocol: PlatformProtocol;
   defaultBaseUrl: string;
@@ -449,6 +505,9 @@ type LobsterProviderOption = {
   pathPrefix: string;
   requiresApiKey: boolean;
 };
+
+type AppLocale = "zh-CN" | "en-US" | "ja-JP";
+type AppTheme = "light" | "dark" | "system";
 
 type OpenClawMessageLogResponse = {
   detail: string;
@@ -700,6 +759,7 @@ const platforms = ref<PlatformConfig[]>([]);
 const openClawProviderIdMap = ref<Record<string, string>>({});
 const platformDirectBaseUrlMap = ref<Record<string, string>>(loadPlatformDirectBaseUrlMap());
 const staffMembers = ref<StaffMemberSnapshot[]>([]);
+const channelGroups = ref<ChannelGroupSnapshotItem[]>([]);
 const recentOutputModalMemberId = ref<string | null>(null);
 const petBindingCode = ref("");
 const bindingCodeDraft = ref("");
@@ -725,6 +785,15 @@ const editingPlatformId = ref<string | null>(null);
 const platformForm = ref<PlatformDraft>(createPlatformDraft());
 const showPlatformTips = ref(false);
 const isPlatformModalOpen = ref(false);
+const isChannelConfigModalOpen = ref(false);
+const channelConfigEditingType = ref<MessageChannelType | null>(null);
+const channelConfigEditingAccountId = ref("");
+const channelConfigAllowEditAccountId = ref(false);
+const channelConfigExistingAccountIds = ref<string[]>([]);
+const channelConfigForm = ref<Record<string, string>>({});
+const channelConfigError = ref("");
+const isChannelConfigSaving = ref(false);
+const channelConfigSecretVisibility = ref<Record<string, boolean>>({});
 const isSystemSettingsOpen = ref(false);
 
 const OPENCLAW_TOOLS_PROFILE_PRESETS: OpenClawToolsProfileOption[] = [
@@ -765,6 +834,531 @@ function safeLocalStorageSetItem(key: string, value: string) {
   } catch {
     // Ignore storage write failures in restricted environments.
   }
+}
+
+const APP_LOCALE_STORAGE_KEY = "keai.desktop-pet.locale";
+const APP_LOCALE_OPTIONS: AppLocale[] = ["zh-CN", "en-US", "ja-JP"];
+const APP_THEME_STORAGE_KEY = "keai.desktop-pet.theme";
+const APP_THEME_OPTIONS: AppTheme[] = ["light", "dark", "system"];
+const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
+  "zh-CN": {
+    "locale.zh-CN": "中文",
+    "locale.en-US": "English",
+    "locale.ja-JP": "日本語",
+    "context.chat": "聊天",
+    "context.platforms": "代理配置",
+    "context.channels": "消息频道",
+    "context.bindings": "宠物绑定",
+    "context.lobster": "龙虾配置",
+    "context.logs": "日志分析",
+    "context.subscription": "订阅推荐",
+    "context.system": "系统设置",
+    "context.quit": "退出",
+    "console.section.overview": "总览",
+    "console.section.platforms": "代理配置",
+    "console.section.staff": "员工管理",
+    "console.section.channels": "消息频道",
+    "console.section.bindings": "宠物绑定",
+    "console.section.tasks": "任务管理",
+    "lobster.action.install.title": "龙虾安装",
+    "lobster.action.install.description": "参考 ClawPet 引导安装流程，优先检测环境，再执行安装。",
+    "lobster.action.install.button": "开始安装",
+    "lobster.action.restart_gateway.title": "重启网关",
+    "lobster.action.restart_gateway.description": "优先执行 `openclaw gateway restart`，失败时自动回退 stop/start。",
+    "lobster.action.restart_gateway.button": "立即重启",
+    "lobster.action.auto_fix.title": "自动修复",
+    "lobster.action.auto_fix.description": "执行 `openclaw doctor --fix --yes --non-interactive` 自动修复常见问题。",
+    "lobster.action.auto_fix.button": "开始修复",
+    "lobster.action.backup.title": "龙虾备份",
+    "lobster.action.backup.description": "将当前 `~/.openclaw` 备份到独立目录，便于回滚。",
+    "lobster.action.backup.button": "创建备份",
+    "lobster.action.restore.title": "备份恢复",
+    "lobster.action.restore.description": "从选中的备份恢复配置，恢复前会自动保留当前目录快照。",
+    "lobster.action.restore.button": "执行恢复",
+    "lobster.action.upgrade.title": "升级龙虾",
+    "lobster.action.upgrade.description": "尝试使用 npm/pnpm/yarn 升级 OpenClaw 到最新版本。",
+    "lobster.action.upgrade.button": "开始升级",
+    "wizard.step.1.title": "欢迎使用 ClawPet",
+    "wizard.step.1.description": "ClewPet 是 OpenClaw 的图形助手，让你养龙虾就像“抓娃娃”一样简单好玩！",
+    "wizard.step.2.title": "环境检查",
+    "wizard.step.2.description": "参照 ClawPet 先检查运行环境",
+    "wizard.step.3.title": "AI 提供商",
+    "wizard.step.3.description": "配置安装后的默认 AI 服务",
+    "wizard.step.4.title": "设置中",
+    "wizard.step.4.description": "安装必要组件",
+    "wizard.step.5.title": "准备就绪！",
+    "wizard.step.5.description": "ClawPet 已准备好使用",
+    "wizard.welcome.title": "欢迎使用 ClawPet",
+    "wizard.welcome.subtitle": "ClawPet 是 OpenClaw 的图形界面，将通过 1-5 步完成安装与配置。",
+    "wizard.welcome.feature1": "无需命令行，可视化管理",
+    "wizard.welcome.feature2": "现代化界面，极简体验",
+    "wizard.welcome.feature3": "一键安装技能与插件",
+    "wizard.welcome.feature4": "跨平台支持",
+    "wizard.risk.title": "权限风险声明",
+    "wizard.risk.body": "OpenClaw 不是普通聊天机器人，而是高权限 Agent，它可以：",
+    "wizard.risk.item1": "读写你电脑上的文件",
+    "wizard.risk.item2": "调用系统命令、控制浏览器",
+    "wizard.risk.item3": "调用外部 API 或操作第三方软件（飞书 / QQ / Slack 等）",
+    "wizard.risk.item4": "访问你的账号环境变量、密钥等敏感信息",
+    "wizard.risk.item5": "使用大模型 API 并产生费用",
+    "wizard.risk.accept": "我已了解并接受以上风险，继续开始配置。",
+    "wizard.button.cancel": "取消",
+    "wizard.button.back": "返回",
+    "wizard.button.next": "下一步",
+    "wizard.button.start_install": "开始安装",
+    "wizard.button.finish": "完成",
+    "wizard.button.get_started": "开始使用",
+    "wizard.check.success": "通过",
+    "wizard.check.warning": "注意",
+    "wizard.check.failed": "失败",
+    "wizard.runtime.title": "检查环境",
+    "wizard.runtime.lead": "先确认运行条件，再进入安装步骤。",
+    "wizard.runtime.checking": "检查中...",
+    "wizard.runtime.recheck": "重新检查",
+    "wizard.runtime.ready": "环境检查通过，可继续下一步。",
+    "wizard.runtime.blocked": "仍有检查项未通过，请先修复后继续。",
+    "wizard.runtime.check_count_unit": "项检查",
+    "wizard.runtime.empty": "点击“重新检查”加载环境检查结果。",
+    "wizard.provider.title": "AI 提供商",
+    "wizard.provider.lead": "配置您的默认模型渠道，安装完成后可直接使用。",
+    "wizard.provider.need_key": "需要 API 密钥",
+    "wizard.provider.no_key": "支持免密钥接入",
+    "wizard.provider.field.provider": "模型提供商",
+    "wizard.provider.keep_current": "保持当前配置",
+    "wizard.provider.field.model": "模型 ID",
+    "wizard.provider.model_hint": "提供商的模型标识符（例如 deepseek-ai/DeepSeek-V3）",
+    "wizard.provider.field.base_url": "API Base URL",
+    "wizard.provider.field.api_key": "API 密钥",
+    "wizard.provider.no_key_hint": "当前提供商支持 OAuth 或本地调用，可留空 API 密钥。",
+    "wizard.provider.protocol": "协议",
+    "wizard.provider.path_prefix": "路径前缀",
+    "wizard.provider.docs": "查看接入文档",
+    "wizard.provider.saving": "保存中...",
+    "wizard.provider.saved": "已保存，可继续下一步",
+    "wizard.provider.save": "验证并保存",
+    "wizard.provider.save_simple": "保存",
+    "wizard.provider.skip": "跳过设置",
+    "wizard.provider.skip_done": "已跳过 AI 提供商设置，可继续下一步。",
+    "wizard.provider.key_tip": "您的 API 密钥仅保存在本地机器。",
+    "wizard.installing.title": "安装必要组件",
+    "wizard.installing.subtitle": "正在设置 AI 助手所需的工具",
+    "wizard.installing.progress": "进度",
+    "wizard.installing.wait": "这可能需要一点时间...",
+    "wizard.installing.status.pending": "等待中",
+    "wizard.installing.status.installing": "安装中...",
+    "wizard.installing.status.installed": "已安装",
+    "wizard.installing.status.failed": "失败",
+    "wizard.installing.component.opencode.name": "OpenCode",
+    "wizard.installing.component.opencode.description": "AI 编程助手后端",
+    "wizard.installing.component.python_env.name": "Python 环境",
+    "wizard.installing.component.python_env.description": "技能所需的 Python 运行时",
+    "wizard.installing.component.code_assist.name": "代码辅助",
+    "wizard.installing.component.code_assist.description": "代码分析与建议",
+    "wizard.installing.component.file_tools.name": "文件工具",
+    "wizard.installing.component.file_tools.description": "文件操作与管理",
+    "wizard.installing.component.terminal.name": "终端",
+    "wizard.installing.component.terminal.description": "Shell 命令执行",
+    "wizard.complete.title": "设置完成！",
+    "wizard.complete.subtitle": "ClawPet 已配置并准备就绪。您现在可以开始与您的 AI 助手聊天了。",
+    "wizard.complete.provider": "AI 提供商",
+    "wizard.complete.components": "组件",
+    "wizard.complete.gateway": "网关",
+    "wizard.complete.gateway.running": "运行中",
+    "wizard.complete.gateway.offline": "未运行",
+    "wizard.complete.footer": "您可以在设置中自定义技能并连接渠道",
+    "system.settings.title": "系统设置",
+    "system.settings.general": "通用",
+    "system.settings.theme": "主题",
+    "system.settings.theme.light": "浅色",
+    "system.settings.theme.dark": "深色",
+    "system.settings.theme.system": "跟随系统",
+    "system.settings.language": "界面语言",
+    "system.settings.language.hint": "选择后会立即应用到整个软件界面。",
+    "system.settings.startup": "开机自动启动",
+    "system.settings.startup.hint": "登录系统后自动启动 ClawPet",
+    "system.settings.startup.unsupported": "当前环境暂不支持自动启动设置。",
+    "system.settings.pet_size": "宠物大小",
+    "system.settings.window_behavior": "窗口行为",
+    "system.settings.always_top": "始终置顶",
+    "system.settings.always_top.hint": "宠物窗口保持在所有应用上方",
+    "system.settings.cancel": "取消",
+    "system.settings.save": "保存",
+    "size.small": "小",
+    "size.medium": "中",
+    "size.large": "大",
+    "status.settings_saved": "系统设置已保存。",
+    "provider.group.official": "官方",
+    "provider.group.compatible": "兼容平台",
+    "provider.group.cn": "国内渠道",
+    "provider.group.local": "本地模型",
+    "provider.group.custom": "自定义渠道",
+    "provider.option.custom": "自定义接入",
+    "provider.protocol.openai": "OpenAI 兼容",
+    "provider.protocol.anthropic": "Anthropic Messages"
+  },
+  "en-US": {
+    "locale.zh-CN": "Chinese",
+    "locale.en-US": "English",
+    "locale.ja-JP": "Japanese",
+    "context.chat": "Chat",
+    "context.platforms": "Proxy Config",
+    "context.channels": "Channels",
+    "context.bindings": "Pet Binding",
+    "context.lobster": "Lobster Config",
+    "context.logs": "Log Analysis",
+    "context.subscription": "Subscription Tips",
+    "context.system": "System Settings",
+    "context.quit": "Quit",
+    "console.section.overview": "Overview",
+    "console.section.platforms": "Proxy Config",
+    "console.section.staff": "Staff",
+    "console.section.channels": "Channels",
+    "console.section.bindings": "Bindings",
+    "console.section.tasks": "Tasks",
+    "lobster.action.install.title": "Install Lobster",
+    "lobster.action.install.description": "Follow the ClawPet guided flow: check environment first, then install.",
+    "lobster.action.install.button": "Start Install",
+    "lobster.action.restart_gateway.title": "Restart Gateway",
+    "lobster.action.restart_gateway.description": "Run `openclaw gateway restart`; fallback to stop/start if needed.",
+    "lobster.action.restart_gateway.button": "Restart Now",
+    "lobster.action.auto_fix.title": "Auto Fix",
+    "lobster.action.auto_fix.description": "Run `openclaw doctor --fix --yes --non-interactive` to fix common issues.",
+    "lobster.action.auto_fix.button": "Start Fix",
+    "lobster.action.backup.title": "Backup Lobster",
+    "lobster.action.backup.description": "Backup current `~/.openclaw` for rollback.",
+    "lobster.action.backup.button": "Create Backup",
+    "lobster.action.restore.title": "Restore Backup",
+    "lobster.action.restore.description": "Restore selected backup; a snapshot is created before restore.",
+    "lobster.action.restore.button": "Restore",
+    "lobster.action.upgrade.title": "Upgrade Lobster",
+    "lobster.action.upgrade.description": "Try npm/pnpm/yarn to upgrade OpenClaw to latest.",
+    "lobster.action.upgrade.button": "Start Upgrade",
+    "wizard.step.1.title": "Welcome to ClawPet",
+    "wizard.step.1.description": "ClewPet is OpenClaw’s visual helper, making lobster-raising as easy and fun as a claw machine!",
+    "wizard.step.2.title": "Environment Check",
+    "wizard.step.2.description": "Check runtime requirements before installation",
+    "wizard.step.3.title": "AI Provider",
+    "wizard.step.3.description": "Configure default AI service after installation",
+    "wizard.step.4.title": "Setting Up",
+    "wizard.step.4.description": "Installing essential components",
+    "wizard.step.5.title": "Ready!",
+    "wizard.step.5.description": "ClawPet is ready to use",
+    "wizard.welcome.title": "Welcome to ClawPet",
+    "wizard.welcome.subtitle": "ClawPet is a GUI for OpenClaw. We'll complete setup in 5 guided steps.",
+    "wizard.welcome.feature1": "No command line needed, visual management",
+    "wizard.welcome.feature2": "Modern UI with a minimal experience",
+    "wizard.welcome.feature3": "One-click install for skills and plugins",
+    "wizard.welcome.feature4": "Cross-platform support",
+    "wizard.risk.title": "Permission Risk Notice",
+    "wizard.risk.body": "OpenClaw is a high-privilege agent and can:",
+    "wizard.risk.item1": "Read/write files on your computer",
+    "wizard.risk.item2": "Run system commands and control browsers",
+    "wizard.risk.item3": "Call external APIs or third-party apps",
+    "wizard.risk.item4": "Access env vars and sensitive keys",
+    "wizard.risk.item5": "Use LLM APIs and incur costs",
+    "wizard.risk.accept": "I understand and accept the risks above.",
+    "wizard.button.cancel": "Cancel",
+    "wizard.button.back": "Back",
+    "wizard.button.next": "Next",
+    "wizard.button.start_install": "Start Install",
+    "wizard.button.finish": "Finish",
+    "wizard.button.get_started": "Get Started",
+    "wizard.check.success": "Pass",
+    "wizard.check.warning": "Warn",
+    "wizard.check.failed": "Fail",
+    "wizard.runtime.title": "Environment Check",
+    "wizard.runtime.lead": "Confirm requirements before installation.",
+    "wizard.runtime.checking": "Checking...",
+    "wizard.runtime.recheck": "Re-check",
+    "wizard.runtime.ready": "Environment is ready. You can continue.",
+    "wizard.runtime.blocked": "Some checks are not passed yet.",
+    "wizard.runtime.check_count_unit": "checks",
+    "wizard.runtime.empty": "Click “Re-check” to load results.",
+    "wizard.provider.title": "AI Provider",
+    "wizard.provider.lead": "Set the default provider for immediate use.",
+    "wizard.provider.need_key": "API key required",
+    "wizard.provider.no_key": "Keyless supported",
+    "wizard.provider.field.provider": "Provider",
+    "wizard.provider.keep_current": "Keep current config",
+    "wizard.provider.field.model": "Model ID",
+    "wizard.provider.model_hint": "Provider model identifier (e.g. deepseek-ai/DeepSeek-V3)",
+    "wizard.provider.field.base_url": "API Base URL",
+    "wizard.provider.field.api_key": "API Key",
+    "wizard.provider.no_key_hint": "This provider supports OAuth/local mode. API key can be empty.",
+    "wizard.provider.protocol": "Protocol",
+    "wizard.provider.path_prefix": "Path Prefix",
+    "wizard.provider.docs": "View Docs",
+    "wizard.provider.saving": "Saving...",
+    "wizard.provider.saved": "Saved, continue to next step",
+    "wizard.provider.save": "Validate & Save",
+    "wizard.provider.save_simple": "Save",
+    "wizard.provider.skip": "Skip Setup",
+    "wizard.provider.skip_done": "AI provider setup skipped. You can continue.",
+    "wizard.provider.key_tip": "API keys are stored locally only.",
+    "wizard.installing.title": "Installing Essential Components",
+    "wizard.installing.subtitle": "Setting up the tools required by your AI assistant",
+    "wizard.installing.progress": "Progress",
+    "wizard.installing.wait": "This may take a little while...",
+    "wizard.installing.status.pending": "Pending",
+    "wizard.installing.status.installing": "Installing...",
+    "wizard.installing.status.installed": "Installed",
+    "wizard.installing.status.failed": "Failed",
+    "wizard.installing.component.opencode.name": "OpenCode",
+    "wizard.installing.component.opencode.description": "Backend for AI coding assistant",
+    "wizard.installing.component.python_env.name": "Python Runtime",
+    "wizard.installing.component.python_env.description": "Python runtime required by skills",
+    "wizard.installing.component.code_assist.name": "Code Assist",
+    "wizard.installing.component.code_assist.description": "Code analysis and suggestions",
+    "wizard.installing.component.file_tools.name": "File Tools",
+    "wizard.installing.component.file_tools.description": "File operations and management",
+    "wizard.installing.component.terminal.name": "Terminal",
+    "wizard.installing.component.terminal.description": "Shell command execution",
+    "wizard.complete.title": "Setup Complete!",
+    "wizard.complete.subtitle": "ClawPet is configured and ready. You can start chatting with your AI assistant now.",
+    "wizard.complete.provider": "AI Provider",
+    "wizard.complete.components": "Components",
+    "wizard.complete.gateway": "Gateway",
+    "wizard.complete.gateway.running": "Running",
+    "wizard.complete.gateway.offline": "Offline",
+    "wizard.complete.footer": "You can customize skills and channels in Settings.",
+    "system.settings.title": "System Settings",
+    "system.settings.general": "General",
+    "system.settings.theme": "Theme",
+    "system.settings.theme.light": "Light",
+    "system.settings.theme.dark": "Dark",
+    "system.settings.theme.system": "Use System",
+    "system.settings.language": "Language",
+    "system.settings.language.hint": "Changes apply to the whole app immediately.",
+    "system.settings.startup": "Launch on Login",
+    "system.settings.startup.hint": "Start ClawPet automatically after system login",
+    "system.settings.startup.unsupported": "Launch on login is not supported in this environment.",
+    "system.settings.pet_size": "Pet Size",
+    "system.settings.window_behavior": "Window Behavior",
+    "system.settings.always_top": "Always On Top",
+    "system.settings.always_top.hint": "Keep the pet window above all apps",
+    "system.settings.cancel": "Cancel",
+    "system.settings.save": "Save",
+    "size.small": "Small",
+    "size.medium": "Medium",
+    "size.large": "Large",
+    "status.settings_saved": "System settings saved.",
+    "provider.group.official": "Official",
+    "provider.group.compatible": "Compatible",
+    "provider.group.cn": "China",
+    "provider.group.local": "Local",
+    "provider.group.custom": "Custom",
+    "provider.option.custom": "Custom (Manual Setup)",
+    "provider.protocol.openai": "OpenAI Compatible",
+    "provider.protocol.anthropic": "Anthropic Messages"
+  },
+  "ja-JP": {
+    "locale.zh-CN": "中国語",
+    "locale.en-US": "英語",
+    "locale.ja-JP": "日本語",
+    "context.chat": "チャット",
+    "context.platforms": "プロキシ設定",
+    "context.channels": "メッセージチャンネル",
+    "context.bindings": "ペット連携",
+    "context.lobster": "ロブスター設定",
+    "context.logs": "ログ分析",
+    "context.subscription": "購読ガイド",
+    "context.system": "システム設定",
+    "context.quit": "終了",
+    "console.section.overview": "概要",
+    "console.section.platforms": "プロキシ設定",
+    "console.section.staff": "スタッフ",
+    "console.section.channels": "メッセージチャンネル",
+    "console.section.bindings": "連携",
+    "console.section.tasks": "タスク",
+    "lobster.action.install.title": "ロブスターをインストール",
+    "lobster.action.install.description": "ClawPet のガイド手順で、先に環境確認してからインストールします。",
+    "lobster.action.install.button": "インストール開始",
+    "lobster.action.restart_gateway.title": "ゲートウェイ再起動",
+    "lobster.action.restart_gateway.description": "`openclaw gateway restart` を優先し、失敗時は stop/start にフォールバックします。",
+    "lobster.action.restart_gateway.button": "今すぐ再起動",
+    "lobster.action.auto_fix.title": "自動修復",
+    "lobster.action.auto_fix.description": "`openclaw doctor --fix --yes --non-interactive` を実行して一般的な問題を修復します。",
+    "lobster.action.auto_fix.button": "修復開始",
+    "lobster.action.backup.title": "ロブスターをバックアップ",
+    "lobster.action.backup.description": "現在の `~/.openclaw` をバックアップします。",
+    "lobster.action.backup.button": "バックアップ作成",
+    "lobster.action.restore.title": "バックアップ復元",
+    "lobster.action.restore.description": "選択したバックアップを復元します（復元前にスナップショット作成）。",
+    "lobster.action.restore.button": "復元実行",
+    "lobster.action.upgrade.title": "ロブスターをアップグレード",
+    "lobster.action.upgrade.description": "npm/pnpm/yarn で OpenClaw を最新化します。",
+    "lobster.action.upgrade.button": "アップグレード開始",
+    "wizard.step.1.title": "ClawPet へようこそ",
+    "wizard.step.1.description": "ClewPet は OpenClaw のビジュアルアシスタント。ロブスター育成をクレーンゲームのように簡単で楽しくします！",
+    "wizard.step.2.title": "環境チェック",
+    "wizard.step.2.description": "インストール前に実行環境を確認します",
+    "wizard.step.3.title": "AI プロバイダー",
+    "wizard.step.3.description": "インストール後の既定 AI を設定します",
+    "wizard.step.4.title": "セットアップ中",
+    "wizard.step.4.description": "必要コンポーネントをインストール",
+    "wizard.step.5.title": "準備完了！",
+    "wizard.step.5.description": "ClawPet は利用準備ができました",
+    "wizard.welcome.title": "ClawPet へようこそ",
+    "wizard.welcome.subtitle": "ClawPet は OpenClaw の GUI です。5 ステップでセットアップします。",
+    "wizard.welcome.feature1": "コマンドライン不要、可視化管理",
+    "wizard.welcome.feature2": "モダンなUI、シンプル体験",
+    "wizard.welcome.feature3": "スキルとプラグインをワンクリック導入",
+    "wizard.welcome.feature4": "クロスプラットフォーム対応",
+    "wizard.risk.title": "権限リスク通知",
+    "wizard.risk.body": "OpenClaw は高権限エージェントであり、次の操作が可能です：",
+    "wizard.risk.item1": "PC 上のファイルの読み書き",
+    "wizard.risk.item2": "システムコマンド実行・ブラウザ制御",
+    "wizard.risk.item3": "外部 API / サードパーティアプリ操作",
+    "wizard.risk.item4": "環境変数や秘密鍵などへのアクセス",
+    "wizard.risk.item5": "LLM API 利用による課金発生",
+    "wizard.risk.accept": "上記リスクを理解し同意します。",
+    "wizard.button.cancel": "キャンセル",
+    "wizard.button.back": "戻る",
+    "wizard.button.next": "次へ",
+    "wizard.button.start_install": "インストール開始",
+    "wizard.button.finish": "完了",
+    "wizard.button.get_started": "開始する",
+    "wizard.check.success": "正常",
+    "wizard.check.warning": "注意",
+    "wizard.check.failed": "失敗",
+    "wizard.runtime.title": "環境チェック",
+    "wizard.runtime.lead": "インストール前に実行条件を確認します。",
+    "wizard.runtime.checking": "チェック中...",
+    "wizard.runtime.recheck": "再チェック",
+    "wizard.runtime.ready": "環境チェックに合格しました。次へ進めます。",
+    "wizard.runtime.blocked": "未解決のチェック項目があります。",
+    "wizard.runtime.check_count_unit": "項目",
+    "wizard.runtime.empty": "「再チェック」を押して結果を読み込みます。",
+    "wizard.provider.title": "AI プロバイダー",
+    "wizard.provider.lead": "インストール後に使う既定のプロバイダーを設定します。",
+    "wizard.provider.need_key": "API キー必須",
+    "wizard.provider.no_key": "キーなし接続対応",
+    "wizard.provider.field.provider": "プロバイダー",
+    "wizard.provider.keep_current": "現在の設定を維持",
+    "wizard.provider.field.model": "モデル ID",
+    "wizard.provider.model_hint": "プロバイダーのモデル識別子（例: deepseek-ai/DeepSeek-V3）",
+    "wizard.provider.field.base_url": "API Base URL",
+    "wizard.provider.field.api_key": "API キー",
+    "wizard.provider.no_key_hint": "このプロバイダーは OAuth / ローカル接続対応で、API キーは空でも可。",
+    "wizard.provider.protocol": "プロトコル",
+    "wizard.provider.path_prefix": "パス接頭辞",
+    "wizard.provider.docs": "接続ドキュメント",
+    "wizard.provider.saving": "保存中...",
+    "wizard.provider.saved": "保存済み、次へ進めます",
+    "wizard.provider.save": "検証して保存",
+    "wizard.provider.save_simple": "保存",
+    "wizard.provider.skip": "設定をスキップ",
+    "wizard.provider.skip_done": "AI プロバイダー設定をスキップしました。次へ進めます。",
+    "wizard.provider.key_tip": "API キーはローカル端末にのみ保存されます。",
+    "wizard.installing.title": "必要コンポーネントをインストール",
+    "wizard.installing.subtitle": "AI アシスタントに必要なツールをセットアップ中です",
+    "wizard.installing.progress": "進捗",
+    "wizard.installing.wait": "少し時間がかかる場合があります...",
+    "wizard.installing.status.pending": "待機中",
+    "wizard.installing.status.installing": "インストール中...",
+    "wizard.installing.status.installed": "インストール済み",
+    "wizard.installing.status.failed": "失敗",
+    "wizard.installing.component.opencode.name": "OpenCode",
+    "wizard.installing.component.opencode.description": "AI コーディングアシスタントのバックエンド",
+    "wizard.installing.component.python_env.name": "Python 環境",
+    "wizard.installing.component.python_env.description": "スキル実行に必要な Python ランタイム",
+    "wizard.installing.component.code_assist.name": "コードアシスト",
+    "wizard.installing.component.code_assist.description": "コード解析と提案",
+    "wizard.installing.component.file_tools.name": "ファイルツール",
+    "wizard.installing.component.file_tools.description": "ファイル操作と管理",
+    "wizard.installing.component.terminal.name": "ターミナル",
+    "wizard.installing.component.terminal.description": "Shell コマンド実行",
+    "wizard.complete.title": "セットアップ完了！",
+    "wizard.complete.subtitle": "ClawPet の設定が完了しました。今すぐ AI アシスタントとの会話を始められます。",
+    "wizard.complete.provider": "AI プロバイダー",
+    "wizard.complete.components": "コンポーネント",
+    "wizard.complete.gateway": "ゲートウェイ",
+    "wizard.complete.gateway.running": "稼働中",
+    "wizard.complete.gateway.offline": "停止中",
+    "wizard.complete.footer": "設定画面でスキルと接続チャネルをカスタマイズできます。",
+    "system.settings.title": "システム設定",
+    "system.settings.general": "一般",
+    "system.settings.theme": "テーマ",
+    "system.settings.theme.light": "ライト",
+    "system.settings.theme.dark": "ダーク",
+    "system.settings.theme.system": "システムに従う",
+    "system.settings.language": "言語",
+    "system.settings.language.hint": "変更はアプリ全体に即時反映されます。",
+    "system.settings.startup": "ログイン時に起動",
+    "system.settings.startup.hint": "システムログイン後に ClawPet を自動起動",
+    "system.settings.startup.unsupported": "この環境では自動起動設定を利用できません。",
+    "system.settings.pet_size": "ペットサイズ",
+    "system.settings.window_behavior": "ウィンドウ動作",
+    "system.settings.always_top": "常に前面表示",
+    "system.settings.always_top.hint": "ペットウィンドウを常に最前面に保つ",
+    "system.settings.cancel": "キャンセル",
+    "system.settings.save": "保存",
+    "size.small": "小",
+    "size.medium": "中",
+    "size.large": "大",
+    "status.settings_saved": "システム設定を保存しました。",
+    "provider.group.official": "公式",
+    "provider.group.compatible": "互換プラットフォーム",
+    "provider.group.cn": "中国向け",
+    "provider.group.local": "ローカル",
+    "provider.group.custom": "カスタム",
+    "provider.option.custom": "カスタム接続",
+    "provider.protocol.openai": "OpenAI 互換",
+    "provider.protocol.anthropic": "Anthropic Messages"
+  }
+};
+
+function normalizeAppLocale(value: string | null): AppLocale {
+  if (value === "en-US" || value === "ja-JP" || value === "zh-CN") {
+    return value;
+  }
+  return "zh-CN";
+}
+
+function normalizeAppTheme(value: string | null): AppTheme {
+  if (value === "light" || value === "dark" || value === "system") {
+    return value;
+  }
+  return "system";
+}
+
+function resolveAppTheme(theme: AppTheme): "light" | "dark" {
+  if (theme === "light" || theme === "dark") {
+    return theme;
+  }
+  if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
+    return "dark";
+  }
+  return "light";
+}
+
+function tr(key: string) {
+  const current = APP_I18N_MESSAGES[appLocale.value];
+  return current[key] ?? APP_I18N_MESSAGES["zh-CN"][key] ?? key;
+}
+
+function setAppLocale(nextLocale: AppLocale, options?: { persist?: boolean }) {
+  appLocale.value = nextLocale;
+  if (options?.persist !== false) {
+    safeLocalStorageSetItem(APP_LOCALE_STORAGE_KEY, nextLocale);
+  }
+}
+
+function setAppTheme(nextTheme: AppTheme, options?: { persist?: boolean }) {
+  appTheme.value = nextTheme;
+  if (options?.persist !== false) {
+    safeLocalStorageSetItem(APP_THEME_STORAGE_KEY, nextTheme);
+  }
+
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const resolvedTheme = resolveAppTheme(nextTheme);
+  const root = document.documentElement;
+  root.dataset.appTheme = nextTheme;
+  root.dataset.appThemeResolved = resolvedTheme;
+  root.style.colorScheme = resolvedTheme;
 }
 
 function loadPetSizeLevel(): PetSizeLevel {
@@ -946,6 +1540,17 @@ const lobsterInstallGuideLoading = ref(false);
 const lobsterInstallRuntimeLogs = ref("");
 const lobsterInstallRunning = ref(false);
 const lobsterInstallFinishedResult = ref<LobsterActionResult | null>(null);
+const lobsterInstallProgressValue = ref(0);
+const lobsterInstallRiskAccepted = ref(false);
+const appLocale = ref<AppLocale>(normalizeAppLocale(safeLocalStorageGetItem(APP_LOCALE_STORAGE_KEY)));
+const appTheme = ref<AppTheme>(normalizeAppTheme(safeLocalStorageGetItem(APP_THEME_STORAGE_KEY)));
+const draftAppLocale = ref<AppLocale>(appLocale.value);
+const draftAppTheme = ref<AppTheme>(appTheme.value);
+const systemSettingsPreviewBaseLocale = ref<AppLocale | null>(null);
+const systemSettingsPreviewBaseTheme = ref<AppTheme | null>(null);
+const launchOnLoginEnabled = ref(false);
+const draftLaunchOnLoginEnabled = ref(false);
+const launchOnLoginSupported = ref(false);
 const lobsterProviderPresetKey = ref("");
 const lobsterProviderForm = ref(createPlatformDraft());
 const lobsterProviderConfigured = ref(false);
@@ -975,63 +1580,286 @@ const platformPresets = getPlatformPresets();
 const globalPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "global"));
 const chinaPlatformPresets = computed(() => platformPresets.filter((preset) => preset.region === "china"));
 const openClawDefaultPlatformName = "OpenClaw 默认通道";
-const consoleSections: Array<{ id: ConsoleSection; label: string }> = [
-  { id: "overview", label: "总览" },
-  { id: "platforms", label: "代理配置" },
-  { id: "staff", label: "员工管理" },
-  { id: "bindings", label: "宠物绑定" },
-  { id: "tasks", label: "任务管理" }
+const messageChannelCatalog: MessageChannelCatalogItem[] = [
+  {
+    id: "feishu",
+    name: "Feishu / Lark",
+    description: "通过飞书官方推出的 OpenClaw 插件连接飞书/Lark 机器人",
+    icon: feishuChannelIcon,
+    plugin: true,
+    featured: true,
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/GKn8wOvHnibpPNkNkPzcAvGlnzK#Py88dTltfoJc1jxAhIBcW3Pkn7b",
+    instructions: [
+      "前往 飞书开放平台 (open.feishu.cn) 并创建企业自建应用",
+      "在应用详情页获取 App ID 和 App Secret 并填入下方",
+      "确保应用已开通“机器人”能力",
+      "保存配置后，根据网关提示扫码完成机器人创建"
+    ],
+    fields: [
+      { key: "appId", label: "应用 ID (App ID)", placeholder: "cli_xxxxxx", required: true, envVar: "FEISHU_APP_ID" },
+      { key: "appSecret", label: "应用密钥 (App Secret)", placeholder: "输入应用密钥", required: true, secret: true, envVar: "FEISHU_APP_SECRET" }
+    ]
+  },
+  {
+    id: "telegram",
+    name: "Telegram",
+    description: "使用 @BotFather 提供的机器人令牌连接 Telegram",
+    icon: telegramChannelIcon,
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/TjiGwxsMWi7hpDkDAQBc0ydMnEf#PL8ndvsEwoYVWIx1T4mcB1EvnSb",
+    instructions: [
+      "打开 Telegram 并搜索 @BotFather",
+      "发送 /newbot 并按照说明操作，复制机器人令牌",
+      "从 @userinfobot 获取你的用户 ID",
+      "将令牌和允许用户 ID 填入下方后保存"
+    ],
+    fields: [
+      { key: "botToken", label: "机器人令牌", placeholder: "123456:ABC-DEF...", required: true, secret: true, envVar: "TELEGRAM_BOT_TOKEN" },
+      { key: "allowedUsers", label: "允许的用户 ID", placeholder: "例如 123456789, 987654321", required: true }
+    ]
+  },
+  {
+    id: "discord",
+    name: "Discord",
+    description: "使用开发者门户提供的机器人令牌连接 Discord",
+    icon: discordChannelIcon,
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/BkOywJYCAiYRN9k4KTTceKPMnxg#C9zjdBRT1oqZ4VxF8q7ceRxQnLk",
+    instructions: [
+      "前往 Discord Developer Portal 创建应用并添加 Bot",
+      "复制 Bot Token，并启用 Message Content Intent",
+      "通过 OAuth2 URL Generator 生成邀请链接并拉机器人入群",
+      "填入 Token，按需补充服务器 ID 和频道 ID 后保存"
+    ],
+    fields: [
+      { key: "token", label: "机器人令牌", placeholder: "输入 Discord Bot Token", required: true, secret: true, envVar: "DISCORD_BOT_TOKEN" },
+      { key: "guildId", label: "服务器 ID", placeholder: "例如 123456789012345678" },
+      { key: "channelId", label: "频道 ID（可选）", placeholder: "例如 123456789012345678" }
+    ]
+  },
+  {
+    id: "whatsapp",
+    name: "WhatsApp",
+    description: "通过扫描二维码连接 WhatsApp（无需手机号）",
+    icon: whatsappChannelIcon,
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/ES7fwUfH8iGl8FkHYfFcyWB3n4d#doxcnsDDFbeEzqgjN6HSlyonLvc",
+    instructions: [
+      "保存配置后会自动触发二维码登录流程",
+      "在手机上打开 WhatsApp，进入“已关联设备”",
+      "扫描网关展示的二维码完成登录",
+      "登录成功后即可在 OpenClaw 接收和发送消息"
+    ],
+    fields: []
+  },
+  {
+    id: "dingtalk",
+    name: "DingTalk",
+    description: "通过 OpenClaw 渠道插件连接钉钉（Stream 模式）",
+    icon: dingtalkChannelIcon,
+    plugin: true,
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/Y5eNwiSiZidkLskrwtJc1rUln0b#doxcnr8KfaA2mNPeQUeHO83eDPh",
+    instructions: [
+      "先安装并启用 dingtalk 插件",
+      "在钉钉开发者后台创建企业内部应用并开启 Stream 模式",
+      "填写 Client ID 与 Client Secret（必填）",
+      "Robot Code / Corp ID / Agent ID 按需填写"
+    ],
+    fields: [
+      { key: "clientId", label: "Client ID (AppKey)", placeholder: "dingxxxxxx", required: true },
+      { key: "clientSecret", label: "Client Secret (AppSecret)", placeholder: "输入应用密钥", required: true, secret: true },
+      { key: "robotCode", label: "Robot Code（可选）", placeholder: "通常与 Client ID 相同" },
+      { key: "corpId", label: "Corp ID（可选）", placeholder: "dingxxxxxx" },
+      { key: "agentId", label: "Agent ID（可选）", placeholder: "123456789" }
+    ]
+  },
+  {
+    id: "wecom",
+    name: "WeCom",
+    description: "通过插件连接企业微信机器人",
+    icon: wecomChannelIcon,
+    plugin: true,
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/JTGnwoV0RixKPtkr4w7c7gpAnDc",
+    instructions: [
+      "在企业微信管理后台创建应用并获取配置",
+      "确保已启用接收消息服务器配置",
+      "填写 Bot ID 和 Secret 后保存"
+    ],
+    fields: [
+      { key: "botId", label: "机器人 Bot ID", placeholder: "ww_xxxxxx", required: true },
+      { key: "secret", label: "应用 Secret", placeholder: "输入企业微信 Secret", required: true, secret: true }
+    ]
+  },
+  {
+    id: "qqbot",
+    name: "QQ Bot",
+    description: "通过 @sliverp/qqbot 插件连接 QQ 机器人",
+    icon: qqBotChannelIcon,
+    plugin: true,
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/KPIJwlyiGiupMrkiS9ice39Zn2c",
+    instructions: [
+      "前往 QQ 机器人开放平台创建应用",
+      "获取 App ID 与 Client Secret",
+      "填写凭证后保存并连接"
+    ],
+    fields: [
+      { key: "appId", label: "App ID", placeholder: "输入 QQ 机器人 App ID", required: true },
+      { key: "clientSecret", label: "Client Secret", placeholder: "输入 Client Secret", required: true, secret: true }
+    ]
+  }
 ];
-const lobsterActionCards: Array<{ id: LobsterActionId; title: string; description: string; buttonLabel: string; danger?: boolean }> = [
+const MESSAGE_CHANNEL_ALIASES: Record<string, MessageChannelType> = {
+  feishu: "feishu",
+  lark: "feishu",
+  telegram: "telegram",
+  discord: "discord",
+  whatsapp: "whatsapp",
+  dingtalk: "dingtalk",
+  wecom: "wecom",
+  qq: "qqbot",
+  qqbot: "qqbot",
+  "qq bot": "qqbot"
+};
+const featuredMessageChannels = computed(() => messageChannelCatalog.filter((item) => item.featured));
+const supportedMessageChannels = computed(() => messageChannelCatalog.filter((item) => !item.featured));
+const configuredMessageChannelIds = computed(() => {
+  const configured = new Set<MessageChannelType>();
+  for (const group of channelGroups.value) {
+    const normalized = normalizeMessageChannelType(group.channelType);
+    if (normalized) {
+      configured.add(normalized);
+    }
+  }
+  return configured;
+});
+const channelGroupsByType = computed(() =>
+  Object.fromEntries(channelGroups.value.map((group) => [group.channelType.trim().toLowerCase(), group]))
+);
+const activeChannelConfigMeta = computed(
+  () => messageChannelCatalog.find((item) => item.id === channelConfigEditingType.value) ?? null
+);
+const consoleSections = computed<Array<{ id: ConsoleSection; label: string }>>(() => [
+  { id: "overview", label: tr("console.section.overview") },
+  { id: "platforms", label: tr("console.section.platforms") },
+  { id: "staff", label: tr("console.section.staff") },
+  { id: "channels", label: tr("console.section.channels") },
+  { id: "bindings", label: tr("console.section.bindings") },
+  { id: "tasks", label: tr("console.section.tasks") }
+]);
+const lobsterActionCards = computed<Array<{ id: LobsterActionId; title: string; description: string; buttonLabel: string; danger?: boolean }>>(() => [
   {
     id: "install",
-    title: "龙虾安装",
-    description: "参考 ClawPet 引导安装流程，优先检测环境，再执行安装。",
-    buttonLabel: "开始安装"
+    title: tr("lobster.action.install.title"),
+    description: tr("lobster.action.install.description"),
+    buttonLabel: tr("lobster.action.install.button")
   },
   {
     id: "restart_gateway",
-    title: "重启网关",
-    description: "优先执行 `openclaw gateway restart`，失败时自动回退 stop/start。",
-    buttonLabel: "立即重启"
+    title: tr("lobster.action.restart_gateway.title"),
+    description: tr("lobster.action.restart_gateway.description"),
+    buttonLabel: tr("lobster.action.restart_gateway.button")
   },
   {
     id: "auto_fix",
-    title: "自动修复",
-    description: "执行 `openclaw doctor --fix --yes --non-interactive` 自动修复常见问题。",
-    buttonLabel: "开始修复"
+    title: tr("lobster.action.auto_fix.title"),
+    description: tr("lobster.action.auto_fix.description"),
+    buttonLabel: tr("lobster.action.auto_fix.button")
   },
   {
     id: "backup",
-    title: "龙虾备份",
-    description: "将当前 `~/.openclaw` 备份到独立目录，便于回滚。",
-    buttonLabel: "创建备份"
+    title: tr("lobster.action.backup.title"),
+    description: tr("lobster.action.backup.description"),
+    buttonLabel: tr("lobster.action.backup.button")
   },
   {
     id: "restore",
-    title: "备份恢复",
-    description: "从选中的备份恢复配置，恢复前会自动保留当前目录快照。",
-    buttonLabel: "执行恢复",
+    title: tr("lobster.action.restore.title"),
+    description: tr("lobster.action.restore.description"),
+    buttonLabel: tr("lobster.action.restore.button"),
     danger: true
   },
   {
     id: "upgrade",
-    title: "升级龙虾",
-    description: "尝试使用 npm/pnpm/yarn 升级 OpenClaw 到最新版本。",
-    buttonLabel: "开始升级"
+    title: tr("lobster.action.upgrade.title"),
+    description: tr("lobster.action.upgrade.description"),
+    buttonLabel: tr("lobster.action.upgrade.button")
   }
-];
-const lobsterInstallWizardSteps: Array<{ id: LobsterInstallWizardStep; title: string; description: string }> = [
-  { id: 1, title: "欢迎使用 ClawPet", description: "确认安装流程和预期结果" },
-  { id: 2, title: "环境检查", description: "参照 ClawPet 先检查运行环境" },
-  { id: 3, title: "AI 提供商", description: "配置安装后的默认 AI 服务" },
-  { id: 4, title: "执行安装", description: "正在执行 ClawPet 安装流程" },
-  { id: 5, title: "完成", description: "查看安装结果并返回操作台" }
-];
+]);
+const lobsterInstallWizardSteps = computed<Array<{ id: LobsterInstallWizardStep; title: string; description: string }>>(() => [
+  { id: 1, title: tr("wizard.step.1.title"), description: tr("wizard.step.1.description") },
+  { id: 2, title: tr("wizard.step.2.title"), description: tr("wizard.step.2.description") },
+  { id: 3, title: tr("wizard.step.3.title"), description: tr("wizard.step.3.description") },
+  { id: 4, title: tr("wizard.step.4.title"), description: tr("wizard.step.4.description") },
+  { id: 5, title: tr("wizard.step.5.title"), description: tr("wizard.step.5.description") }
+]);
+const lobsterInstallComponentItems = computed<Array<{ id: string; name: string; description: string }>>(() => [
+  {
+    id: "opencode",
+    name: tr("wizard.installing.component.opencode.name"),
+    description: tr("wizard.installing.component.opencode.description")
+  },
+  {
+    id: "python_env",
+    name: tr("wizard.installing.component.python_env.name"),
+    description: tr("wizard.installing.component.python_env.description")
+  },
+  {
+    id: "code_assist",
+    name: tr("wizard.installing.component.code_assist.name"),
+    description: tr("wizard.installing.component.code_assist.description")
+  },
+  {
+    id: "file_tools",
+    name: tr("wizard.installing.component.file_tools.name"),
+    description: tr("wizard.installing.component.file_tools.description")
+  },
+  {
+    id: "terminal",
+    name: tr("wizard.installing.component.terminal.name"),
+    description: tr("wizard.installing.component.terminal.description")
+  }
+]);
+const lobsterInstallComponentStatus = computed<LobsterInstallComponentStatus>(() => {
+  if (lobsterInstallRunning.value) {
+    return "installing";
+  }
+  if (!lobsterInstallFinishedResult.value) {
+    return "pending";
+  }
+  return lobsterInstallFinishedResult.value.success ? "installed" : "failed";
+});
+const lobsterInstallComponentStates = computed(() =>
+  lobsterInstallComponentItems.value.map((item) => ({
+    ...item,
+    status: lobsterInstallComponentStatus.value
+  }))
+);
+const lobsterInstallProgressDisplay = computed(() => {
+  if (lobsterInstallFinishedResult.value) {
+    return 100;
+  }
+  if (lobsterInstallRunning.value) {
+    return Math.max(10, Math.min(95, Math.round(lobsterInstallProgressValue.value)));
+  }
+  return 0;
+});
+const lobsterCompleteProviderSummary = computed(() => {
+  if (lobsterSelectedProviderOption.value) {
+    return getLobsterProviderOptionLabel(lobsterSelectedProviderOption.value);
+  }
+  const fallbackName = lobsterProviderForm.value.name.trim();
+  return fallbackName || tr("provider.option.custom");
+});
+const lobsterCompleteComponentsSummary = computed(() => {
+  const separator = appLocale.value === "en-US" ? ", " : "、";
+  return lobsterInstallComponentItems.value.map((item) => item.name).join(separator);
+});
+const lobsterCompleteGatewayRunning = computed(() => gatewayMonitor.value.status === "online");
+const lobsterCompleteGatewaySummary = computed(() =>
+  lobsterCompleteGatewayRunning.value ? `✓ ${tr("wizard.complete.gateway.running")}` : tr("wizard.complete.gateway.offline")
+);
 const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "anthropic",
     name: "Anthropic",
+    icon: "🤖",
     group: "official",
     protocol: "anthropic",
     defaultBaseUrl: "https://api.anthropic.com",
@@ -1045,6 +1873,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "openai",
     name: "OpenAI",
+    icon: "💚",
     group: "official",
     protocol: "openai",
     defaultBaseUrl: "https://api.openai.com",
@@ -1058,6 +1887,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "google",
     name: "Google",
+    icon: "🔷",
     group: "official",
     protocol: "openai",
     defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -1071,6 +1901,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "openrouter",
     name: "OpenRouter",
+    icon: "🌐",
     group: "compatible",
     protocol: "openai",
     defaultBaseUrl: "https://openrouter.ai/api",
@@ -1084,6 +1915,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "ark",
     name: "ByteDance Ark",
+    icon: "A",
     group: "cn",
     protocol: "openai",
     defaultBaseUrl: "https://ark.cn-beijing.volces.com/api/v3",
@@ -1097,6 +1929,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "moonshot",
     name: "Moonshot (CN)",
+    icon: "🌙",
     group: "cn",
     protocol: "openai",
     defaultBaseUrl: "https://api.moonshot.cn/v1",
@@ -1110,6 +1943,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "siliconflow",
     name: "SiliconFlow (CN)",
+    icon: "🌊",
     group: "cn",
     protocol: "openai",
     defaultBaseUrl: "https://api.siliconflow.cn/v1",
@@ -1123,6 +1957,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "minimax-portal-cn",
     name: "MiniMax (CN)",
+    icon: "☁️",
     group: "cn",
     protocol: "openai",
     defaultBaseUrl: "https://api.minimaxi.com/v1",
@@ -1136,6 +1971,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "minimax-portal",
     name: "MiniMax (Global)",
+    icon: "☁️",
     group: "compatible",
     protocol: "openai",
     defaultBaseUrl: "https://api.minimax.io/v1",
@@ -1149,6 +1985,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "qwen-portal",
     name: "Qwen (Global)",
+    icon: "☁️",
     group: "compatible",
     protocol: "openai",
     defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -1161,6 +1998,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "ollama",
     name: "Ollama",
+    icon: "🦙",
     group: "local",
     protocol: "openai",
     defaultBaseUrl: "http://localhost:11434/v1",
@@ -1173,6 +2011,7 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
   {
     id: "custom",
     name: "Custom",
+    icon: "⚙️",
     group: "custom",
     protocol: "openai",
     defaultBaseUrl: "https://api.openai.com",
@@ -1184,15 +2023,15 @@ const lobsterProviderOptions: LobsterProviderOption[] = [
     requiresApiKey: true
   }
 ];
-const lobsterProviderGroups: Array<{ key: LobsterProviderOption["group"]; label: string }> = [
-  { key: "official", label: "官方" },
-  { key: "compatible", label: "兼容平台" },
-  { key: "cn", label: "国内渠道" },
-  { key: "local", label: "本地模型" },
-  { key: "custom", label: "自定义" }
-];
+const lobsterProviderGroups = computed<Array<{ key: LobsterProviderOption["group"]; label: string }>>(() => [
+  { key: "official", label: tr("provider.group.official") },
+  { key: "compatible", label: tr("provider.group.compatible") },
+  { key: "cn", label: tr("provider.group.cn") },
+  { key: "local", label: tr("provider.group.local") },
+  { key: "custom", label: tr("provider.group.custom") }
+]);
 const lobsterProviderGroupOptions = computed(() =>
-  lobsterProviderGroups
+  lobsterProviderGroups.value
     .map((group) => ({
       ...group,
       options: lobsterProviderOptions.filter((item) => item.group === group.key)
@@ -1212,11 +2051,20 @@ const lobsterProviderModelPlaceholder = computed(
 const lobsterProviderApiKeyPlaceholder = computed(
   () => lobsterEffectiveProviderOption.value?.apiKeyPlaceholder ?? "sk-..."
 );
-const lobsterProviderProtocolLabel = computed(() =>
-  lobsterProviderForm.value.protocol === "anthropic" ? "Anthropic Messages" : "OpenAI 兼容"
+const appLocaleOptions = computed(() =>
+  APP_LOCALE_OPTIONS.map((value) => ({
+    value,
+    label: tr(`locale.${value}`)
+  }))
+);
+const appThemeOptions = computed(() =>
+  APP_THEME_OPTIONS.map((value) => ({
+    value,
+    label: tr(`system.settings.theme.${value}`)
+  }))
 );
 const lobsterInstallCanGoNext = computed(() => {
-  if (lobsterInstallWizardStep.value === 1) return true;
+  if (lobsterInstallWizardStep.value === 1) return lobsterInstallRiskAccepted.value;
   if (lobsterInstallWizardStep.value === 2) return Boolean(lobsterInstallGuide.value?.ready);
   if (lobsterInstallWizardStep.value === 3) return lobsterProviderConfigured.value;
   if (lobsterInstallWizardStep.value === 4) return false;
@@ -1224,14 +2072,15 @@ const lobsterInstallCanGoNext = computed(() => {
 });
 const lobsterProviderCanSave = computed(() =>
   lobsterProviderForm.value.name.trim().length > 0 &&
+  lobsterProviderForm.value.baseUrl.trim().length > 0 &&
   lobsterProviderForm.value.model.trim().length > 0 &&
   (!lobsterProviderRequiresApiKey.value || lobsterProviderForm.value.apiKey.trim().length > 0)
 );
 const lobsterInstallStepTitle = computed(
-  () => lobsterInstallWizardSteps.find((item) => item.id === lobsterInstallWizardStep.value)?.title ?? "安装向导"
+  () => lobsterInstallWizardSteps.value.find((item) => item.id === lobsterInstallWizardStep.value)?.title ?? tr("wizard.step.1.title")
 );
 const lobsterInstallStepDescription = computed(
-  () => lobsterInstallWizardSteps.find((item) => item.id === lobsterInstallWizardStep.value)?.description ?? ""
+  () => lobsterInstallWizardSteps.value.find((item) => item.id === lobsterInstallWizardStep.value)?.description ?? ""
 );
 const subscriptionReferenceUrl = "https://mp.weixin.qq.com/s/AD4nB87oGu4s40Dvo4p2PA?scene=1";
 const subscriptionDataUpdatedAt = "2026-03-17";
@@ -2399,6 +3248,7 @@ let panelMoveStart = { x: 0, y: 0, panelX: 0, panelY: 0 };
 let panelResizeStart = { x: 0, y: 0, width: 0, height: 0 };
 let gatewayMonitorTimer = 0;
 let runtimeLogTimer = 0;
+let lobsterInstallProgressTimer = 0;
 let runtimeLogFollowTimer = 0;
 let runtimeLogRefreshTask: Promise<RequestLog[]> | null = null;
 let runtimeLogLastFingerprint = "";
@@ -2409,6 +3259,8 @@ const activeVoiceMessageId = ref<string | null>(null);
 const audioPayloadCache = new Map<string, AudioFilePayload>();
 const runtimeLogPollIntervalMs = 2500;
 const runtimeLogFollowWindowMs = 4000;
+let systemThemeMediaQuery: MediaQueryList | null = null;
+let systemThemeMediaListener: ((event: MediaQueryListEvent) => void) | null = null;
 
 type TauriWindowApi = {
   label?: string;
@@ -2424,6 +3276,11 @@ type TauriWindowApi = {
 type TauriNamespace = {
   app?: {
     exit?: (code?: number) => Promise<void> | void;
+  };
+  autostart?: {
+    enable?: () => Promise<void> | void;
+    disable?: () => Promise<void> | void;
+    isEnabled?: () => Promise<boolean> | boolean;
   };
   core?: {
     invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -2458,7 +3315,7 @@ type TauriNamespace = {
 };
 
 function parseConsoleSection(raw: string | null): ConsoleSection | null {
-  if (raw === "overview" || raw === "platforms" || raw === "staff" || raw === "bindings" || raw === "tasks") {
+  if (raw === "overview" || raw === "platforms" || raw === "staff" || raw === "channels" || raw === "bindings" || raw === "tasks") {
     return raw;
   }
   return null;
@@ -3418,6 +4275,332 @@ function toggleChatPanel(nextValue?: boolean) {
   statusText.value = finalValue ? "对话窗口已打开。" : "对话窗口已收起。";
 }
 
+function normalizeMessageChannelType(value: string): MessageChannelType | null {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return MESSAGE_CHANNEL_ALIASES[normalized] ?? MESSAGE_CHANNEL_ALIASES[normalized.replace(/\s+/g, "")] ?? null;
+}
+
+function getMessageChannelMeta(value: string): MessageChannelCatalogItem | null {
+  const normalized = normalizeMessageChannelType(value);
+  if (!normalized) {
+    return null;
+  }
+  return messageChannelCatalog.find((item) => item.id === normalized) ?? null;
+}
+
+function getMessageChannelDisplayName(value: string) {
+  return getMessageChannelMeta(value)?.name ?? value;
+}
+
+function getMessageChannelIcon(value: string) {
+  return getMessageChannelMeta(value)?.icon ?? "";
+}
+
+function getMessageChannelGroup(value: string) {
+  return channelGroupsByType.value[value.trim().toLowerCase()] ?? null;
+}
+
+function isMessageChannelConfigured(channelId: MessageChannelType) {
+  return configuredMessageChannelIds.value.has(channelId);
+}
+
+function createNextChannelAccountId(channelType: MessageChannelType, existingIds: string[]) {
+  const existing = new Set(existingIds.map((item) => item.trim().toLowerCase()));
+  let candidate = `${channelType}-${Math.random().toString(36).slice(2, 10)}`;
+  while (existing.has(candidate.toLowerCase())) {
+    candidate = `${channelType}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  return candidate;
+}
+
+function resetChannelConfigSecretVisibility() {
+  channelConfigSecretVisibility.value = {};
+}
+
+function isChannelConfigSecretVisible(fieldKey: string) {
+  return channelConfigSecretVisibility.value[fieldKey] === true;
+}
+
+function toggleChannelConfigSecretVisibility(fieldKey: string) {
+  channelConfigSecretVisibility.value = {
+    ...channelConfigSecretVisibility.value,
+    [fieldKey]: !channelConfigSecretVisibility.value[fieldKey]
+  };
+}
+
+async function handleOpenChannelConfigDocs() {
+  const url = activeChannelConfigMeta.value?.docsUrl?.trim();
+  if (!url) {
+    statusText.value = "当前频道暂未提供文档链接。";
+    return;
+  }
+  const invoke = getTauriApi()?.core?.invoke;
+  if (invoke) {
+    try {
+      await invoke("open_external_url", { url });
+      statusText.value = `已打开 ${activeChannelConfigMeta.value?.name ?? "频道"} 配置文档。`;
+      return;
+    } catch (error) {
+      statusText.value = error instanceof Error ? error.message : "打开配置文档失败。";
+    }
+  }
+  if (typeof window !== "undefined") {
+    window.open(url, "_blank", "noopener,noreferrer");
+    statusText.value = "已尝试在浏览器中打开配置文档。";
+  }
+}
+
+async function openChannelConfigModal(
+  channelType: MessageChannelType,
+  accountId: string,
+  options?: {
+    allowEditAccountId?: boolean;
+    loadExisting?: boolean;
+    existingAccountIds?: string[];
+  }
+) {
+  const allowEdit = options?.allowEditAccountId === true;
+  const loadExisting = options?.loadExisting === true;
+  channelConfigEditingType.value = channelType;
+  channelConfigEditingAccountId.value = accountId;
+  channelConfigAllowEditAccountId.value = allowEdit;
+  channelConfigExistingAccountIds.value = options?.existingAccountIds ?? [];
+  channelConfigError.value = "";
+  channelConfigForm.value = {};
+  resetChannelConfigSecretVisibility();
+
+  if (loadExisting) {
+    const invoke = getTauriApi()?.core?.invoke;
+    if (invoke) {
+      try {
+        const values = (await invoke("load_openclaw_channel_form_values", {
+          channelType,
+          accountId
+        })) as Record<string, string>;
+        channelConfigForm.value = values && typeof values === "object" ? values : {};
+      } catch (error) {
+        channelConfigForm.value = {};
+        channelConfigError.value = error instanceof Error ? error.message : "读取频道配置失败。";
+      }
+    }
+  }
+
+  isChannelConfigModalOpen.value = true;
+  void syncCursorPassThrough();
+}
+
+function closeChannelConfigModal() {
+  isChannelConfigModalOpen.value = false;
+  channelConfigEditingType.value = null;
+  channelConfigEditingAccountId.value = "";
+  channelConfigAllowEditAccountId.value = false;
+  channelConfigExistingAccountIds.value = [];
+  channelConfigForm.value = {};
+  channelConfigError.value = "";
+  resetChannelConfigSecretVisibility();
+  isChannelConfigSaving.value = false;
+  void syncCursorPassThrough();
+}
+
+async function handleOpenChannelConfigFromCard(channelType: MessageChannelType) {
+  const group = getMessageChannelGroup(channelType);
+  if (group && group.accounts.length > 0) {
+    const target = group.accounts.find((item) => item.isDefault) ?? group.accounts[0];
+    await openChannelConfigModal(channelType, target.accountId, {
+      allowEditAccountId: false,
+      loadExisting: true,
+      existingAccountIds: group.accounts.map((item) => item.accountId)
+    });
+    return;
+  }
+
+  await openChannelConfigModal(channelType, "default", {
+    allowEditAccountId: false,
+    loadExisting: false,
+    existingAccountIds: []
+  });
+}
+
+async function handleAddChannelAccount(channelTypeRaw: string) {
+  const normalized = normalizeMessageChannelType(channelTypeRaw);
+  if (!normalized) {
+    return;
+  }
+  const group = getMessageChannelGroup(channelTypeRaw);
+  const existingAccountIds = group?.accounts.map((item) => item.accountId) ?? [];
+  const nextAccountId = createNextChannelAccountId(normalized, existingAccountIds);
+  await openChannelConfigModal(normalized, nextAccountId, {
+    allowEditAccountId: true,
+    loadExisting: false,
+    existingAccountIds
+  });
+}
+
+async function handleEditChannelAccount(channelTypeRaw: string, accountId: string) {
+  const normalized = normalizeMessageChannelType(channelTypeRaw);
+  if (!normalized) {
+    return;
+  }
+  const group = getMessageChannelGroup(channelTypeRaw);
+  await openChannelConfigModal(normalized, accountId, {
+    allowEditAccountId: false,
+    loadExisting: true,
+    existingAccountIds: group?.accounts.map((item) => item.accountId) ?? []
+  });
+}
+
+async function handleSaveChannelConfig() {
+  if (!channelConfigEditingType.value) {
+    return;
+  }
+  const meta = activeChannelConfigMeta.value;
+  if (!meta) {
+    return;
+  }
+  const accountId = channelConfigEditingAccountId.value.trim();
+  if (!accountId) {
+    channelConfigError.value = "账号 ID 不能为空。";
+    return;
+  }
+
+  if (
+    channelConfigAllowEditAccountId.value &&
+    channelConfigExistingAccountIds.value.some((item) => item.trim().toLowerCase() === accountId.toLowerCase())
+  ) {
+    channelConfigError.value = `账号 ID ${accountId} 已存在。`;
+    return;
+  }
+
+  const payloadConfig: Record<string, string> = {};
+  for (const field of meta.fields ?? []) {
+    const value = (channelConfigForm.value[field.key] ?? "").trim();
+    if (field.required && !value) {
+      channelConfigError.value = `${field.label} 不能为空。`;
+      return;
+    }
+    if (value) {
+      payloadConfig[field.key] = value;
+    }
+  }
+
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke) {
+    channelConfigError.value = "当前环境不支持写入频道配置。";
+    return;
+  }
+
+  try {
+    isChannelConfigSaving.value = true;
+    channelConfigError.value = "";
+    await invoke("save_openclaw_channel_config", {
+      payload: {
+        channelType: channelConfigEditingType.value,
+        accountId,
+        config: payloadConfig
+      }
+    });
+    closeChannelConfigModal();
+    await refreshMessageChannelSnapshot();
+    statusText.value = `${meta.name} 频道配置已保存。`;
+  } catch (error) {
+    channelConfigError.value = error instanceof Error ? error.message : "频道配置保存失败。";
+  } finally {
+    isChannelConfigSaving.value = false;
+  }
+}
+
+async function handleBindChannelAccount(channelType: string, accountId: string, agentId: string) {
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke) {
+    statusText.value = "当前环境不支持修改频道绑定。";
+    return;
+  }
+
+  try {
+    await invoke("save_openclaw_channel_binding", {
+      payload: {
+        channelType,
+        accountId,
+        agentId: agentId.trim() ? agentId.trim() : null
+      }
+    });
+    await refreshMessageChannelSnapshot();
+    statusText.value = `${channelType} / ${accountId} 绑定已更新。`;
+  } catch (error) {
+    statusText.value = error instanceof Error ? error.message : "频道绑定更新失败。";
+  }
+}
+
+async function handleDeleteChannelAccount(channelType: string, accountId: string) {
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    const confirmed = window.confirm(`确定删除 ${channelType} 的账号 ${accountId} 吗？`);
+    if (!confirmed) {
+      return;
+    }
+  }
+
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke) {
+    statusText.value = "当前环境不支持删除频道账号。";
+    return;
+  }
+
+  try {
+    await invoke("delete_openclaw_channel_account_config", {
+      payload: { channelType, accountId }
+    });
+    await refreshMessageChannelSnapshot();
+    statusText.value = `${channelType} / ${accountId} 已删除。`;
+  } catch (error) {
+    statusText.value = error instanceof Error ? error.message : "删除频道账号失败。";
+  }
+}
+
+async function handleDeleteChannel(channelType: string) {
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    const confirmed = window.confirm(`确定删除频道 ${channelType} 的全部配置吗？`);
+    if (!confirmed) {
+      return;
+    }
+  }
+
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke) {
+    statusText.value = "当前环境不支持删除频道配置。";
+    return;
+  }
+
+  try {
+    await invoke("delete_openclaw_channel_config", { channelType });
+    await refreshMessageChannelSnapshot();
+    statusText.value = `${channelType} 频道配置已删除。`;
+  } catch (error) {
+    statusText.value = error instanceof Error ? error.message : "删除频道配置失败。";
+  }
+}
+
+async function refreshMessageChannelSnapshot() {
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke) {
+    channelGroups.value = [];
+    statusText.value = "当前环境不支持读取频道配置。";
+    return;
+  }
+
+  await refreshStaffSnapshot();
+  try {
+    const result = (await invoke("load_openclaw_channel_accounts_snapshot")) as ChannelAccountsSnapshotResponse;
+    channelGroups.value = Array.isArray(result.channels) ? result.channels : [];
+    statusText.value = result.detail ?? `消息频道列表已刷新，共 ${channelGroups.value.length} 个已配置频道。`;
+  } catch (error) {
+    channelGroups.value = [];
+    statusText.value = error instanceof Error ? error.message : "消息频道读取失败。";
+  }
+}
+
 async function openConsole(section: ConsoleSection) {
   const shouldOpenDetachedWindow = false;
   if (shouldOpenDetachedWindow) {
@@ -3427,7 +4610,7 @@ async function openConsole(section: ConsoleSection) {
         await invoke("open_console_window", { section });
         hideContextMenu();
         noteInteraction();
-        statusText.value = `${section === "platforms" ? "代理配置" : section === "staff" ? "员工管理" : section === "tasks" ? "任务管理" : "控制台"}窗口已独立打开。`;
+        statusText.value = `${section === "platforms" ? "代理配置" : section === "staff" ? "员工管理" : section === "channels" ? "消息频道" : section === "tasks" ? "任务管理" : "控制台"}窗口已独立打开。`;
         return;
       } catch {
         // Fallback to the embedded panel when window creation is unavailable.
@@ -3457,6 +4640,9 @@ async function openConsole(section: ConsoleSection) {
     void refreshStaffSnapshot();
     void refreshOpenClawSkillSnapshot();
     void refreshOpenClawSkillsList();
+  } else if (section === "channels") {
+    statusText.value = "消息频道已展开，可查看当前可接入渠道和已配置状态。";
+    void refreshMessageChannelSnapshot();
   } else if (section === "bindings") {
     statusText.value = "宠物绑定已展开，可以配置绑定码、远程多宠连接与 Agent 授权。";
   } else if (section === "tasks") {
@@ -3977,6 +5163,55 @@ function buildPlatformRequestEndpoint(platform: Pick<PlatformConfig, "id" | "bas
   return `${baseUrl}${normalizeApiPath(platform.apiPath)}`;
 }
 
+function normalizeOpenClawProviderId(raw: string) {
+  const cleaned = raw
+    .trim()
+    .split("")
+    .map((ch) => {
+      if ((ch >= "0" && ch <= "9") || (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch === "-" || ch === "_") {
+        return ch.toLowerCase();
+      }
+      if (ch === "/" || ch === ":" || ch === "." || /\s/.test(ch)) {
+        return "-";
+      }
+      return "";
+    })
+    .join("");
+  const normalized = cleaned
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "platform";
+}
+
+function resolveLobsterProviderIdForOpenClaw() {
+  const fromOption = lobsterEffectiveProviderOption.value?.id?.trim();
+  if (fromOption) {
+    return normalizeOpenClawProviderId(fromOption);
+  }
+
+  const fromMap = getOpenClawProviderId(lobsterProviderForm.value.id)?.trim();
+  if (fromMap) {
+    return normalizeOpenClawProviderId(fromMap);
+  }
+
+  const fromName = lobsterProviderForm.value.name.trim();
+  if (fromName) {
+    return normalizeOpenClawProviderId(fromName);
+  }
+
+  return "custom";
+}
+
+function findPlatformIdByProviderId(platformList: PlatformConfig[], providerId: string) {
+  const normalizedProviderId = providerId.trim().toLowerCase();
+  if (!normalizedProviderId) {
+    return null;
+  }
+  return (
+    platformList.find((item) => (getOpenClawProviderId(item.id) ?? "").trim().toLowerCase() === normalizedProviderId)?.id ?? null
+  );
+}
+
 async function saveOpenClawProviderBaseUrl(platformId: string, baseUrl: string) {
   const providerId = getOpenClawProviderId(platformId);
   if (!providerId) {
@@ -3993,6 +5228,23 @@ async function saveOpenClawProviderBaseUrl(platformId: string, baseUrl: string) 
     providerId,
     baseUrl
   });
+}
+
+async function saveOpenClawProviderConfig(config: {
+  providerId: string;
+  name: string;
+  protocol: PlatformProtocol;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}) {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke) {
+    throw new Error("当前环境不支持写入 openclaw.json。");
+  }
+
+  await invoke("save_openclaw_provider_config", { config });
 }
 
 async function syncLocalProxyServer() {
@@ -4129,19 +5381,26 @@ async function refreshGatewayMonitor() {
 }
 
 function getLobsterActionTitle(action: LobsterActionId | string) {
-  if (action === "install") return "龙虾安装";
-  if (action === "restart_gateway") return "重启网关";
-  if (action === "auto_fix") return "自动修复";
-  if (action === "backup") return "龙虾备份";
-  if (action === "restore") return "备份恢复";
-  if (action === "upgrade") return "升级龙虾";
+  if (action === "install") return tr("lobster.action.install.title");
+  if (action === "restart_gateway") return tr("lobster.action.restart_gateway.title");
+  if (action === "auto_fix") return tr("lobster.action.auto_fix.title");
+  if (action === "backup") return tr("lobster.action.backup.title");
+  if (action === "restore") return tr("lobster.action.restore.title");
+  if (action === "upgrade") return tr("lobster.action.upgrade.title");
   return action;
 }
 
 function getLobsterInstallCheckStatusLabel(status: LobsterInstallCheckStatus) {
-  if (status === "success") return "通过";
-  if (status === "warning") return "注意";
-  return "失败";
+  if (status === "success") return tr("wizard.check.success");
+  if (status === "warning") return tr("wizard.check.warning");
+  return tr("wizard.check.failed");
+}
+
+function getLobsterInstallComponentStatusLabel(status: LobsterInstallComponentStatus) {
+  if (status === "pending") return tr("wizard.installing.status.pending");
+  if (status === "installing") return tr("wizard.installing.status.installing");
+  if (status === "installed") return tr("wizard.installing.status.installed");
+  return tr("wizard.installing.status.failed");
 }
 
 function getLobsterProviderOptionByDraft(draft: Pick<PlatformDraft, "name" | "protocol" | "baseUrl" | "pathPrefix">) {
@@ -4158,6 +5417,11 @@ function getLobsterProviderOptionByDraft(draft: Pick<PlatformDraft, "name" | "pr
     lobsterProviderOptions.find((item) => item.protocol === draft.protocol && item.name === draft.name.trim()) ??
     null
   );
+}
+
+function getLobsterProviderOptionLabel(option: Pick<LobsterProviderOption, "id" | "icon" | "name">) {
+  const localizedName = option.id === "custom" ? tr("provider.option.custom") : option.name;
+  return option.icon ? `${option.icon} ${localizedName}` : localizedName;
 }
 
 function isLobsterProviderDraftReady(
@@ -4237,6 +5501,14 @@ function openLobsterProviderDocs() {
   void openCodingPlanPlatform(url);
 }
 
+function handleLobsterProviderSkip() {
+  if (lobsterInstallWizardStep.value !== 3 || lobsterInstallRunning.value || lobsterProviderSaving.value) {
+    return;
+  }
+  lobsterProviderConfigured.value = true;
+  statusText.value = tr("wizard.provider.skip_done");
+}
+
 async function saveLobsterProviderFromWizard() {
   if (!lobsterProviderCanSave.value || lobsterProviderSaving.value) {
     return;
@@ -4248,27 +5520,58 @@ async function saveLobsterProviderFromWizard() {
     const nextProtocol = lobsterProviderForm.value.protocol;
     const nextApiPath = nextProtocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
     const nextApiKey = lobsterProviderForm.value.apiKey.trim();
+    const nextBaseUrl = normalizeBaseUrl(lobsterProviderForm.value.baseUrl);
+    const nextPathPrefix = normalizePathPrefix(lobsterProviderForm.value.pathPrefix);
+    const nextModel = lobsterProviderForm.value.model.trim();
+    const providerId = resolveLobsterProviderIdForOpenClaw();
     const selectedOption = lobsterEffectiveProviderOption.value;
     if (selectedOption?.requiresApiKey !== false && !nextApiKey) {
       statusText.value = "当前提供商需要 API 密钥，请先填写。";
       return;
     }
 
-    const nextPlatforms = upsertPlatform(platforms.value, {
-      ...lobsterProviderForm.value,
+    await saveOpenClawProviderConfig({
+      providerId,
       name: nextName,
-      model: lobsterProviderForm.value.model.trim(),
-      apiKey: nextApiKey,
-      enabled: true,
-      baseUrl: normalizeBaseUrl(lobsterProviderForm.value.baseUrl),
-      pathPrefix: normalizePathPrefix(lobsterProviderForm.value.pathPrefix),
-      apiPath: nextApiPath
+      protocol: nextProtocol,
+      baseUrl: nextBaseUrl,
+      model: nextModel,
+      apiKey: nextApiKey
     });
-    platforms.value = nextPlatforms;
-    activePlatformId.value = lobsterProviderForm.value.id;
-    setActivePlatform(lobsterProviderForm.value.id);
+
+    const openClawPlatforms = await loadPlatformsFromOpenClawConfig();
+    if (openClawPlatforms) {
+      platforms.value = openClawPlatforms;
+      const matchedPlatformId =
+        findPlatformIdByProviderId(openClawPlatforms, providerId) ??
+        openClawPlatforms[0]?.id ??
+        null;
+      if (matchedPlatformId) {
+        activePlatformId.value = matchedPlatformId;
+        setActivePlatform(matchedPlatformId);
+      }
+      await syncLocalProxyServer();
+    } else {
+      const nextPlatforms = upsertPlatform(platforms.value, {
+        ...lobsterProviderForm.value,
+        name: nextName,
+        model: nextModel,
+        apiKey: nextApiKey,
+        enabled: true,
+        baseUrl: nextBaseUrl,
+        pathPrefix: nextPathPrefix,
+        apiPath: nextApiPath
+      });
+      platforms.value = nextPlatforms;
+      activePlatformId.value = lobsterProviderForm.value.id;
+      setActivePlatform(lobsterProviderForm.value.id);
+    }
+
     lobsterProviderConfigured.value = true;
-    statusText.value = `AI 提供商「${nextName}」已保存。`;
+    statusText.value = `AI 提供商「${nextName}」已写入 openclaw.json。`;
+  } catch (error) {
+    lobsterProviderConfigured.value = false;
+    statusText.value = error instanceof Error ? error.message : "写入 openclaw.json 失败。";
   } finally {
     lobsterProviderSaving.value = false;
   }
@@ -4335,12 +5638,31 @@ async function refreshLobsterInstallGuide() {
   }
 }
 
+function startLobsterInstallProgress() {
+  window.clearInterval(lobsterInstallProgressTimer);
+  lobsterInstallProgressValue.value = 10;
+  lobsterInstallProgressTimer = window.setInterval(() => {
+    if (!lobsterInstallRunning.value) {
+      return;
+    }
+    const nextValue = lobsterInstallProgressValue.value + 3 + Math.floor(Math.random() * 5);
+    lobsterInstallProgressValue.value = Math.min(92, nextValue);
+  }, 420);
+}
+
+function stopLobsterInstallProgress() {
+  window.clearInterval(lobsterInstallProgressTimer);
+}
+
 async function openLobsterInstallWizard() {
   isLobsterInstallWizardOpen.value = true;
   lobsterInstallWizardStep.value = 1;
+  lobsterInstallRiskAccepted.value = false;
   lobsterInstallRuntimeLogs.value = "";
   lobsterInstallFinishedResult.value = null;
   lobsterInstallRunning.value = false;
+  lobsterInstallProgressValue.value = 0;
+  stopLobsterInstallProgress();
   lobsterInstallGuide.value = null;
   lobsterProviderShowKey.value = false;
   resetLobsterProviderDraft();
@@ -4351,6 +5673,7 @@ function closeLobsterInstallWizard() {
   if (lobsterInstallRunning.value) {
     return;
   }
+  stopLobsterInstallProgress();
   isLobsterInstallWizardOpen.value = false;
 }
 
@@ -4365,14 +5688,18 @@ async function startLobsterInstallFromWizard() {
   lobsterActionRunning.value = "install";
   lobsterInstallRuntimeLogs.value = "";
   lobsterInstallFinishedResult.value = null;
+  startLobsterInstallProgress();
 
   try {
     const result = (await invoke("run_lobster_action", { action: "install" })) as LobsterActionResult;
     lobsterActionResult.value = result;
     lobsterInstallFinishedResult.value = result;
+    lobsterInstallProgressValue.value = 100;
     lobsterInstallRuntimeLogs.value = [result.command, result.stdout, result.stderr].filter(Boolean).join("\n\n").trim();
     statusText.value = result.success ? "龙虾安装执行完成。" : `龙虾安装执行失败：${result.detail}`;
+    await new Promise((resolve) => window.setTimeout(resolve, 220));
     await refreshLobsterSnapshot();
+    await refreshGatewayMonitor();
   } catch (error) {
     const detail = error instanceof Error ? error.message : "龙虾安装执行失败。";
     lobsterInstallFinishedResult.value = {
@@ -4386,9 +5713,12 @@ async function startLobsterInstallFromWizard() {
       durationMs: 0,
       backupPath: null
     };
+    lobsterInstallProgressValue.value = 100;
     lobsterInstallRuntimeLogs.value = detail;
     statusText.value = detail;
+    await new Promise((resolve) => window.setTimeout(resolve, 220));
   } finally {
+    stopLobsterInstallProgress();
     lobsterActionRunning.value = null;
     lobsterInstallRunning.value = false;
     lobsterInstallWizardStep.value = 5;
@@ -4501,27 +5831,143 @@ async function applyAlwaysOnTop(value: boolean) {
   }
 }
 
+function getAutostartApi() {
+  const autostart = getTauriApi()?.autostart as
+    | {
+      enable?: () => Promise<void> | void;
+      disable?: () => Promise<void> | void;
+      isEnabled?: () => Promise<boolean> | boolean;
+    }
+    | undefined;
+  if (typeof autostart?.enable !== "function" || typeof autostart.disable !== "function" || typeof autostart.isEnabled !== "function") {
+    return null;
+  }
+  return autostart as {
+    enable: () => Promise<void> | void;
+    disable: () => Promise<void> | void;
+    isEnabled: () => Promise<boolean> | boolean;
+  };
+}
+
+async function refreshLaunchOnLoginState() {
+  const autostart = getAutostartApi();
+  if (!autostart) {
+    launchOnLoginSupported.value = false;
+    launchOnLoginEnabled.value = false;
+    return;
+  }
+
+  try {
+    const enabled = await Promise.resolve(autostart.isEnabled());
+    launchOnLoginSupported.value = true;
+    launchOnLoginEnabled.value = Boolean(enabled);
+  } catch {
+    launchOnLoginSupported.value = false;
+    launchOnLoginEnabled.value = false;
+  }
+}
+
+async function applyLaunchOnLogin(nextValue: boolean) {
+  const autostart = getAutostartApi();
+  if (!autostart) {
+    return false;
+  }
+  try {
+    if (nextValue) {
+      await Promise.resolve(autostart.enable());
+    } else {
+      await Promise.resolve(autostart.disable());
+    }
+    launchOnLoginEnabled.value = nextValue;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function bindSystemThemeListener() {
+  if (typeof window === "undefined" || !window.matchMedia) {
+    return;
+  }
+  systemThemeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  systemThemeMediaListener = () => {
+    if (appTheme.value === "system") {
+      setAppTheme("system", { persist: false });
+    }
+  };
+
+  if (systemThemeMediaQuery.addEventListener) {
+    systemThemeMediaQuery.addEventListener("change", systemThemeMediaListener);
+  } else {
+    systemThemeMediaQuery.addListener(systemThemeMediaListener);
+  }
+}
+
+function unbindSystemThemeListener() {
+  if (!systemThemeMediaQuery || !systemThemeMediaListener) {
+    return;
+  }
+  if (systemThemeMediaQuery.removeEventListener) {
+    systemThemeMediaQuery.removeEventListener("change", systemThemeMediaListener);
+  } else {
+    systemThemeMediaQuery.removeListener(systemThemeMediaListener);
+  }
+  systemThemeMediaQuery = null;
+  systemThemeMediaListener = null;
+}
+
 function openSystemSettings() {
   // 打开时用当前真实值初始化草稿
+  systemSettingsPreviewBaseLocale.value = appLocale.value;
+  systemSettingsPreviewBaseTheme.value = appTheme.value;
   draftSizeLevel.value = petSizeLevel.value;
   draftAlwaysOnTop.value = petAlwaysOnTop.value;
+  draftAppLocale.value = appLocale.value;
+  draftAppTheme.value = appTheme.value;
+  draftLaunchOnLoginEnabled.value = launchOnLoginEnabled.value;
   isSystemSettingsOpen.value = true;
+  void refreshLaunchOnLoginState().then(() => {
+    draftLaunchOnLoginEnabled.value = launchOnLoginEnabled.value;
+  });
+  void syncCursorPassThrough();
+}
+
+function closeSystemSettingsInternal(options?: { revertPreview?: boolean }) {
+  const shouldRevertPreview = options?.revertPreview !== false;
+  if (shouldRevertPreview) {
+    if (systemSettingsPreviewBaseLocale.value) {
+      setAppLocale(systemSettingsPreviewBaseLocale.value, { persist: false });
+    }
+    if (systemSettingsPreviewBaseTheme.value) {
+      setAppTheme(systemSettingsPreviewBaseTheme.value, { persist: false });
+    }
+  }
+  systemSettingsPreviewBaseLocale.value = null;
+  systemSettingsPreviewBaseTheme.value = null;
+  isSystemSettingsOpen.value = false;
   void syncCursorPassThrough();
 }
 
 function closeSystemSettings() {
-  isSystemSettingsOpen.value = false;
-  void syncCursorPassThrough();
+  closeSystemSettingsInternal();
 }
 
 async function handleSystemSettingsSave() {
   petSizeLevel.value = draftSizeLevel.value;
   petAlwaysOnTop.value = draftAlwaysOnTop.value;
+  setAppLocale(draftAppLocale.value);
+  setAppTheme(draftAppTheme.value);
   safeLocalStorageSetItem("keai.desktop-pet.size-level", petSizeLevel.value);
   safeLocalStorageSetItem("keai.desktop-pet.always-on-top", String(petAlwaysOnTop.value));
   await applyAlwaysOnTop(petAlwaysOnTop.value);
-  closeSystemSettings();
-  statusText.value = "系统设置已保存。";
+
+  let startupFailed = false;
+  if (launchOnLoginSupported.value && draftLaunchOnLoginEnabled.value !== launchOnLoginEnabled.value) {
+    startupFailed = !(await applyLaunchOnLogin(draftLaunchOnLoginEnabled.value));
+  }
+
+  closeSystemSettingsInternal({ revertPreview: false });
+  statusText.value = startupFailed ? tr("system.settings.startup.unsupported") : tr("status.settings_saved");
 }
 
 async function closeDesktopPet() {
@@ -4569,6 +6015,12 @@ function handleEscape(event: KeyboardEvent) {
 
   if (sessionOverlayLog.value) {
     sessionOverlayLogId.value = null;
+    event.preventDefault();
+    return;
+  }
+
+  if (isSystemSettingsOpen.value) {
+    closeSystemSettings();
     event.preventDefault();
     return;
   }
@@ -6265,6 +7717,7 @@ async function syncCursorPassThrough() {
     (activeResourceModal.value && activeResourceMember.value) ||
     !!sessionOverlayLog.value ||
     isPlatformModalOpen.value ||
+    isChannelConfigModalOpen.value ||
     isSystemSettingsOpen.value;
 
   if (isDragging.value || contextMenu.value.visible || isAnyModalOpen) {
@@ -6847,6 +8300,20 @@ watch(chatInput, () => {
   applyBaseAnimation();
 });
 
+watch(draftAppLocale, (nextLocale) => {
+  if (!isSystemSettingsOpen.value) {
+    return;
+  }
+  setAppLocale(nextLocale, { persist: false });
+});
+
+watch(draftAppTheme, (nextTheme) => {
+  if (!isSystemSettingsOpen.value) {
+    return;
+  }
+  setAppTheme(nextTheme, { persist: false });
+});
+
 watch(
   () => contextMenu.value.visible,
   (visible) => {
@@ -7070,7 +8537,13 @@ onMounted(async () => {
   void refreshOpenClawSkillSnapshot();
   void refreshOpenClawSkillsList();
   void refreshTaskSnapshot();
+  if (activeSection.value === "channels") {
+    void refreshMessageChannelSnapshot();
+  }
   void refreshLobsterSnapshot();
+  setAppTheme(appTheme.value, { persist: false });
+  bindSystemThemeListener();
+  void refreshLaunchOnLoginState();
   void applyAlwaysOnTop(isConsoleWindowMode ? false : petAlwaysOnTop.value);
   const storedActivePlatformId = loadActivePlatformId();
   const storedActivePlatform =
@@ -7121,6 +8594,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  unbindSystemThemeListener();
   if (unlistenConsoleOpenEvent) {
     unlistenConsoleOpenEvent();
     unlistenConsoleOpenEvent = null;
@@ -7135,6 +8609,7 @@ onBeforeUnmount(() => {
   window.clearInterval(cursorPassThroughTimer);
   window.clearInterval(gatewayMonitorTimer);
   window.clearInterval(runtimeLogTimer);
+  window.clearInterval(lobsterInstallProgressTimer);
   if (windowPointerMoveListener) {
     window.removeEventListener("pointermove", windowPointerMoveListener);
   }
@@ -8603,6 +10078,135 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
+      <div v-else-if="activeSection === 'channels'" class="desktop-console-body desktop-console-body--overview">
+        <section class="section-block overview-section channels-section">
+          <header class="section-block__header channels-config-header">
+            <div>
+              <h3>已配置频道</h3>
+              <p>可直接管理账号、绑定 Agent，并随时编辑或删除频道配置。</p>
+            </div>
+            <div class="toolbar-actions">
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshMessageChannelSnapshot()">
+                刷新
+              </button>
+            </div>
+          </header>
+
+          <div v-if="channelGroups.length > 0" class="configured-channel-list">
+            <article v-for="group in channelGroups" :key="`configured-${group.channelType}`" class="configured-channel-card">
+              <div class="configured-channel-card__head">
+                <div class="configured-channel-card__identity">
+                  <div class="channel-card__icon-shell configured-channel-card__icon">
+                    <img
+                      v-if="getMessageChannelIcon(group.channelType)"
+                      :src="getMessageChannelIcon(group.channelType)"
+                      :alt="getMessageChannelDisplayName(group.channelType)"
+                    />
+                    <span v-else>{{ group.channelType.charAt(0).toUpperCase() }}</span>
+                  </div>
+                  <div class="configured-channel-card__title">
+                    <strong>{{ getMessageChannelDisplayName(group.channelType) }}</strong>
+                    <p>{{ group.channelType }}</p>
+                  </div>
+                  <span class="channel-status-dot" :class="{ 'is-on': group.status === 'connected' }" />
+                </div>
+                <div class="configured-channel-card__actions">
+                  <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="handleAddChannelAccount(group.channelType)">
+                    + 添加账号
+                  </button>
+                  <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="handleDeleteChannel(group.channelType)">
+                    删除频道
+                  </button>
+                </div>
+              </div>
+
+              <div class="configured-channel-account-list">
+                <div
+                  v-for="account in group.accounts"
+                  :key="`account-${group.channelType}-${account.accountId}`"
+                  class="configured-channel-account-row"
+                >
+                  <strong class="configured-channel-account-row__name">{{ account.name || account.accountId }}</strong>
+                  <label class="configured-channel-account-row__binding">
+                    <span>绑定 Agent</span>
+                    <select
+                      :value="account.agentId ?? ''"
+                      @change="handleBindChannelAccount(group.channelType, account.accountId, ($event.target as HTMLSelectElement).value)"
+                    >
+                      <option value="">未绑定</option>
+                      <option v-for="member in staffMembers" :key="`channel-agent-${member.agentId}`" :value="member.agentId">
+                        {{ member.displayName }}（{{ member.agentId }}）
+                      </option>
+                    </select>
+                  </label>
+                  <div class="configured-channel-account-row__actions">
+                    <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="handleEditChannelAccount(group.channelType, account.accountId)">
+                      编辑
+                    </button>
+                    <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="handleDeleteChannelAccount(group.channelType, account.accountId)">
+                      删除
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+          <div v-else class="empty-state">暂无已配置频道。可在下方点击频道卡片开始配置。</div>
+
+          <div class="channel-group">
+            <h4>可用频道</h4>
+            <div class="channel-grid channel-grid--single">
+              <button
+                v-for="channel in featuredMessageChannels"
+                :key="`featured-${channel.id}`"
+                class="channel-card channel-card--interactive"
+                :class="{ 'channel-card--configured': isMessageChannelConfigured(channel.id) }"
+                type="button"
+                @click="handleOpenChannelConfigFromCard(channel.id)"
+              >
+                <div class="channel-card__icon-shell">
+                  <img :src="channel.icon" :alt="channel.name" />
+                </div>
+                <div class="channel-card__content">
+                  <div class="channel-card__title-row">
+                    <strong>{{ channel.name }}</strong>
+                    <span v-if="channel.plugin" class="channel-pill">插件</span>
+                    <span class="channel-status-dot" :class="{ 'is-on': isMessageChannelConfigured(channel.id) }" />
+                  </div>
+                  <p>{{ channel.description }}</p>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          <div class="channel-group">
+            <h4>支持的频道</h4>
+            <div class="channel-grid">
+              <button
+                v-for="channel in supportedMessageChannels"
+                :key="`supported-${channel.id}`"
+                class="channel-card channel-card--interactive"
+                :class="{ 'channel-card--configured': isMessageChannelConfigured(channel.id) }"
+                type="button"
+                @click="handleOpenChannelConfigFromCard(channel.id)"
+              >
+                <div class="channel-card__icon-shell">
+                  <img :src="channel.icon" :alt="channel.name" />
+                </div>
+                <div class="channel-card__content">
+                  <div class="channel-card__title-row">
+                    <strong>{{ channel.name }}</strong>
+                    <span v-if="channel.plugin" class="channel-pill">插件</span>
+                    <span class="channel-status-dot" :class="{ 'is-on': isMessageChannelConfigured(channel.id) }" />
+                  </div>
+                  <p>{{ channel.description }}</p>
+                </div>
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
       <div v-else-if="activeSection === 'bindings'" class="desktop-console-body desktop-console-body--overview">
         <section class="section-block overview-section bindings-section">
           <header class="section-block__header">
@@ -9201,7 +10805,13 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="isLobsterInstallWizardOpen" class="platform-modal-backdrop" @click.self="closeLobsterInstallWizard">
-      <section class="platform-modal lobster-install-wizard-modal" role="dialog" aria-modal="true" aria-label="龙虾安装引导">
+      <section
+        class="platform-modal lobster-install-wizard-modal"
+        :class="{ 'lobster-install-wizard-modal--step3': lobsterInstallWizardStep === 3 }"
+        role="dialog"
+        aria-modal="true"
+        aria-label="龙虾安装引导"
+      >
         <button
           class="platform-modal__close lobster-install-wizard__close"
           type="button"
@@ -9235,14 +10845,42 @@ onBeforeUnmount(() => {
         <section class="lobster-install-wizard__panel">
           <template v-if="lobsterInstallWizardStep === 1">
             <div class="lobster-install-wizard__welcome">
-              <h4>欢迎使用 ClawPet 引导安装</h4>
-              <p>将按 1-5 步完成检查与安装，避免 Windows 上直接执行安装命令导致卡住。</p>
-              <ul>
-                <li>先检查 Node.js / 包管理器 / OpenClaw 状态</li>
-                <li>检查通过后再执行安装命令</li>
-                <li>安装完成后自动刷新龙虾状态</li>
-                <li>若失败会保留完整输出用于排查</li>
-              </ul>
+              <section class="lobster-install-wizard__welcome-card">
+                <div class="lobster-install-wizard__lang-row" role="tablist" aria-label="语言选择">
+                  <button
+                    v-for="localeOption in appLocaleOptions"
+                    :key="`wizard-locale-${localeOption.value}`"
+                    type="button"
+                    :class="{ 'is-active': appLocale === localeOption.value }"
+                    @click="setAppLocale(localeOption.value)"
+                  >
+                    {{ localeOption.label }}
+                  </button>
+                </div>
+                <ul>
+                  <li>{{ tr("wizard.welcome.feature1") }}</li>
+                  <li>{{ tr("wizard.welcome.feature2") }}</li>
+                  <li>{{ tr("wizard.welcome.feature3") }}</li>
+                  <li>{{ tr("wizard.welcome.feature4") }}</li>
+                </ul>
+              </section>
+
+              <section class="lobster-install-wizard__risk-card">
+                <strong>{{ tr("wizard.risk.title") }}</strong>
+                <p>{{ tr("wizard.risk.body") }}</p>
+                <ul>
+                  <li>{{ tr("wizard.risk.item1") }}</li>
+                  <li>{{ tr("wizard.risk.item2") }}</li>
+                  <li>{{ tr("wizard.risk.item3") }}</li>
+                  <li>{{ tr("wizard.risk.item4") }}</li>
+                  <li>{{ tr("wizard.risk.item5") }}</li>
+                </ul>
+              </section>
+
+              <label class="lobster-install-wizard__risk-check">
+                <input v-model="lobsterInstallRiskAccepted" type="checkbox" />
+                <span>{{ tr("wizard.risk.accept") }}</span>
+              </label>
             </div>
           </template>
 
@@ -9250,8 +10888,8 @@ onBeforeUnmount(() => {
             <div class="lobster-install-wizard__runtime">
               <div class="lobster-install-wizard__runtime-top">
                 <div>
-                  <h4>检查环境</h4>
-                  <p class="lobster-install-wizard__lead">先确认运行条件，再进入安装步骤。</p>
+                  <h4>{{ tr("wizard.runtime.title") }}</h4>
+                  <p class="lobster-install-wizard__lead">{{ tr("wizard.runtime.lead") }}</p>
                 </div>
                 <button
                   class="desktop-console-panel__action desktop-console-panel__action--ghost"
@@ -9259,15 +10897,15 @@ onBeforeUnmount(() => {
                   :disabled="lobsterInstallGuideLoading"
                   @click="refreshLobsterInstallGuide()"
                 >
-                  {{ lobsterInstallGuideLoading ? "检查中..." : "重新检查" }}
+                  {{ lobsterInstallGuideLoading ? tr("wizard.runtime.checking") : tr("wizard.runtime.recheck") }}
                 </button>
               </div>
               <div
                 class="lobster-install-wizard__runtime-summary"
                 :class="{ 'is-ready': lobsterInstallGuide?.ready, 'is-blocked': lobsterInstallGuide && !lobsterInstallGuide.ready }"
               >
-                <span>{{ lobsterInstallGuide?.ready ? "环境检查通过，可继续下一步。" : "仍有检查项未通过，请先修复后继续。" }}</span>
-                <small>{{ lobsterInstallGuide?.checks?.length ?? 0 }} 项检查</small>
+                <span>{{ lobsterInstallGuide?.ready ? tr("wizard.runtime.ready") : tr("wizard.runtime.blocked") }}</span>
+                <small>{{ lobsterInstallGuide?.checks?.length ?? 0 }} {{ tr("wizard.runtime.check_count_unit") }}</small>
               </div>
 
               <div class="lobster-install-wizard__check-list">
@@ -9284,7 +10922,7 @@ onBeforeUnmount(() => {
                   <p>{{ item.detail }}</p>
                 </article>
                 <div v-if="!lobsterInstallGuide && !lobsterInstallGuideLoading" class="empty-state">
-                  点击“重新检查”加载环境检查结果。
+                  {{ tr("wizard.runtime.empty") }}
                 </div>
               </div>
             </div>
@@ -9292,42 +10930,42 @@ onBeforeUnmount(() => {
 
           <template v-else-if="lobsterInstallWizardStep === 3">
             <div class="lobster-install-wizard__provider">
-              <div class="lobster-install-wizard__provider-top">
-                <h4>AI 提供商</h4>
-                <span class="lobster-install-wizard__provider-badge" :class="{ 'is-optional': !lobsterProviderRequiresApiKey }">
-                  {{ lobsterProviderRequiresApiKey ? "需要 API 密钥" : "支持免密钥接入" }}
-                </span>
-              </div>
-              <p class="lobster-install-wizard__lead">配置您的默认模型渠道，安装完成后可直接使用。</p>
-
-              <div class="lobster-install-wizard__provider-grid">
+              <div class="lobster-install-wizard__provider-panel">
                 <label class="lobster-install-wizard__field lobster-install-wizard__field--span2">
-                  <span>模型提供商</span>
+                  <div class="lobster-install-wizard__field-head">
+                    <span>{{ tr("wizard.provider.field.provider") }}</span>
+                    <button
+                      v-if="lobsterEffectiveProviderOption?.docsUrl"
+                      type="button"
+                      class="lobster-install-wizard__provider-doc-link"
+                      @click="openLobsterProviderDocs()"
+                    >
+                      {{ tr("wizard.provider.docs") }}
+                    </button>
+                  </div>
                   <select
                     v-model="lobsterProviderPresetKey"
                     @change="handleLobsterProviderPresetChange()"
                   >
-                    <option value="">保持当前配置</option>
-                    <optgroup v-for="group in lobsterProviderGroupOptions" :key="`wizard-provider-group-${group.key}`" :label="group.label">
-                      <option v-for="preset in group.options" :key="`wizard-provider-${preset.id}`" :value="preset.id">
-                        {{ preset.name }}
-                      </option>
-                    </optgroup>
+                    <option value="">{{ tr("wizard.provider.keep_current") }}</option>
+                    <template v-for="group in lobsterProviderGroupOptions" :key="`wizard-provider-group-${group.key}`">
+                      <option v-if="group.key === 'custom'" disabled value="__divider__">────────────</option>
+                      <optgroup v-if="group.key !== 'custom'" :label="group.label">
+                        <option v-for="preset in group.options" :key="`wizard-provider-${preset.id}`" :value="preset.id">
+                          {{ getLobsterProviderOptionLabel(preset) }}
+                        </option>
+                      </optgroup>
+                      <template v-else>
+                        <option v-for="preset in group.options" :key="`wizard-provider-${preset.id}`" :value="preset.id">
+                          {{ getLobsterProviderOptionLabel(preset) }}
+                        </option>
+                      </template>
+                    </template>
                   </select>
                 </label>
 
-                <label class="lobster-install-wizard__field">
-                  <span>模型 ID</span>
-                  <input
-                    v-model="lobsterProviderForm.model"
-                    type="text"
-                    :placeholder="lobsterProviderModelPlaceholder"
-                    @input="lobsterProviderConfigured = false"
-                  />
-                </label>
-
-                <label class="lobster-install-wizard__field">
-                  <span>API Base URL</span>
+                <label class="lobster-install-wizard__field lobster-install-wizard__field--span2">
+                  <span>{{ tr("wizard.provider.field.base_url") }}</span>
                   <input
                     v-model="lobsterProviderForm.baseUrl"
                     type="text"
@@ -9336,8 +10974,19 @@ onBeforeUnmount(() => {
                   />
                 </label>
 
-                <label v-if="lobsterProviderRequiresApiKey" class="lobster-install-wizard__field lobster-install-wizard__field--span2">
-                  <span>API 密钥</span>
+                <label class="lobster-install-wizard__field lobster-install-wizard__field--span2">
+                  <span>{{ tr("wizard.provider.field.model") }}</span>
+                  <input
+                    v-model="lobsterProviderForm.model"
+                    type="text"
+                    :placeholder="lobsterProviderModelPlaceholder"
+                    @input="lobsterProviderConfigured = false"
+                  />
+                  <small class="lobster-install-wizard__field-hint">{{ tr("wizard.provider.model_hint") }}</small>
+                </label>
+
+                <label class="lobster-install-wizard__field lobster-install-wizard__field--span2">
+                  <span>{{ tr("wizard.provider.field.api_key") }}</span>
                   <div class="lobster-install-wizard__secret">
                     <input
                       v-model="lobsterProviderForm.apiKey"
@@ -9347,54 +10996,113 @@ onBeforeUnmount(() => {
                     />
                     <button
                       type="button"
-                      class="desktop-console-panel__action desktop-console-panel__action--ghost"
+                      class="desktop-console-panel__action desktop-console-panel__action--ghost lobster-install-wizard__secret-toggle"
                       @click="lobsterProviderShowKey = !lobsterProviderShowKey"
                     >
-                      {{ lobsterProviderShowKey ? "隐藏" : "显示" }}
+                      {{ lobsterProviderShowKey ? "🙈" : "👁" }}
                     </button>
                   </div>
+                  <small v-if="!lobsterProviderRequiresApiKey" class="lobster-install-wizard__provider-no-key">
+                    {{ tr("wizard.provider.no_key_hint") }}
+                  </small>
                 </label>
-                <div v-else class="lobster-install-wizard__provider-no-key">
-                  当前提供商支持 OAuth 或本地调用，可留空 API 密钥。
-                </div>
-              </div>
 
-              <div class="lobster-install-wizard__provider-meta">
-                <span>协议：{{ lobsterProviderProtocolLabel }}</span>
-                <span>路径前缀：{{ lobsterProviderForm.pathPrefix }}</span>
                 <button
-                  v-if="lobsterEffectiveProviderOption?.docsUrl"
+                  class="desktop-console-panel__action lobster-install-wizard__provider-save"
                   type="button"
-                  class="lobster-install-wizard__provider-doc-link"
-                  @click="openLobsterProviderDocs()"
+                  :disabled="lobsterProviderSaving || !lobsterProviderCanSave"
+                  @click="saveLobsterProviderFromWizard()"
                 >
-                  查看接入文档
+                  {{
+                    lobsterProviderSaving
+                      ? tr("wizard.provider.saving")
+                      : lobsterProviderConfigured
+                        ? tr("wizard.provider.saved")
+                        : lobsterProviderRequiresApiKey
+                          ? tr("wizard.provider.save")
+                          : tr("wizard.provider.save_simple")
+                  }}
                 </button>
+                <small class="lobster-install-wizard__provider-tip">{{ tr("wizard.provider.key_tip") }}</small>
               </div>
-
-              <button
-                class="desktop-console-panel__action lobster-install-wizard__provider-save"
-                type="button"
-                :disabled="lobsterProviderSaving || !lobsterProviderCanSave"
-                @click="saveLobsterProviderFromWizard()"
-              >
-                {{ lobsterProviderSaving ? "保存中..." : lobsterProviderConfigured ? "已保存，可继续下一步" : "验证并保存" }}
-              </button>
-              <small class="lobster-install-wizard__provider-tip">您的 API 密钥仅保存在本地机器。</small>
             </div>
           </template>
 
           <template v-else-if="lobsterInstallWizardStep === 4">
-            <div class="lobster-install-wizard__running">
-              <h4>执行安装</h4>
-              <div class="lobster-install-wizard__spinner" />
-              <p>正在执行安装，请稍候...</p>
-              <small>安装过程中请勿关闭窗口。</small>
+            <div class="lobster-install-wizard__installing">
+              <div class="lobster-install-wizard__installing-head">
+                <div class="lobster-install-wizard__installing-mark">⚙️</div>
+                <h4>{{ tr("wizard.installing.title") }}</h4>
+                <p>{{ tr("wizard.installing.subtitle") }}</p>
+              </div>
+
+              <div class="lobster-install-wizard__installing-progress">
+                <div class="lobster-install-wizard__installing-progress-head">
+                  <span>{{ tr("wizard.installing.progress") }}</span>
+                  <em>{{ lobsterInstallProgressDisplay }}%</em>
+                </div>
+                <div class="lobster-install-wizard__installing-progress-track">
+                  <i :style="{ width: `${lobsterInstallProgressDisplay}%` }" />
+                </div>
+              </div>
+
+              <div class="lobster-install-wizard__installing-list">
+                <article
+                  v-for="item in lobsterInstallComponentStates"
+                  :key="`wizard-installing-item-${item.id}`"
+                  class="lobster-install-wizard__installing-item"
+                >
+                  <div class="lobster-install-wizard__installing-item-main">
+                    <span class="lobster-install-wizard__installing-item-icon" :class="`is-${item.status}`" />
+                    <div class="lobster-install-wizard__installing-item-copy">
+                      <strong>{{ item.name }}</strong>
+                      <small>{{ item.description }}</small>
+                    </div>
+                  </div>
+                  <em class="lobster-install-wizard__installing-item-status" :class="`is-${item.status}`">
+                    {{ getLobsterInstallComponentStatusLabel(item.status) }}
+                  </em>
+                </article>
+              </div>
+
+              <small class="lobster-install-wizard__installing-wait">{{ tr("wizard.installing.wait") }}</small>
             </div>
           </template>
 
           <template v-else>
-            <div class="lobster-install-wizard__result" :class="{ 'is-success': lobsterInstallFinishedResult?.success, 'is-failed': lobsterInstallFinishedResult && !lobsterInstallFinishedResult.success }">
+            <div
+              v-if="lobsterInstallFinishedResult?.success"
+              class="lobster-install-wizard__complete"
+            >
+              <div class="lobster-install-wizard__complete-head">
+                <div class="lobster-install-wizard__complete-mark">🎉</div>
+                <strong>{{ tr("wizard.complete.title") }}</strong>
+                <p>{{ tr("wizard.complete.subtitle") }}</p>
+              </div>
+
+              <div class="lobster-install-wizard__complete-list">
+                <div class="lobster-install-wizard__complete-item">
+                  <span>{{ tr("wizard.complete.provider") }}</span>
+                  <em>{{ lobsterCompleteProviderSummary }}</em>
+                </div>
+                <div class="lobster-install-wizard__complete-item">
+                  <span>{{ tr("wizard.complete.components") }}</span>
+                  <em>{{ lobsterCompleteComponentsSummary }}</em>
+                </div>
+                <div class="lobster-install-wizard__complete-item">
+                  <span>{{ tr("wizard.complete.gateway") }}</span>
+                  <em :class="{ 'is-running': lobsterCompleteGatewayRunning }">{{ lobsterCompleteGatewaySummary }}</em>
+                </div>
+              </div>
+
+              <small>{{ tr("wizard.complete.footer") }}</small>
+            </div>
+
+            <div
+              v-else
+              class="lobster-install-wizard__result"
+              :class="{ 'is-success': lobsterInstallFinishedResult?.success, 'is-failed': lobsterInstallFinishedResult && !lobsterInstallFinishedResult.success }"
+            >
               <strong>{{ lobsterInstallFinishedResult?.success ? "安装完成" : "安装失败" }}</strong>
               <p>{{ lobsterInstallFinishedResult?.detail || "暂无安装结果" }}</p>
               <small v-if="lobsterInstallFinishedResult">耗时 {{ formatDuration(lobsterInstallFinishedResult.durationMs) }}</small>
@@ -9411,10 +11119,20 @@ onBeforeUnmount(() => {
             class="desktop-console-panel__action desktop-console-panel__action--ghost"
             type="button"
             :disabled="lobsterInstallRunning"
-            @click="lobsterInstallWizardStep === 1 ? closeLobsterInstallWizard() : handleLobsterInstallWizardBack()"
+            @click="(lobsterInstallWizardStep === 1 || lobsterInstallWizardStep === 5) ? closeLobsterInstallWizard() : handleLobsterInstallWizardBack()"
           >
-            {{ lobsterInstallWizardStep === 1 ? "取消" : "返回" }}
+            {{ lobsterInstallWizardStep === 1 ? tr("wizard.button.cancel") : tr("wizard.button.back") }}
           </button>
+          <button
+            v-if="lobsterInstallWizardStep === 3"
+            class="lobster-install-wizard__skip"
+            type="button"
+            :disabled="lobsterInstallRunning || lobsterProviderSaving"
+            @click="handleLobsterProviderSkip()"
+          >
+            {{ tr("wizard.provider.skip") }}
+          </button>
+          <span v-else class="lobster-install-wizard__actions-spacer" />
           <button
             class="desktop-console-panel__action"
             type="button"
@@ -9422,11 +11140,9 @@ onBeforeUnmount(() => {
             @click="handleLobsterInstallWizardNext()"
           >
             {{
-              lobsterInstallWizardStep === 3
-                ? "开始安装"
-                : lobsterInstallWizardStep === 5
-                  ? "完成"
-                  : "下一步"
+              lobsterInstallWizardStep === 5
+                ? (lobsterInstallFinishedResult?.success ? tr("wizard.button.get_started") : tr("wizard.button.finish"))
+                : tr("wizard.button.next")
             }}
           </button>
         </footer>
@@ -9436,15 +11152,82 @@ onBeforeUnmount(() => {
     <div v-if="isSystemSettingsOpen" class="platform-modal-backdrop" @click.self="closeSystemSettings">
       <div class="platform-modal system-settings-modal" role="dialog" aria-modal="true" aria-label="系统设置">
         <header class="platform-modal__header">
-          <h3>系统设置</h3>
+          <h3>{{ tr("system.settings.title") }}</h3>
           <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop="closeSystemSettings">×</button>
         </header>
         <div class="system-settings-body">
           <section class="system-settings-section">
-            <h4 class="system-settings-section__title">宠物大小</h4>
+            <h4 class="system-settings-panel-title">{{ tr("system.settings.general") }}</h4>
+            <div class="system-settings-stack">
+              <div class="system-settings-field">
+                <h5 class="system-settings-section__title">{{ tr("system.settings.theme") }}</h5>
+                <div class="system-settings-choice-row" role="tablist" aria-label="theme">
+                  <button
+                    v-for="themeOption in appThemeOptions"
+                    :key="`settings-theme-${themeOption.value}`"
+                    type="button"
+                    class="system-settings-choice"
+                    :class="{ 'is-active': draftAppTheme === themeOption.value }"
+                    @click="draftAppTheme = themeOption.value"
+                  >
+                    {{ themeOption.label }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="system-settings-field">
+                <h5 class="system-settings-section__title">{{ tr("system.settings.language") }}</h5>
+                <div class="system-settings-choice-row" role="tablist" aria-label="language">
+                  <button
+                    v-for="localeOption in appLocaleOptions"
+                    :key="`settings-locale-${localeOption.value}`"
+                    type="button"
+                    class="system-settings-choice"
+                    :class="{ 'is-active': draftAppLocale === localeOption.value }"
+                    @click="draftAppLocale = localeOption.value"
+                  >
+                    {{ localeOption.label }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="system-settings-field">
+                <h5 class="system-settings-section__title">{{ tr("system.settings.startup") }}</h5>
+                <div
+                  class="system-settings-toggle-row"
+                  :class="{ 'is-disabled': !launchOnLoginSupported }"
+                  @click="launchOnLoginSupported && (draftLaunchOnLoginEnabled = !draftLaunchOnLoginEnabled)"
+                >
+                  <div class="system-settings-toggle-row__label">
+                    <strong>{{ tr("system.settings.startup") }}</strong>
+                    <span>{{ launchOnLoginSupported ? tr("system.settings.startup.hint") : tr("system.settings.startup.unsupported") }}</span>
+                  </div>
+                  <div
+                    class="sys-toggle"
+                    :class="{ 'sys-toggle--on': draftLaunchOnLoginEnabled, 'sys-toggle--disabled': !launchOnLoginSupported }"
+                    role="switch"
+                    :aria-label="draftLaunchOnLoginEnabled ? '自启动已开启' : '自启动已关闭'"
+                    :aria-checked="draftLaunchOnLoginEnabled"
+                    tabindex="0"
+                    @click.stop="launchOnLoginSupported && (draftLaunchOnLoginEnabled = !draftLaunchOnLoginEnabled)"
+                    @keydown.enter.space.prevent="launchOnLoginSupported && (draftLaunchOnLoginEnabled = !draftLaunchOnLoginEnabled)"
+                  >
+                    <div class="sys-toggle__thumb" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="system-settings-section">
+            <h4 class="system-settings-section__title">{{ tr("system.settings.pet_size") }}</h4>
             <div class="system-settings-size-options">
               <label
-                v-for="opt in ([{ value: 'small', label: '小', px: 28 }, { value: 'medium', label: '中', px: 44 }, { value: 'large', label: '大', px: 60 }] as const)"
+                v-for="opt in ([
+                  { value: 'small', label: tr('size.small'), px: 28 },
+                  { value: 'medium', label: tr('size.medium'), px: 44 },
+                  { value: 'large', label: tr('size.large'), px: 60 }
+                ] as const)"
                 :key="opt.value"
                 class="system-settings-size-option"
                 :class="{ 'is-selected': draftSizeLevel === opt.value }"
@@ -9466,11 +11249,11 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="system-settings-section">
-            <h4 class="system-settings-section__title">窗口行为</h4>
+            <h4 class="system-settings-section__title">{{ tr("system.settings.window_behavior") }}</h4>
             <div class="system-settings-toggle-row" @click="draftAlwaysOnTop = !draftAlwaysOnTop">
               <div class="system-settings-toggle-row__label">
-                <strong>始终置顶</strong>
-                <span>宠物窗口保持在所有应用上方</span>
+                <strong>{{ tr("system.settings.always_top") }}</strong>
+                <span>{{ tr("system.settings.always_top.hint") }}</span>
               </div>
               <div
                 class="sys-toggle"
@@ -9488,8 +11271,8 @@ onBeforeUnmount(() => {
           </section>
         </div>
         <footer class="system-settings-footer">
-          <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="closeSystemSettings">取消</button>
-          <button class="desktop-console-panel__action" type="button" @click="handleSystemSettingsSave">保存</button>
+          <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="closeSystemSettings">{{ tr("system.settings.cancel") }}</button>
+          <button class="desktop-console-panel__action" type="button" @click="handleSystemSettingsSave">{{ tr("system.settings.save") }}</button>
         </footer>
       </div>
     </div>
@@ -9569,21 +11352,114 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
+    <div v-if="isChannelConfigModalOpen && activeChannelConfigMeta" class="platform-modal-backdrop" @click.self="closeChannelConfigModal">
+      <section class="platform-modal channel-config-modal">
+        <header class="platform-modal__header">
+          <div>
+            <strong>{{ channelConfigAllowEditAccountId ? `新增 ${activeChannelConfigMeta.name} 账号` : `配置 ${activeChannelConfigMeta.name}` }}</strong>
+            <p>{{ activeChannelConfigMeta.description }}</p>
+          </div>
+          <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop="closeChannelConfigModal">×</button>
+        </header>
+
+        <form class="platform-modal__form channel-config-modal__form" @submit.prevent="handleSaveChannelConfig">
+          <section class="channel-config-guide">
+            <div class="channel-config-guide__head">
+              <div>
+                <h4>如何连接</h4>
+                <p>{{ activeChannelConfigMeta.description }}</p>
+              </div>
+              <button
+                v-if="activeChannelConfigMeta.docsUrl"
+                class="channel-config-guide__docs"
+                type="button"
+                @click="handleOpenChannelConfigDocs"
+              >
+                查看文档 ↗
+              </button>
+            </div>
+            <ol v-if="(activeChannelConfigMeta.instructions ?? []).length > 0" class="channel-config-guide__steps">
+              <li v-for="step in activeChannelConfigMeta.instructions ?? []" :key="`channel-step-${activeChannelConfigMeta.id}-${step}`">
+                {{ step }}
+              </li>
+            </ol>
+            <p v-else class="channel-config-guide__fallback">保存配置后会自动启用该频道，后续可在“已配置频道”继续维护账号与绑定关系。</p>
+          </section>
+
+          <label class="channel-config-field">
+            <span class="channel-config-field__label">账号 ID</span>
+            <input
+              v-model="channelConfigEditingAccountId"
+              class="channel-config-field__input"
+              type="text"
+              :disabled="!channelConfigAllowEditAccountId"
+              placeholder="default"
+            />
+            <small class="channel-config-field__hint">可自定义账号 ID，用于区分同一频道下的多个账号。</small>
+          </label>
+
+          <template v-for="field in activeChannelConfigMeta.fields ?? []" :key="`channel-field-${field.key}`">
+            <div class="channel-config-field">
+              <span class="channel-config-field__label">
+                {{ field.label }}
+                <em v-if="field.required" class="channel-config-field__required">*</em>
+              </span>
+              <div class="channel-config-field__input-row" :class="{ 'channel-config-field__input-row--secret': field.secret }">
+                <input
+                  v-model="channelConfigForm[field.key]"
+                  class="channel-config-field__input"
+                  :type="field.secret && !isChannelConfigSecretVisible(field.key) ? 'password' : 'text'"
+                  :placeholder="field.placeholder"
+                />
+                <button
+                  v-if="field.secret"
+                  class="channel-config-field__secret-toggle"
+                  type="button"
+                  @click="toggleChannelConfigSecretVisibility(field.key)"
+                >
+                  {{ isChannelConfigSecretVisible(field.key) ? "隐藏" : "显示" }}
+                </button>
+              </div>
+              <small v-if="field.description" class="channel-config-field__hint">{{ field.description }}</small>
+              <small v-if="field.envVar" class="channel-config-field__env">环境变量：{{ field.envVar }}</small>
+            </div>
+          </template>
+
+          <div v-if="(activeChannelConfigMeta.fields ?? []).length === 0" class="empty-state channel-config-empty">
+            当前频道无需手动填写参数，保存后会直接启用该频道。
+          </div>
+
+          <div class="channel-config-modal__footer">
+            <div v-if="channelConfigError" class="platform-form-error channel-config-modal__error">{{ channelConfigError }}</div>
+            <div class="platform-modal__actions channel-config-modal__actions">
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="closeChannelConfigModal">
+                取消
+              </button>
+              <button class="desktop-console-panel__action channel-config-modal__submit" type="submit" :disabled="isChannelConfigSaving">
+                {{ isChannelConfigSaving ? "保存中..." : channelConfigAllowEditAccountId ? "✓ 保存并连接" : "✓ 保存并更新" }}
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
+
     <div
       v-if="!isConsoleWindowMode && contextMenu.visible"
       ref="contextMenuRef"
       class="desktop-context-menu"
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
     >
-      <button class="desktop-context-menu__item" type="button" @click="openChatPanel()">聊天</button>
-      <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">代理配置</button>
-      <button class="desktop-context-menu__item" type="button" @click="openConsole('bindings')">宠物绑定</button>
-      <button class="desktop-context-menu__item" type="button" @click="openLobsterConfig()">龙虾配置</button>
-      <button class="desktop-context-menu__item" type="button" @click="openLogAnalysis('timeline')">日志分析</button>
-      <button class="desktop-context-menu__item" type="button" @click="openSubscriptionRecommendations()">订阅推荐</button>
-      <button class="desktop-context-menu__item" type="button" @click="openSystemSettings()">系统设置</button>
+      <button class="desktop-context-menu__item" type="button" @click="openChatPanel()">{{ tr("context.chat") }}</button>
+      <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">{{ tr("context.platforms") }}</button>
+      <button class="desktop-context-menu__item" type="button" @click="openConsole('channels')">{{ tr("context.channels") }}</button>
+      <button class="desktop-context-menu__item" type="button" @click="openConsole('bindings')">{{ tr("context.bindings") }}</button>
+      <button class="desktop-context-menu__item" type="button" @click="openLobsterConfig()">{{ tr("context.lobster") }}</button>
+      <button class="desktop-context-menu__item" type="button" @click="openLogAnalysis('timeline')">{{ tr("context.logs") }}</button>
+      <button class="desktop-context-menu__item" type="button" @click="openSubscriptionRecommendations()">{{ tr("context.subscription") }}</button>
+      <button class="desktop-context-menu__item" type="button" @click="openSystemSettings()">{{ tr("context.system") }}</button>
       <button class="desktop-context-menu__item desktop-context-menu__item--danger" type="button" @click="handleQuitClick">
-        退出
+        {{ tr("context.quit") }}
       </button>
     </div>
   </main>
