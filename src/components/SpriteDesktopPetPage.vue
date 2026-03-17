@@ -263,6 +263,7 @@ type StaffMemberSnapshot = {
   model: string;
   workspace: string;
   toolsProfile: string;
+  toolsEnabledCount?: number;
   statusLabel: string;
   currentWorkLabel: string;
   currentWork: string;
@@ -294,6 +295,13 @@ type OpenClawToolListItem = {
   description: string;
   category: string;
   enabled: boolean;
+};
+
+type OpenClawToolsScope = "agent" | "global";
+
+type OpenClawToolsProfileOption = {
+  value: string;
+  label: string;
 };
 
 type TaskSnapshotItem = {
@@ -610,6 +618,8 @@ const resourceDocumentRecords = ref<DocumentRecord[]>([]);
 const openClawSkillsList = ref<{ builtIn: OpenClawSkillListItem[]; installed: OpenClawSkillListItem[] }>({ builtIn: [], installed: [] });
 /** OpenClaw 当前员工的工具配置（用于工具弹窗展示，非 TOOLS.md 编辑） */
 const openClawToolsList = ref<{ profile: string; profileLabel: string; tools: OpenClawToolListItem[] }>({ profile: "", profileLabel: "", tools: [] });
+const openClawToolsScope = ref<OpenClawToolsScope>("agent");
+const isOpenClawToolsSaving = ref(false);
 const taskRecords = ref<TaskSnapshotItem[]>([]);
 type CronTaskTab = "all" | "late" | "scheduled" | "disabled";
 const cronTaskTab = ref<CronTaskTab>("all");
@@ -621,6 +631,13 @@ const platformForm = ref<PlatformDraft>(createPlatformDraft());
 const showPlatformTips = ref(false);
 const isPlatformModalOpen = ref(false);
 const isSystemSettingsOpen = ref(false);
+
+const OPENCLAW_TOOLS_PROFILE_PRESETS: OpenClawToolsProfileOption[] = [
+  { value: "default", label: "Default（全量）" },
+  { value: "minimal", label: "Minimal（最小权限）" },
+  { value: "coding", label: "Coding（代码执行）" },
+  { value: "messaging", label: "Messaging（消息会话）" }
+];
 
 type PetSizeLevel = "small" | "medium" | "large";
 const PET_SIZE_MAP: Record<PetSizeLevel, number> = { small: 180, medium: 280, large: 380 };
@@ -1421,7 +1438,7 @@ const activeResourceModalTitle = computed(() => {
   if (activeResourceModal.value === "tool") return "工具";
   return "";
 });
-/** 弹窗主标题：技能为 OpenClaw 技能库（全员共享），工具为该员工的 TOOLS.md */
+/** 弹窗主标题：技能为 OpenClaw 技能库（全员共享），工具为员工工具权限配置 */
 const resourceModalHeaderTitle = computed(() => {
   const member = activeResourceMember.value;
   if (activeResourceModal.value === "memory") {
@@ -1431,7 +1448,7 @@ const resourceModalHeaderTitle = computed(() => {
     return "OpenClaw 技能库";
   }
   if (activeResourceModal.value === "tool") {
-    return `${member?.displayName ?? "员工"} 的工具文档（TOOLS.md）`;
+    return `${member?.displayName ?? "员工"} · 工具权限设置`;
   }
   return "";
 });
@@ -1445,7 +1462,7 @@ const activeResourceModalDescription = computed(() => {
     return "来自 ~/.openclaw/skills 与 workspace/skills，每个子目录的 SKILL.md 为一项技能，全员共享。可查看与编辑。";
   }
   if (activeResourceModal.value === "tool") {
-    return "该员工工作区内的 TOOLS.md，记录可调用工具及使用约束。每名员工一份。";
+    return "可切换权限范围（当前员工 / 全局默认），调整 Profile，并对每个工具做启用或禁用。";
   }
   return "";
 });
@@ -1453,7 +1470,7 @@ const activeResourceModalDescription = computed(() => {
 const resourceSidebarHeadline = computed(() => {
   if (activeResourceModal.value === "memory") return "记忆文件";
   if (activeResourceModal.value === "skill") return "技能列表";
-  if (activeResourceModal.value === "tool") return "工具文档";
+  if (activeResourceModal.value === "tool") return "工具权限";
   return "";
 });
 /** 技能弹窗内按关键词筛选的内置技能列表 */
@@ -1496,6 +1513,16 @@ const openClawToolsByCategory = computed(() => {
   }
   const order = ["Files", "Runtime", "Web", "Memory", "Sessions", "Messaging", "UI", "Automation", "Nodes", "Other"];
   return order.filter((c) => map.has(c)).map((c) => ({ category: c, tools: map.get(c)! }));
+});
+const openClawToolsEnabledCount = computed(() => openClawToolsList.value.tools.filter((tool) => tool.enabled).length);
+const openClawToolsScopeLabel = computed(() => (openClawToolsScope.value === "global" ? "全局默认" : "当前员工"));
+const openClawToolsProfileOptions = computed<OpenClawToolsProfileOption[]>(() => {
+  const current = openClawToolsList.value.profile.trim();
+  if (!current) return OPENCLAW_TOOLS_PROFILE_PRESETS;
+  if (OPENCLAW_TOOLS_PROFILE_PRESETS.some((item) => item.value === current)) {
+    return OPENCLAW_TOOLS_PROFILE_PRESETS;
+  }
+  return [{ value: current, label: `${current}（自定义）` }, ...OPENCLAW_TOOLS_PROFILE_PRESETS];
 });
 const filteredMemberMemoryRecords = computed(() => {
   const member = activeResourceMember.value;
@@ -4403,17 +4430,30 @@ function getMemberDocumentRecords(member: StaffMemberSnapshot) {
   return documentRecords.value.filter((record) => isRecordOwnedByMember(record.owner, member));
 }
 
+function estimateToolsEnabledCountByProfile(profile: string): number {
+  const normalized = profile.trim().toLowerCase();
+  if (normalized === "minimal") return 1;
+  if (normalized === "coding") return 15;
+  if (normalized === "messaging") return 5;
+  return 23;
+}
+
 function getStaffLinkedResourceCounts(member: StaffMemberSnapshot) {
+  const toolCount =
+    typeof member.toolsEnabledCount === "number" && Number.isFinite(member.toolsEnabledCount)
+      ? Math.max(0, Math.floor(member.toolsEnabledCount))
+      : estimateToolsEnabledCountByProfile(member.toolsProfile);
   return {
     memory: getMemberMemoryRecords(member).length,
     skill: openClawSkillsTotalCount.value,
-    tool: member.toolsProfile.trim() || member.workspace.trim() ? 1 : 0
+    tool: toolCount
   };
 }
 
 function closeResourceModal() {
   activeResourceModal.value = null;
   activeResourceMemberId.value = null;
+  openClawToolsScope.value = "agent";
   resourceModalFilterText.value = "";
   resourceDocumentRecords.value = [];
   void syncCursorPassThrough();
@@ -4447,9 +4487,9 @@ async function openMemberResourceModal(member: StaffMemberSnapshot, kind: Resour
   }
 
   if (kind === "tool") {
-    await refreshOpenClawToolsList(member.agentId);
-    const enabledCount = openClawToolsList.value.tools.filter((t) => t.enabled).length;
-    statusText.value = `已打开 ${member.displayName} 的工具配置，当前 Profile：${openClawToolsList.value.profileLabel}，${enabledCount} 项已启用。`;
+    openClawToolsScope.value = "agent";
+    await refreshOpenClawToolsList(member.agentId, "agent");
+    statusText.value = `已打开 ${member.displayName} 的工具权限配置，当前 Profile：${openClawToolsList.value.profileLabel}，${openClawToolsEnabledCount.value} 项已启用。`;
     void syncCursorPassThrough();
     return;
   }
@@ -4662,16 +4702,61 @@ async function setOpenClawSkillEnabled(skillId: string, enabled: boolean) {
   }
 }
 
-/** 加载当前员工的 OpenClaw 工具配置列表（用于工具弹窗，非 TOOLS.md 编辑） */
-async function refreshOpenClawToolsList(agentId: string | null) {
+function resolveOpenClawToolsTargetAgentId(agentId: string | null, scope: OpenClawToolsScope) {
+  if (scope === "global") return null;
+  return agentId;
+}
+
+function resolveToolIdsByProfile(profile: string, fallbackTools: OpenClawToolListItem[]): Set<string> {
+  const normalized = profile.trim().toLowerCase();
+  if (normalized === "minimal") {
+    return new Set(["session_status"]);
+  }
+  if (normalized === "coding") {
+    return new Set([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "bash",
+      "process",
+      "sessions_list",
+      "sessions_history",
+      "sessions_send",
+      "sessions_spawn",
+      "session_status",
+      "memory_search",
+      "memory_get",
+      "image"
+    ]);
+  }
+  if (normalized === "messaging") {
+    return new Set([
+      "message",
+      "sessions_list",
+      "sessions_history",
+      "sessions_send",
+      "session_status"
+    ]);
+  }
+  if (normalized === "default" || normalized === "full" || normalized === "") {
+    return new Set(fallbackTools.map((tool) => tool.id));
+  }
+  return new Set(fallbackTools.filter((tool) => tool.enabled).map((tool) => tool.id));
+}
+
+/** 加载 OpenClaw 工具配置列表（支持当前员工 / 全局默认） */
+async function refreshOpenClawToolsList(agentId: string | null, scope: OpenClawToolsScope = openClawToolsScope.value) {
   const tauriApi = getTauriApi();
   const invoke = tauriApi?.core?.invoke;
+  const targetAgentId = resolveOpenClawToolsTargetAgentId(agentId, scope);
   if (!invoke) {
     openClawToolsList.value = { profile: "", profileLabel: "", tools: [] };
     return;
   }
   try {
-    const result = (await invoke("load_openclaw_tools_list", { agentId })) as {
+    const result = (await invoke("load_openclaw_tools_list", { agentId: targetAgentId })) as {
       profile: string;
       profileLabel: string;
       tools: OpenClawToolListItem[];
@@ -4684,6 +4769,87 @@ async function refreshOpenClawToolsList(agentId: string | null) {
   } catch {
     openClawToolsList.value = { profile: "", profileLabel: "", tools: [] };
   }
+}
+
+async function saveOpenClawToolsConfig(nextProfile: string, nextTools: OpenClawToolListItem[]) {
+  const tauriApi = getTauriApi();
+  const invoke = tauriApi?.core?.invoke;
+  if (!invoke || isOpenClawToolsSaving.value) return;
+
+  const memberAgentId = activeResourceMember.value?.agentId ?? activeResourceMemberId.value ?? null;
+  const scope = openClawToolsScope.value;
+  const targetAgentId = resolveOpenClawToolsTargetAgentId(memberAgentId, scope);
+  const enabledToolIds = nextTools.filter((tool) => tool.enabled).map((tool) => tool.id);
+
+  isOpenClawToolsSaving.value = true;
+  try {
+    await invoke("save_openclaw_tools_config", {
+      agentId: targetAgentId,
+      scope,
+      profile: nextProfile,
+      enabledToolIds
+    });
+    await refreshOpenClawToolsList(memberAgentId, scope);
+    await refreshStaffSnapshot();
+
+    const profileLabel = openClawToolsList.value.profileLabel || openClawToolsList.value.profile || "default";
+    statusText.value = `已保存${openClawToolsScopeLabel.value}工具权限：Profile ${profileLabel}，启用 ${openClawToolsEnabledCount.value} 项。`;
+  } catch (error) {
+    statusText.value = error instanceof Error ? error.message : "工具权限保存失败。";
+    throw error;
+  } finally {
+    isOpenClawToolsSaving.value = false;
+  }
+}
+
+async function setOpenClawToolsProfile(profile: string) {
+  const nextProfile = profile.trim() || "default";
+  const previousTools = openClawToolsList.value.tools;
+  const profileToolIds = resolveToolIdsByProfile(nextProfile, previousTools);
+  const nextTools = previousTools.map((tool) => ({
+    ...tool,
+    enabled: profileToolIds.has(tool.id)
+  }));
+  const previous = {
+    profile: openClawToolsList.value.profile,
+    profileLabel: openClawToolsList.value.profileLabel,
+    tools: previousTools
+  };
+  openClawToolsList.value = {
+    ...openClawToolsList.value,
+    profile: nextProfile,
+    tools: nextTools
+  };
+  try {
+    await saveOpenClawToolsConfig(nextProfile, nextTools);
+  } catch {
+    openClawToolsList.value = { ...openClawToolsList.value, ...previous, tools: previous.tools };
+  }
+}
+
+async function setOpenClawToolEnabled(toolId: string, enabled: boolean) {
+  const previousTools = openClawToolsList.value.tools;
+  const nextTools = previousTools.map((tool) => (tool.id === toolId ? { ...tool, enabled } : tool));
+  openClawToolsList.value = {
+    ...openClawToolsList.value,
+    tools: nextTools
+  };
+  try {
+    await saveOpenClawToolsConfig(openClawToolsList.value.profile || "default", nextTools);
+  } catch {
+    openClawToolsList.value = {
+      ...openClawToolsList.value,
+      tools: previousTools
+    };
+  }
+}
+
+async function handleOpenClawToolsScopeChange(value: string) {
+  const nextScope: OpenClawToolsScope = value === "global" ? "global" : "agent";
+  openClawToolsScope.value = nextScope;
+  const memberAgentId = activeResourceMember.value?.agentId ?? activeResourceMemberId.value ?? null;
+  await refreshOpenClawToolsList(memberAgentId, nextScope);
+  statusText.value = `已切换到${nextScope === "global" ? "全局默认" : "当前员工"}工具权限范围。`;
 }
 
 async function refreshTaskSnapshot() {
@@ -7109,7 +7275,7 @@ onBeforeUnmount(() => {
                         <span>技能库</span>
                         <strong>{{ getStaffLinkedResourceCounts(member).skill }}</strong>
                       </button>
-                      <button class="staff-linked-actions__button" type="button" title="该员工工作区内的 TOOLS.md" @click="handleOpenMemberTool(member)">
+                      <button class="staff-linked-actions__button" type="button" title="该员工的 OpenClaw 工具权限配置（profile / allow / deny）" @click="handleOpenMemberTool(member)">
                         <span>TOOLS</span>
                         <strong>{{ getStaffLinkedResourceCounts(member).tool }}</strong>
                       </button>
@@ -7572,20 +7738,65 @@ onBeforeUnmount(() => {
             </section>
           </template>
 
-          <!-- 工具：展示 Profile 与按分类的工具列表，非 TOOLS.md 编辑 -->
+          <!-- 工具：支持权限范围、Profile 与单工具开关 -->
           <template v-else-if="activeResourceModal === 'tool'">
             <section class="openclaw-list-panel">
-              <div class="openclaw-list-panel__toolbar">
-                <span class="openclaw-tools-profile">Profile: <strong>{{ openClawToolsList.profileLabel || openClawToolsList.profile || '—' }}</strong></span>
-                <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshOpenClawToolsList(activeResourceMember?.agentId ?? null)">重新读取</button>
+              <div class="openclaw-list-panel__toolbar openclaw-tools-toolbar">
+                <div class="openclaw-tools-toolbar__controls">
+                  <label class="openclaw-tools-control">
+                    <span>权限范围</span>
+                    <select
+                      class="openclaw-tools-control__select"
+                      :value="openClawToolsScope"
+                      :disabled="isOpenClawToolsSaving"
+                      @change="handleOpenClawToolsScopeChange(($event.target as HTMLSelectElement).value)"
+                    >
+                      <option value="agent">当前员工</option>
+                      <option value="global">全局默认</option>
+                    </select>
+                  </label>
+                  <label class="openclaw-tools-control">
+                    <span>Profile</span>
+                    <select
+                      class="openclaw-tools-control__select"
+                      :value="openClawToolsList.profile || 'default'"
+                      :disabled="isOpenClawToolsSaving"
+                      @change="setOpenClawToolsProfile(($event.target as HTMLSelectElement).value)"
+                    >
+                      <option v-for="option in openClawToolsProfileOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="openclaw-tools-toolbar__meta">
+                  <span class="openclaw-list-panel__count">已启用 {{ openClawToolsEnabledCount }} / {{ openClawToolsList.tools.length }}</span>
+                  <button
+                    class="desktop-console-panel__action desktop-console-panel__action--ghost openclaw-tools-toolbar__refresh"
+                    type="button"
+                    :disabled="isOpenClawToolsSaving"
+                    @click="refreshOpenClawToolsList(activeResourceMember?.agentId ?? null, openClawToolsScope)"
+                  >
+                    重新读取
+                  </button>
+                </div>
               </div>
-              <p class="openclaw-list-panel__hint">工具开关与配置请在 openclaw.json 的 tools / agents.list[].tools 中修改（profile、allow、deny）。</p>
+              <div v-if="openClawToolsByCategory.length === 0" class="empty-state management-empty-state empty-state--small">
+                当前没有可展示的工具配置。
+              </div>
               <div v-for="group in openClawToolsByCategory" :key="group.category" class="openclaw-tools-category">
                 <h5 class="openclaw-tools-category__title">{{ group.category }}</h5>
                 <ul class="openclaw-tool-cards">
                   <li v-for="tool in group.tools" :key="tool.id" class="openclaw-tool-card">
                     <div class="openclaw-tool-card__head">
                       <code class="openclaw-tool-card__id">{{ tool.id }}</code>
+                      <label class="openclaw-skill-card__toggle" :aria-label="`${tool.enabled ? '禁用' : '启用'}工具 ${tool.id}`">
+                        <input
+                          type="checkbox"
+                          :checked="tool.enabled"
+                          :disabled="isOpenClawToolsSaving"
+                          @change="setOpenClawToolEnabled(tool.id, ($event.target as HTMLInputElement).checked)"
+                        />
+                        <span class="openclaw-skill-card__toggle-slider" />
+                      </label>
                       <span class="openclaw-tool-card__badge" :class="{ 'openclaw-tool-card__badge--on': tool.enabled }">{{ tool.enabled ? '已启用' : '未启用' }}</span>
                     </div>
                     <p class="openclaw-tool-card__desc">{{ tool.description }}</p>

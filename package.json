@@ -9,7 +9,9 @@
     "preview": "node ./node_modules/vite/bin/vite.js preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:build:win": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json",
+    "tauri:build:win:arm64": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --runner cargo-xwin --target aarch64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json"
   },
   "dependencies": {
     "gsap": "^3.12.7",

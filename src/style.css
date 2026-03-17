@@ -3829,15 +3829,92 @@ select {
   min-width: 160px;
 }
 
-.openclaw-list-panel__count {
-  font-size: 12px;
-  color: rgba(66, 41, 24, 0.7);
+.openclaw-tools-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(121, 73, 34, 0.14);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.52) 100%);
 }
 
-.openclaw-list-panel__hint {
-  margin: 0;
-  font-size: 12px;
-  color: rgba(66, 41, 24, 0.65);
+.openclaw-tools-toolbar__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.openclaw-tools-toolbar__meta {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.openclaw-tools-toolbar__refresh {
+  white-space: nowrap;
+}
+
+.openclaw-list-panel__count {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(66, 41, 24, 0.78);
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(121, 73, 34, 0.08);
+  border: 1px solid rgba(121, 73, 34, 0.14);
+}
+
+.openclaw-tools-control {
+  display: grid;
+  gap: 5px;
+  min-width: 168px;
+  font-size: 11px;
+  color: rgba(66, 41, 24, 0.74);
+}
+
+.openclaw-tools-control > span {
+  letter-spacing: 0.02em;
+}
+
+.openclaw-tools-control__select {
+  min-width: 168px;
+  height: 32px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(121, 73, 34, 0.24);
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(66, 41, 24, 0.9);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.openclaw-tools-control__select:focus {
+  outline: none;
+  border-color: rgba(121, 73, 34, 0.5);
+  box-shadow: 0 0 0 3px rgba(121, 73, 34, 0.12);
+}
+
+.openclaw-tools-control__select:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+@media (max-width: 760px) {
+  .openclaw-tools-toolbar {
+    align-items: stretch;
+  }
+
+  .openclaw-tools-toolbar__meta {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .openclaw-tools-control {
+    flex: 1 1 160px;
+  }
 }
 
 .openclaw-tools-profile {
@@ -3882,6 +3959,14 @@ select {
   background: rgba(121, 73, 34, 0.08);
   padding: 2px 6px;
   border-radius: 6px;
+}
+
+.openclaw-tool-card__head .openclaw-skill-card__toggle {
+  margin-left: auto;
+}
+
+.openclaw-tool-card__head .openclaw-tool-card__badge {
+  margin-left: 8px;
 }
 
 .openclaw-skill-card__badge,

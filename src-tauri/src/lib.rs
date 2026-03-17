@@ -91,6 +91,7 @@ struct StaffMemberSnapshot {
     model: String,
     workspace: String,
     tools_profile: String,
+    tools_enabled_count: usize,
     status_label: String,
     current_work_label: String,
     current_work: String,
@@ -553,6 +554,7 @@ fn load_staff_from_runtime_dirs(
                 .unwrap_or_else(|| "未标注".to_string()),
             workspace: "未标注".to_string(),
             tools_profile: "default".to_string(),
+            tools_enabled_count: openclaw_profile_tool_ids("default").len(),
             status_label,
             current_work_label: "正在处理什么".to_string(),
             current_work: current_work.unwrap_or_else(|| "当前无实时任务".to_string()),
@@ -2024,6 +2026,161 @@ fn load_openclaw_tools_list(agent_id: Option<String>) -> Result<OpenClawToolsLis
     })
 }
 
+/// 保存 OpenClaw 工具配置：
+/// - scope = "agent"：写入 agents.list[].tools（需要 agent_id）
+/// - scope = "global"：写入根 tools
+/// enabled_tool_ids 为最终启用集合（会转换为 allow/deny）
+#[tauri::command]
+fn save_openclaw_tools_config(
+    agent_id: Option<String>,
+    scope: Option<String>,
+    profile: Option<String>,
+    enabled_tool_ids: Vec<String>,
+) -> Result<(), String> {
+    let config_path = resolve_openclaw_config_path();
+    let raw = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
+    let mut parsed: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let root = parsed.as_object_mut().ok_or("openclaw.json 根节点不是对象")?;
+
+    let scope_mode = scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("agent")
+        .to_ascii_lowercase();
+
+    let canonical_tool_ids: std::collections::HashSet<String> = OPENCLAW_TOOL_INVENTORY
+        .iter()
+        .map(|(id, _, _)| (*id).to_string())
+        .collect();
+
+    let mut enabled_set = std::collections::HashSet::new();
+    for raw_id in enabled_tool_ids {
+        let trimmed = raw_id.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let canonical = OPENCLAW_TOOL_INVENTORY
+            .iter()
+            .find_map(|(id, _, _)| {
+                if id.eq_ignore_ascii_case(trimmed) {
+                    Some((*id).to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| trimmed.to_ascii_lowercase());
+        enabled_set.insert(canonical);
+    }
+
+    // 按固定顺序输出 allow，便于 diff 稳定可读。
+    let mut ordered_allow: Vec<String> = OPENCLAW_TOOL_INVENTORY
+        .iter()
+        .map(|(id, _, _)| (*id).to_string())
+        .filter(|id| enabled_set.contains(id))
+        .collect();
+    let mut extras: Vec<String> = enabled_set
+        .iter()
+        .filter(|id| !canonical_tool_ids.contains((*id).as_str()))
+        .cloned()
+        .collect();
+    extras.sort();
+    let has_extras = !extras.is_empty();
+    ordered_allow.extend(extras);
+
+    let known_enabled_count = OPENCLAW_TOOL_INVENTORY
+        .iter()
+        .filter(|(id, _, _)| enabled_set.contains(*id))
+        .count();
+
+    let allow = if known_enabled_count == OPENCLAW_TOOL_INVENTORY.len() && !has_extras {
+        vec![Value::String("*".to_string())]
+    } else if ordered_allow.is_empty() {
+        vec![Value::String("*".to_string())]
+    } else {
+        ordered_allow
+            .iter()
+            .map(|id| Value::String(id.to_string()))
+            .collect()
+    };
+
+    let deny = if ordered_allow.is_empty() {
+        Some(vec![Value::String("*".to_string())])
+    } else {
+        None
+    };
+
+    let profile_value = profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default")
+        .to_string();
+
+    let tools_obj = match scope_mode.as_str() {
+        "global" => root
+            .entry("tools")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or("tools 不是对象")?,
+        "agent" => {
+            let agent_key = agent_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or("scope=agent 时 agentId 不能为空")?;
+            let agents = root
+                .entry("agents")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .ok_or("agents 不是对象")?;
+            let list = agents
+                .entry("list")
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .ok_or("agents.list 不是数组")?;
+
+            let target = list
+                .iter_mut()
+                .find_map(|item| {
+                    let obj = item.as_object_mut()?;
+                    let id = obj
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or("");
+                    if id.eq_ignore_ascii_case(agent_key) {
+                        Some(obj)
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| format!("未找到 id 为 {} 的员工。", agent_key))?;
+
+            target
+                .entry("tools")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .ok_or("agents.list[].tools 不是对象")?
+        }
+        _ => {
+            return Err("scope 仅支持 agent 或 global".to_string());
+        }
+    };
+
+    tools_obj.insert("profile".to_string(), Value::String(profile_value));
+    tools_obj.insert("allow".to_string(), Value::Array(allow));
+    if let Some(deny_arr) = deny {
+        tools_obj.insert("deny".to_string(), Value::Array(deny_arr));
+    } else {
+        tools_obj.remove("deny");
+    }
+
+    let new_raw = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
+    std::fs::write(&config_path, new_raw).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn load_memory_file_snapshot() -> Result<SourceFileSnapshotResponse, String> {
     let scopes = load_editable_scopes();
@@ -2712,6 +2869,12 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(default_tools_profile);
+            let tools_enabled_count = root
+                .map(|root_obj| {
+                    let (_, _, allowed_ids) = openclaw_resolve_tools_from_config(root_obj, Some(obj));
+                    allowed_ids.len()
+                })
+                .unwrap_or_else(|| openclaw_profile_tool_ids(tools_profile).len());
             let runtime_summary = load_runtime_session_summary(agent_id);
             let status_label = runtime_summary
                 .latest_updated_at_ms
@@ -2736,6 +2899,7 @@ fn load_staff_snapshot() -> Result<StaffSnapshotResponse, String> {
                 model: effective_model.to_string(),
                 workspace: workspace.to_string(),
                 tools_profile: tools_profile.to_string(),
+                tools_enabled_count,
                 status_label,
                 current_work_label: "正在处理什么".to_string(),
                 current_work: current_work.unwrap_or_else(|| "当前无实时任务".to_string()),
@@ -3767,6 +3931,7 @@ pub fn run() {
             load_openclaw_skills_list,
             save_openclaw_skill_enabled,
             load_openclaw_tools_list,
+            save_openclaw_tools_config,
             save_source_file,
             open_external_url
         ])
