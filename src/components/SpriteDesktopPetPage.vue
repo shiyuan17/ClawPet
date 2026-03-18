@@ -41,6 +41,14 @@ import qqBotChannelIcon from "../images/channels/qq.svg";
 import { usePetSound } from "../composables/usePetSound";
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
 import {
+  fetchSkillTop50,
+  fetchSkillsGlobal,
+  fetchSkillsByCategory,
+  type SkillMarketCategory,
+  type SkillMarketSkill,
+  type SkillMarketSortBy
+} from "../services/skillsMarket";
+import {
   appendRequestLog,
   normalizeBaseUrl,
   normalizeApiPath,
@@ -60,6 +68,8 @@ import {
   type PlatformProtocol,
   type RequestLog
 } from "../services/consoleData";
+import { loadAgencyRosterZh, type AgencyRosterRole } from "../services/agencyRoster";
+import { loadAgentDetailMarkdownZh } from "../services/agentDetail";
 
 type Frame = {
   i: number;
@@ -97,6 +107,8 @@ type ConsoleSection =
   | "overview"
   | "platforms"
   | "staff"
+  | "role-workflow"
+  | "skill-market"
   | "channels"
   | "bindings"
   | "tasks";
@@ -151,6 +163,18 @@ type ResourceModalKind = "memory" | "skill" | "tool";
 
 type LogAnalysisView = "timeline" | "sessions" | "failures";
 type PanelMode = "console" | "logs" | "subscriptions" | "lobster";
+type SkillMarketSectionCategory = "top" | SkillMarketCategory;
+type SkillMarketCategoryOption = {
+  id: SkillMarketSectionCategory;
+  label: string;
+  icon: string;
+  hint: string;
+  apiCategory: SkillMarketCategory | null;
+};
+type SkillMarketListResultSnapshot = {
+  skills: SkillMarketSkill[];
+  total: number;
+};
 
 type CodingPlanRecommendation = {
   id: string;
@@ -352,6 +376,7 @@ type OpenClawToolListItem = {
   category: string;
   enabled: boolean;
 };
+type OpenClawSkillCategory = "builtIn" | "installed";
 
 type OpenClawToolsScope = "agent" | "global";
 
@@ -473,7 +498,7 @@ type LobsterActionResult = {
   backupPath: string | null;
 };
 
-type LobsterInstallCheckStatus = "success" | "warning" | "failed";
+type LobsterInstallCheckStatus = "success" | "warning" | "failed" | "checking";
 
 type LobsterInstallCheckItem = {
   id: string;
@@ -487,6 +512,38 @@ type LobsterInstallGuideResponse = {
   ready: boolean;
   checks: LobsterInstallCheckItem[];
 };
+
+type RoleWorkflowOverride = {
+  nameZh?: string;
+  workflowZh?: string;
+  detailContentZh?: string;
+  detailVersions?: RoleWorkflowSavedVersion[];
+};
+
+type RoleWorkflowDetailDraft = {
+  contentZh: string;
+};
+
+type RoleWorkflowSavedVersion = {
+  id: string;
+  contentZh: string;
+  savedAt: number;
+};
+
+type RoleWorkflowInstallNotice = {
+  tone: "success" | "error";
+  text: string;
+};
+
+const LOBSTER_INSTALL_CHECK_BLUEPRINT: Array<Pick<LobsterInstallCheckItem, "id" | "title">> = [
+  { id: "runtime", title: "Bundled OpenClaw 运行时" },
+  { id: "nodejs", title: "Node.js 执行器" },
+  { id: "openclaw-cli", title: "OpenClaw CLI 可执行性" },
+  { id: "state-layout", title: "OpenClaw 状态目录" },
+  { id: "plugins", title: "Bundled 插件镜像" },
+  { id: "skills", title: "预装 Skills 资源" },
+  { id: "config", title: "OpenClaw 配置目录" }
+];
 
 type LobsterInstallWizardStep = 1 | 2 | 3 | 4 | 5;
 type LobsterInstallComponentStatus = "pending" | "installing" | "installed" | "failed";
@@ -504,6 +561,11 @@ type LobsterProviderOption = {
   docsUrl?: string;
   pathPrefix: string;
   requiresApiKey: boolean;
+};
+type LobsterProviderApiKind = "openai-completions" | "openai-responses" | "anthropic-messages";
+type LobsterProviderApiKindOption = {
+  value: LobsterProviderApiKind;
+  label: string;
 };
 
 type AppLocale = "zh-CN" | "en-US" | "ja-JP";
@@ -759,6 +821,19 @@ const platforms = ref<PlatformConfig[]>([]);
 const openClawProviderIdMap = ref<Record<string, string>>({});
 const platformDirectBaseUrlMap = ref<Record<string, string>>(loadPlatformDirectBaseUrlMap());
 const staffMembers = ref<StaffMemberSnapshot[]>([]);
+const roleWorkflowKeyword = ref("");
+const roleWorkflowOverrides = ref<Record<string, RoleWorkflowOverride>>(loadRoleWorkflowOverrides());
+const roleWorkflowDetailRoleId = ref<string | null>(null);
+const roleWorkflowDetailDraft = ref<RoleWorkflowDetailDraft>({ contentZh: "" });
+const roleWorkflowDetailOriginalContent = ref("");
+const roleWorkflowNameZhDraft = ref("");
+const roleWorkflowNameZhOriginal = ref("");
+const isRoleWorkflowInstalling = ref(false);
+const roleWorkflowInstallNotice = ref<RoleWorkflowInstallNotice | null>(null);
+const staffDeleteTargetMember = ref<StaffMemberSnapshot | null>(null);
+const staffDeleteRemoveFiles = ref(false);
+const isStaffDeleting = ref(false);
+const staffDeleteError = ref("");
 const channelGroups = ref<ChannelGroupSnapshotItem[]>([]);
 const recentOutputModalMemberId = ref<string | null>(null);
 const petBindingCode = ref("");
@@ -771,6 +846,7 @@ const openClawSkillRecords = ref<DocumentRecord[]>([]);
 const resourceDocumentRecords = ref<DocumentRecord[]>([]);
 /** OpenClaw 技能库：内置 + 安装（用于技能弹窗展示） */
 const openClawSkillsList = ref<{ builtIn: OpenClawSkillListItem[]; installed: OpenClawSkillListItem[] }>({ builtIn: [], installed: [] });
+const openClawSkillCategory = ref<OpenClawSkillCategory>("builtIn");
 /** OpenClaw 当前员工的工具配置（用于工具弹窗展示，非 TOOLS.md 编辑） */
 const openClawToolsList = ref<{ profile: string; profileLabel: string; tools: OpenClawToolListItem[] }>({ profile: "", profileLabel: "", tools: [] });
 const openClawToolsScope = ref<OpenClawToolsScope>("agent");
@@ -808,6 +884,7 @@ const PET_SIZE_MAP: Record<PetSizeLevel, number> = { small: 180, medium: 280, la
 const CONTEXT_MENU_VIEWPORT_MARGIN = 8;
 const CONTEXT_MENU_FALLBACK_WIDTH = 208;
 const CONTEXT_MENU_FALLBACK_HEIGHT = 224;
+const agencyRosterDivisions = loadAgencyRosterZh();
 
 function getSafeLocalStorage(): Storage | null {
   if (typeof window === "undefined") {
@@ -836,6 +913,85 @@ function safeLocalStorageSetItem(key: string, value: string) {
   }
 }
 
+function normalizeRoleWorkflowSavedVersion(raw: unknown): RoleWorkflowSavedVersion | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const candidate = raw as Record<string, unknown>;
+  const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+  const contentZh = typeof candidate.contentZh === "string" ? candidate.contentZh : "";
+  const savedAt = typeof candidate.savedAt === "number" && Number.isFinite(candidate.savedAt)
+    ? Math.floor(candidate.savedAt)
+    : 0;
+  if (!id || !savedAt) {
+    return null;
+  }
+  return {
+    id,
+    contentZh,
+    savedAt
+  };
+}
+
+function normalizeRoleWorkflowOverride(raw: unknown): RoleWorkflowOverride | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const candidate = raw as Record<string, unknown>;
+  const nameZh = typeof candidate.nameZh === "string" ? candidate.nameZh : undefined;
+  const workflowZh = typeof candidate.workflowZh === "string" ? candidate.workflowZh : undefined;
+  const detailContentZh = typeof candidate.detailContentZh === "string" ? candidate.detailContentZh : undefined;
+  const detailVersions = Array.isArray(candidate.detailVersions)
+    ? candidate.detailVersions
+      .map(normalizeRoleWorkflowSavedVersion)
+      .filter((version): version is RoleWorkflowSavedVersion => Boolean(version))
+      .sort((left, right) => right.savedAt - left.savedAt)
+      .slice(0, 3)
+    : [];
+
+  if (!nameZh && !workflowZh && !detailContentZh && detailVersions.length === 0) {
+    return null;
+  }
+
+  const normalized: RoleWorkflowOverride = {};
+  if (nameZh) {
+    normalized.nameZh = nameZh;
+  }
+  if (workflowZh) {
+    normalized.workflowZh = workflowZh;
+  }
+  if (typeof detailContentZh === "string") {
+    normalized.detailContentZh = detailContentZh;
+  }
+  if (detailVersions.length > 0) {
+    normalized.detailVersions = detailVersions;
+  }
+  return normalized;
+}
+
+function loadRoleWorkflowOverrides() {
+  const raw = safeLocalStorageGetItem("keai.desktop-pet.role-workflow-overrides");
+  if (!raw) {
+    return {} as Record<string, RoleWorkflowOverride>;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {} as Record<string, RoleWorkflowOverride>;
+    }
+    const normalizedEntries = Object.entries(parsed as Record<string, unknown>)
+      .map(([roleId, override]) => [roleId, normalizeRoleWorkflowOverride(override)] as const)
+      .filter((entry): entry is readonly [string, RoleWorkflowOverride] => Boolean(entry[1]));
+    return Object.fromEntries(normalizedEntries) as Record<string, RoleWorkflowOverride>;
+  } catch {
+    return {} as Record<string, RoleWorkflowOverride>;
+  }
+}
+
+function persistRoleWorkflowOverrides() {
+  safeLocalStorageSetItem("keai.desktop-pet.role-workflow-overrides", JSON.stringify(roleWorkflowOverrides.value));
+}
+
 const APP_LOCALE_STORAGE_KEY = "keai.desktop-pet.locale";
 const APP_LOCALE_OPTIONS: AppLocale[] = ["zh-CN", "en-US", "ja-JP"];
 const APP_THEME_STORAGE_KEY = "keai.desktop-pet.theme";
@@ -857,6 +1013,8 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.overview": "总览",
     "console.section.platforms": "代理配置",
     "console.section.staff": "员工管理",
+    "console.section.role_workflow": "角色工作流",
+    "console.section.skill_market": "技能市场",
     "console.section.channels": "消息频道",
     "console.section.bindings": "宠物绑定",
     "console.section.tasks": "任务管理",
@@ -994,7 +1152,10 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "provider.group.custom": "自定义渠道",
     "provider.option.custom": "自定义接入",
     "provider.protocol.openai": "OpenAI 兼容",
-    "provider.protocol.anthropic": "Anthropic Messages"
+    "provider.protocol.anthropic": "Anthropic Messages",
+    "provider.protocol.openai_completions": "OpenAI Completions",
+    "provider.protocol.openai_responses": "OpenAI Responses",
+    "provider.protocol.anthropic_compatible": "Anthropic 兼容"
   },
   "en-US": {
     "locale.zh-CN": "Chinese",
@@ -1012,6 +1173,8 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.overview": "Overview",
     "console.section.platforms": "Proxy Config",
     "console.section.staff": "Staff",
+    "console.section.role_workflow": "Role Workflows",
+    "console.section.skill_market": "Skill Market",
     "console.section.channels": "Channels",
     "console.section.bindings": "Bindings",
     "console.section.tasks": "Tasks",
@@ -1149,7 +1312,10 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "provider.group.custom": "Custom",
     "provider.option.custom": "Custom (Manual Setup)",
     "provider.protocol.openai": "OpenAI Compatible",
-    "provider.protocol.anthropic": "Anthropic Messages"
+    "provider.protocol.anthropic": "Anthropic Messages",
+    "provider.protocol.openai_completions": "OpenAI Completions",
+    "provider.protocol.openai_responses": "OpenAI Responses",
+    "provider.protocol.anthropic_compatible": "Anthropic Compatible"
   },
   "ja-JP": {
     "locale.zh-CN": "中国語",
@@ -1167,6 +1333,8 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.overview": "概要",
     "console.section.platforms": "プロキシ設定",
     "console.section.staff": "スタッフ",
+    "console.section.role_workflow": "ロールワークフロー",
+    "console.section.skill_market": "スキルマーケット",
     "console.section.channels": "メッセージチャンネル",
     "console.section.bindings": "連携",
     "console.section.tasks": "タスク",
@@ -1304,7 +1472,10 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "provider.group.custom": "カスタム",
     "provider.option.custom": "カスタム接続",
     "provider.protocol.openai": "OpenAI 互換",
-    "provider.protocol.anthropic": "Anthropic Messages"
+    "provider.protocol.anthropic": "Anthropic Messages",
+    "provider.protocol.openai_completions": "OpenAI Completions",
+    "provider.protocol.openai_responses": "OpenAI Responses",
+    "provider.protocol.anthropic_compatible": "Anthropic 互換"
   }
 };
 
@@ -1516,8 +1687,23 @@ const resourceModalFilterText = ref("");
 const staffSnapshotDetail = ref("正在读取员工配置...");
 const staffSnapshotSourcePath = ref("");
 const staffMissionStatement = ref("构建可持续自治的 AI 员工体系，持续完成高价值任务。");
+const isStaffSnapshotRefreshing = ref(false);
 const taskSnapshotDetail = ref("正在读取任务调度...");
 const taskSnapshotSourcePath = ref("");
+const activeSkillMarketCategory = ref<SkillMarketSectionCategory>("top");
+const skillMarketSortBy = ref<SkillMarketSortBy>("score");
+const skillMarketSearch = ref("");
+const skillMarketPage = ref(1);
+const skillMarketPageSize = ref(30);
+const skillMarketLoading = ref(false);
+const skillMarketError = ref("");
+const skillMarketTopSkills = ref<SkillMarketSkill[]>([]);
+const skillMarketTopTotal = ref(0);
+const skillMarketCategorySkills = ref<SkillMarketSkill[]>([]);
+const skillMarketCategoryTotal = ref(0);
+const skillMarketGlobalSkills = ref<SkillMarketSkill[]>([]);
+const skillMarketGlobalTotal = ref(0);
+const activeSkillMarketDetail = ref<SkillMarketSkill | null>(null);
 const runtimeLogDetail = ref("正在读取 OpenClaw 运行时消息...");
 const memorySnapshotDetail = ref("正在读取记忆文件...");
 const memorySnapshotSourcePath = ref("");
@@ -1533,6 +1719,7 @@ const lobsterSnapshot = ref<LobsterSnapshotResponse | null>(null);
 const lobsterActionResult = ref<LobsterActionResult | null>(null);
 const lobsterActionRunning = ref<LobsterActionId | null>(null);
 const selectedLobsterBackupPath = ref<string | null>(null);
+const isLobsterInstallWizardPrimed = ref(false);
 const isLobsterInstallWizardOpen = ref(false);
 const lobsterInstallWizardStep = ref<LobsterInstallWizardStep>(1);
 const lobsterInstallGuide = ref<LobsterInstallGuideResponse | null>(null);
@@ -1717,8 +1904,34 @@ const MESSAGE_CHANNEL_ALIASES: Record<string, MessageChannelType> = {
   qqbot: "qqbot",
   "qq bot": "qqbot"
 };
-const featuredMessageChannels = computed(() => messageChannelCatalog.filter((item) => item.featured));
-const supportedMessageChannels = computed(() => messageChannelCatalog.filter((item) => !item.featured));
+const skillMarketCategories: SkillMarketCategoryOption[] = [
+  { id: "top", label: "精选50Top", icon: "50", hint: "精选榜单", apiCategory: null },
+  { id: "ai-intelligence", label: "AI 智能", icon: "AI", hint: "智能能力", apiCategory: "ai-intelligence" },
+  { id: "developer-tools", label: "开发工具", icon: "</>", hint: "工程研发", apiCategory: "developer-tools" },
+  { id: "productivity", label: "效率提升", icon: "⚡", hint: "个人效率", apiCategory: "productivity" },
+  { id: "data-analytics", label: "数据分析", icon: "图", hint: "洞察分析", apiCategory: "data-analytics" },
+  { id: "content-creation", label: "内容创作", icon: "创", hint: "文案视频", apiCategory: "content-creation" },
+  { id: "security-compliance", label: "安全合规", icon: "盾", hint: "安全审计", apiCategory: "security-compliance" },
+  {
+    id: "communication-collaboration",
+    label: "通讯协作",
+    icon: "聊",
+    hint: "团队协作",
+    apiCategory: "communication-collaboration"
+  }
+];
+const skillMarketSortOptions: Array<{ id: SkillMarketSortBy; label: string }> = [
+  { id: "score", label: "综合排序" },
+  { id: "downloads", label: "下载量" },
+  { id: "stars", label: "收藏量" }
+];
+const skillMarketCategoryMap = new Map<SkillMarketSectionCategory, SkillMarketCategoryOption>(
+  skillMarketCategories.map((item) => [item.id, item])
+);
+const skillMarketCache = new Map<string, SkillMarketListResultSnapshot>();
+const skillMarketGlobalCache = new Map<string, SkillMarketListResultSnapshot>();
+let skillMarketRequestToken = 0;
+const visibleMessageChannels = computed(() => messageChannelCatalog);
 const configuredMessageChannelIds = computed(() => {
   const configured = new Set<MessageChannelType>();
   for (const group of channelGroups.value) {
@@ -1735,10 +1948,214 @@ const channelGroupsByType = computed(() =>
 const activeChannelConfigMeta = computed(
   () => messageChannelCatalog.find((item) => item.id === channelConfigEditingType.value) ?? null
 );
+const activeSkillMarketCategoryMeta = computed(
+  () => skillMarketCategoryMap.get(activeSkillMarketCategory.value) ?? skillMarketCategories[0]
+);
+const skillMarketSourceSkills = computed(() =>
+  activeSkillMarketCategory.value === "top" ? skillMarketTopSkills.value : skillMarketCategorySkills.value
+);
+const skillMarketBaseSkills = computed(() =>
+  skillMarketSearch.value.trim() ? skillMarketGlobalSkills.value : skillMarketSourceSkills.value
+);
+const skillMarketTotal = computed(() =>
+  activeSkillMarketCategory.value === "top" ? skillMarketTopTotal.value : skillMarketCategoryTotal.value
+);
+const filteredSkillMarketSkills = computed(() => {
+  const keyword = skillMarketSearch.value.trim().toLowerCase();
+  const records = skillMarketBaseSkills.value;
+  const matched = keyword
+    ? records.filter((item) => {
+      const searchBlob = [
+        item.name,
+        item.description,
+        item.descriptionZh,
+        item.ownerName,
+        item.category,
+        item.tags.join(" ")
+      ].join(" ").toLowerCase();
+      return searchBlob.includes(keyword);
+    })
+    : records.slice();
+
+  const sortBy = skillMarketSortBy.value;
+  matched.sort((left, right) => {
+    if (sortBy === "downloads") {
+      return right.downloads - left.downloads;
+    }
+    if (sortBy === "stars") {
+      return right.stars - left.stars;
+    }
+    return right.score - left.score;
+  });
+  return matched;
+});
+const skillMarketLocalTotal = computed(() => filteredSkillMarketSkills.value.length);
+const skillMarketRemoteTotalPages = computed(() => {
+  const size = Math.max(skillMarketPageSize.value, 1);
+  const total = Math.max(skillMarketSearch.value.trim() ? skillMarketGlobalTotal.value : skillMarketTotal.value, 0);
+  return Math.max(1, Math.ceil(total / size));
+});
+const skillMarketCurrentTotalPages = computed(() => {
+  const size = Math.max(skillMarketPageSize.value, 1);
+  if (activeSkillMarketCategory.value === "top" || skillMarketSearch.value.trim()) {
+    return Math.max(1, Math.ceil(skillMarketLocalTotal.value / size));
+  }
+  return skillMarketRemoteTotalPages.value;
+});
+const pagedSkillMarketSkills = computed(() => {
+  if (activeSkillMarketCategory.value !== "top" && !skillMarketSearch.value.trim()) {
+    return filteredSkillMarketSkills.value;
+  }
+  const page = Math.max(1, skillMarketPage.value);
+  const size = Math.max(1, skillMarketPageSize.value);
+  const start = (page - 1) * size;
+  return filteredSkillMarketSkills.value.slice(start, start + size);
+});
+const skillMarketPageNumbers = computed(() => {
+  const total = skillMarketCurrentTotalPages.value;
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, index) => index + 1);
+  }
+  const current = Math.min(Math.max(skillMarketPage.value, 1), total);
+  let start = Math.max(1, current - 3);
+  let end = start + 6;
+  if (end > total) {
+    end = total;
+    start = end - 6;
+  }
+  const pages: number[] = [];
+  for (let page = start; page <= end; page += 1) {
+    pages.push(page);
+  }
+  return pages;
+});
+const skillMarketCanPrevPage = computed(() => skillMarketPage.value > 1);
+const skillMarketCanNextPage = computed(() => skillMarketPage.value < skillMarketCurrentTotalPages.value);
+const skillMarketSummaryText = computed(() => {
+  const category = activeSkillMarketCategoryMeta.value.label;
+  const displayed = pagedSkillMarketSkills.value.length;
+  const isTop = activeSkillMarketCategory.value === "top";
+  const isSearching = Boolean(skillMarketSearch.value.trim());
+  const total = isTop || isSearching
+    ? skillMarketLocalTotal.value
+    : skillMarketTotal.value || skillMarketSourceSkills.value.length;
+  if (isSearching) {
+    return `分类：${category} · 命中 ${total} 条 · 第 ${skillMarketPage.value}/${skillMarketCurrentTotalPages.value} 页`;
+  }
+  return `分类：${category} · 展示 ${displayed} / ${total} · 第 ${skillMarketPage.value}/${skillMarketCurrentTotalPages.value} 页`;
+});
+const roleWorkflowNormalizedKeyword = computed(() => roleWorkflowKeyword.value.trim().toLowerCase());
+const roleWorkflowTotalCount = computed(() => agencyRosterDivisions.reduce((sum, division) => sum + division.count, 0));
+const roleWorkflowRoleIndex = computed(
+  () =>
+    new Map<
+      string,
+      {
+        role: AgencyRosterRole;
+        divisionTitleZh: string;
+        divisionTitleEn: string;
+        groupTitleZh: string | null;
+        groupTitleEn: string | null;
+      }
+    >(
+      agencyRosterDivisions.flatMap((division) =>
+        division.groups.flatMap((group) =>
+          group.roles.map((role) => [
+            role.id,
+            {
+              role,
+              divisionTitleZh: division.titleZh,
+              divisionTitleEn: division.titleEn,
+              groupTitleZh: group.titleZh,
+              groupTitleEn: group.titleEn
+            }
+          ] as const)
+        )
+      )
+    )
+);
+const activeRoleWorkflowBase = computed(() => {
+  if (!roleWorkflowDetailRoleId.value) {
+    return null;
+  }
+  return roleWorkflowRoleIndex.value.get(roleWorkflowDetailRoleId.value) ?? null;
+});
+const activeRoleWorkflowOverride = computed(() => {
+  if (!roleWorkflowDetailRoleId.value) {
+    return null;
+  }
+  return roleWorkflowOverrides.value[roleWorkflowDetailRoleId.value] ?? null;
+});
+const roleWorkflowDetailSavedVersions = computed(() => {
+  return activeRoleWorkflowOverride.value?.detailVersions ?? [];
+});
+const isRoleWorkflowDraftChanged = computed(() => {
+  if (!roleWorkflowDetailRoleId.value) {
+    return false;
+  }
+  return (
+    roleWorkflowDetailDraft.value.contentZh !== roleWorkflowDetailOriginalContent.value ||
+    roleWorkflowNameZhDraft.value.trim() !== roleWorkflowNameZhOriginal.value.trim()
+  );
+});
+const roleWorkflowDivisions = computed(() => {
+  const keyword = roleWorkflowNormalizedKeyword.value;
+
+  return agencyRosterDivisions
+    .map((division) => {
+      const groups = division.groups
+        .map((group) => {
+          const roles = group.roles
+            .map((role) => {
+              const override = roleWorkflowOverrides.value[role.id];
+              return {
+                ...role,
+                nameZh: override?.nameZh ?? role.nameZh,
+                workflowZh: override?.workflowZh ?? role.workflowZh
+              };
+            })
+            .filter((role) => {
+              if (!keyword) {
+                return true;
+              }
+              const searchBlob = [
+                role.nameZh,
+                role.nameEn,
+                role.workflowZh,
+                division.titleZh,
+                division.titleEn,
+                group.titleZh ?? "",
+                group.titleEn ?? "",
+                role.sourcePath
+              ]
+                .join(" ")
+                .toLowerCase();
+              return searchBlob.includes(keyword);
+            });
+          return {
+            ...group,
+            roles
+          };
+        })
+        .filter((group) => group.roles.length > 0);
+
+      return {
+        ...division,
+        groups,
+        count: groups.reduce((sum, group) => sum + group.roles.length, 0)
+      };
+    })
+    .filter((division) => division.count > 0);
+});
+const roleWorkflowVisibleCount = computed(() =>
+  roleWorkflowDivisions.value.reduce((sum, division) => sum + division.count, 0)
+);
 const consoleSections = computed<Array<{ id: ConsoleSection; label: string }>>(() => [
   { id: "overview", label: tr("console.section.overview") },
   { id: "platforms", label: tr("console.section.platforms") },
   { id: "staff", label: tr("console.section.staff") },
+  { id: "role-workflow", label: tr("console.section.role_workflow") },
+  { id: "skill-market", label: tr("console.section.skill_market") },
   { id: "channels", label: tr("console.section.channels") },
   { id: "bindings", label: tr("console.section.bindings") },
   { id: "tasks", label: tr("console.section.tasks") }
@@ -2051,6 +2468,25 @@ const lobsterProviderModelPlaceholder = computed(
 const lobsterProviderApiKeyPlaceholder = computed(
   () => lobsterEffectiveProviderOption.value?.apiKeyPlaceholder ?? "sk-..."
 );
+const lobsterProviderSelectedIcon = computed(
+  () => lobsterSelectedProviderOption.value?.icon ?? lobsterEffectiveProviderOption.value?.icon ?? "🧩"
+);
+const lobsterProviderApiKind = computed<LobsterProviderApiKind>(() => getLobsterProviderApiKindByDraft(lobsterProviderForm.value));
+const lobsterProviderApiKindOptions = computed<LobsterProviderApiKindOption[]>(() => [
+  {
+    value: "openai-completions",
+    label: tr("provider.protocol.openai_completions")
+  },
+  {
+    value: "openai-responses",
+    label: tr("provider.protocol.openai_responses")
+  },
+  {
+    value: "anthropic-messages",
+    label: tr("provider.protocol.anthropic_compatible")
+  }
+]);
+const lobsterShowCustomProtocolPicker = computed(() => lobsterEffectiveProviderOption.value?.id === "custom");
 const appLocaleOptions = computed(() =>
   APP_LOCALE_OPTIONS.map((value) => ({
     value,
@@ -2063,6 +2499,18 @@ const appThemeOptions = computed(() =>
     label: tr(`system.settings.theme.${value}`)
   }))
 );
+const lobsterInstallGuideCheckTotal = computed(
+  () => lobsterInstallGuide.value?.checks.length ?? LOBSTER_INSTALL_CHECK_BLUEPRINT.length
+);
+const lobsterInstallGuideCheckedCount = computed(
+  () => lobsterInstallGuide.value?.checks.filter((item) => item.status !== "checking").length ?? 0
+);
+const lobsterInstallGuideSummaryText = computed(() => {
+  if (lobsterInstallGuideLoading.value) {
+    return tr("wizard.runtime.checking");
+  }
+  return lobsterInstallGuide.value?.ready ? tr("wizard.runtime.ready") : tr("wizard.runtime.blocked");
+});
 const lobsterInstallCanGoNext = computed(() => {
   if (lobsterInstallWizardStep.value === 1) return lobsterInstallRiskAccepted.value;
   if (lobsterInstallWizardStep.value === 2) return Boolean(lobsterInstallGuide.value?.ready);
@@ -2446,6 +2894,21 @@ const consolePanelStyle = computed(() => {
   const viewportWidth = bounds?.width ?? (typeof window === "undefined" ? 360 : window.innerWidth);
   const viewportHeight = bounds?.height ?? (typeof window === "undefined" ? 640 : window.innerHeight);
   if (isConsoleWindowMode) {
+    if (isWindowsRuntime) {
+      const margin = 18;
+      const width = Math.max(320, viewportWidth - margin * 2);
+      const height = Math.max(320, viewportHeight - margin * 2);
+      return {
+        width: `${width}px`,
+        height: `${height}px`,
+        left: `${margin}px`,
+        top: `${margin}px`,
+        opacity: "1",
+        transform: "none",
+        transformOrigin: "center center"
+      };
+    }
+
     return {
       width: `${Math.max(320, viewportWidth)}px`,
       height: `${Math.max(320, viewportHeight)}px`,
@@ -2767,6 +3230,15 @@ const filteredOpenClawInstalledSkills = computed(() => {
       (s.relativePath && s.relativePath.toLowerCase().includes(keyword))
   );
 });
+const activeOpenClawSkills = computed(() =>
+  openClawSkillCategory.value === "installed" ? filteredOpenClawInstalledSkills.value : filteredOpenClawBuiltInSkills.value
+);
+const activeOpenClawSkillsTitle = computed(() => (openClawSkillCategory.value === "installed" ? "安装技能" : "内置技能"));
+const activeOpenClawSkillsEmptyText = computed(() =>
+  openClawSkillCategory.value === "installed"
+    ? "暂无安装技能。在 ~/.openclaw/skills 或 workspace/skills 下为每个技能建子目录并放入 SKILL.md。"
+    : "暂无内置技能。"
+);
 /** 技能总数（内置 + 安装） */
 const openClawSkillsTotalCount = computed(
   () => (openClawSkillsList.value.builtIn?.length ?? 0) + (openClawSkillsList.value.installed?.length ?? 0)
@@ -3248,16 +3720,21 @@ let panelMoveStart = { x: 0, y: 0, panelX: 0, panelY: 0 };
 let panelResizeStart = { x: 0, y: 0, width: 0, height: 0 };
 let gatewayMonitorTimer = 0;
 let runtimeLogTimer = 0;
+let staffSnapshotPollTimer = 0;
 let lobsterInstallProgressTimer = 0;
+let lobsterInstallGuideRefreshToken = 0;
 let runtimeLogFollowTimer = 0;
 let runtimeLogRefreshTask: Promise<RequestLog[]> | null = null;
 let runtimeLogLastFingerprint = "";
 let runtimeLogFollowActiveUntil = 0;
+let roleWorkflowDetailRequestToken = 0;
+let lastSelectInteractionAt = 0;
 let unlistenConsoleOpenEvent: (() => void) | null = null;
 let activeVoiceAudio: HTMLAudioElement | null = null;
 const activeVoiceMessageId = ref<string | null>(null);
 const audioPayloadCache = new Map<string, AudioFilePayload>();
 const runtimeLogPollIntervalMs = 2500;
+const staffSnapshotPollIntervalMs = 3000;
 const runtimeLogFollowWindowMs = 4000;
 let systemThemeMediaQuery: MediaQueryList | null = null;
 let systemThemeMediaListener: ((event: MediaQueryListEvent) => void) | null = null;
@@ -3315,7 +3792,16 @@ type TauriNamespace = {
 };
 
 function parseConsoleSection(raw: string | null): ConsoleSection | null {
-  if (raw === "overview" || raw === "platforms" || raw === "staff" || raw === "channels" || raw === "bindings" || raw === "tasks") {
+  if (
+    raw === "overview" ||
+    raw === "platforms" ||
+    raw === "staff" ||
+    raw === "role-workflow" ||
+    raw === "skill-market" ||
+    raw === "channels" ||
+    raw === "bindings" ||
+    raw === "tasks"
+  ) {
     return raw;
   }
   return null;
@@ -3343,6 +3829,14 @@ const isConsoleWindowMode = (() => {
   }
   const label = tauriWindow.__TAURI__?.window?.getCurrentWindow?.().label;
   return label === "console";
+})();
+
+const isWindowsRuntime = (() => {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  const platform = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform;
+  return /windows/i.test(platform ?? navigator.userAgent);
 })();
 
 const initialConsoleSection = (() => {
@@ -4601,6 +5095,489 @@ async function refreshMessageChannelSnapshot() {
   }
 }
 
+function getSkillMarketCategoryLabel(category: string) {
+  const matched = skillMarketCategories.find((item) => item.apiCategory === category);
+  return matched?.label ?? (category || "未分类");
+}
+
+function getSkillMarketDescription(skill: SkillMarketSkill) {
+  if (appLocale.value === "zh-CN") {
+    return skill.descriptionZh || skill.description || "暂无描述";
+  }
+  return skill.description || skill.descriptionZh || "No description available.";
+}
+
+function getSkillMarketInitial(name: string) {
+  const trimmed = name.trim();
+  return trimmed ? trimmed.charAt(0).toUpperCase() : "S";
+}
+
+function formatSkillMarketCount(value: number) {
+  if (value >= 100000000) {
+    return `${(value / 100000000).toFixed(1)}亿`;
+  }
+  if (value >= 10000) {
+    return `${(value / 10000).toFixed(1)}万`;
+  }
+  return value.toLocaleString("zh-CN");
+}
+
+function formatSkillMarketVersion(value: string) {
+  if (!value.trim()) {
+    return "v1.0.0";
+  }
+  return value.startsWith("v") ? value : `v${value}`;
+}
+
+function getSkillMarketCacheKey(category: SkillMarketSectionCategory, sortBy: SkillMarketSortBy) {
+  if (category === "top") {
+    return "top";
+  }
+  return `${category}:${sortBy}:${skillMarketPage.value}:${skillMarketPageSize.value}`;
+}
+
+function getSkillMarketGlobalCacheKey(sortBy: SkillMarketSortBy) {
+  return `global:${sortBy}:1:300`;
+}
+
+function applySkillMarketSnapshot(category: SkillMarketSectionCategory, result: SkillMarketListResultSnapshot) {
+  if (category === "top") {
+    skillMarketTopSkills.value = result.skills;
+    skillMarketTopTotal.value = result.total;
+    return;
+  }
+  skillMarketCategorySkills.value = result.skills;
+  skillMarketCategoryTotal.value = result.total;
+}
+
+async function refreshSkillMarket(force = false) {
+  const category = activeSkillMarketCategory.value;
+  const keyword = skillMarketSearch.value.trim();
+  const globalCacheKey = getSkillMarketGlobalCacheKey(skillMarketSortBy.value);
+  if (keyword) {
+    if (!force) {
+      const cachedGlobal = skillMarketGlobalCache.get(globalCacheKey);
+      if (cachedGlobal) {
+        skillMarketGlobalSkills.value = cachedGlobal.skills;
+        skillMarketGlobalTotal.value = cachedGlobal.total;
+        skillMarketError.value = "";
+        return;
+      }
+    }
+    const token = ++skillMarketRequestToken;
+    skillMarketLoading.value = true;
+    skillMarketError.value = "";
+    try {
+      const globalResult = await fetchSkillsGlobal({
+        page: 1,
+        pageSize: 300,
+        sortBy: skillMarketSortBy.value,
+        order: "desc"
+      });
+      if (token !== skillMarketRequestToken) {
+        return;
+      }
+      skillMarketGlobalSkills.value = globalResult.skills;
+      skillMarketGlobalTotal.value = globalResult.total;
+      skillMarketGlobalCache.set(globalCacheKey, {
+        skills: globalResult.skills.slice(),
+        total: globalResult.total
+      });
+      statusText.value = `全站技能搜索数据已刷新，共 ${globalResult.skills.length} 条。`;
+    } catch (error) {
+      if (token !== skillMarketRequestToken) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "技能市场加载失败。";
+      skillMarketError.value = message;
+      statusText.value = message;
+    } finally {
+      if (token === skillMarketRequestToken) {
+        skillMarketLoading.value = false;
+      }
+    }
+    return;
+  }
+
+  const cacheKey = getSkillMarketCacheKey(category, skillMarketSortBy.value);
+  if (!force) {
+    const cached = skillMarketCache.get(cacheKey);
+    if (cached) {
+      applySkillMarketSnapshot(category, cached);
+      skillMarketError.value = "";
+      return;
+    }
+  }
+
+  const token = ++skillMarketRequestToken;
+  skillMarketLoading.value = true;
+  skillMarketError.value = "";
+
+  try {
+    let result: SkillMarketListResultSnapshot;
+    if (category === "top") {
+      const topResult = await fetchSkillTop50();
+      result = { skills: topResult.skills, total: topResult.total };
+    } else {
+      const categoryMeta = skillMarketCategoryMap.get(category);
+      if (!categoryMeta?.apiCategory) {
+        throw new Error("当前分类暂不支持加载。");
+      }
+      const listResult = await fetchSkillsByCategory(categoryMeta.apiCategory, {
+        page: skillMarketPage.value,
+        pageSize: skillMarketPageSize.value,
+        sortBy: skillMarketSortBy.value,
+        order: "desc"
+      });
+      result = { skills: listResult.skills, total: listResult.total };
+    }
+
+    if (token !== skillMarketRequestToken) {
+      return;
+    }
+
+    applySkillMarketSnapshot(category, result);
+    skillMarketCache.set(cacheKey, {
+      skills: result.skills.slice(),
+      total: result.total
+    });
+    const categoryLabel = skillMarketCategoryMap.get(category)?.label ?? "技能市场";
+    statusText.value = `${categoryLabel}已刷新，当前展示 ${result.skills.length} 条技能。`;
+  } catch (error) {
+    if (token !== skillMarketRequestToken) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : "技能市场加载失败。";
+    skillMarketError.value = message;
+    statusText.value = message;
+  } finally {
+    if (token === skillMarketRequestToken) {
+      skillMarketLoading.value = false;
+    }
+  }
+}
+
+function selectSkillMarketCategory(category: SkillMarketSectionCategory) {
+  skillMarketPage.value = 1;
+  if (activeSkillMarketCategory.value === category) {
+    void refreshSkillMarket();
+    return;
+  }
+  activeSkillMarketCategory.value = category;
+  void refreshSkillMarket();
+}
+
+function handleSkillMarketSortChange() {
+  skillMarketPage.value = 1;
+  skillMarketGlobalCache.clear();
+  if (activeSkillMarketCategory.value === "top" && !skillMarketSearch.value.trim()) {
+    return;
+  }
+  void refreshSkillMarket();
+}
+
+function goToSkillMarketPage(page: number) {
+  const nextPage = Math.min(Math.max(page, 1), skillMarketCurrentTotalPages.value);
+  if (nextPage === skillMarketPage.value) {
+    return;
+  }
+  skillMarketPage.value = nextPage;
+  if (activeSkillMarketCategory.value !== "top" && !skillMarketSearch.value.trim()) {
+    void refreshSkillMarket();
+  }
+}
+
+function goPrevSkillMarketPage() {
+  goToSkillMarketPage(skillMarketPage.value - 1);
+}
+
+function goNextSkillMarketPage() {
+  goToSkillMarketPage(skillMarketPage.value + 1);
+}
+
+function openSkillMarketHomepage(url: string) {
+  if (!url.trim()) {
+    statusText.value = "该技能暂未提供主页地址。";
+    return;
+  }
+  void openCodingPlanPlatform(url);
+}
+
+function openSkillMarketDetailModal(skill: SkillMarketSkill) {
+  activeSkillMarketDetail.value = skill;
+}
+
+function closeSkillMarketDetailModal() {
+  activeSkillMarketDetail.value = null;
+}
+
+async function openRoleWorkflowDetail(roleId: string) {
+  const found = roleWorkflowRoleIndex.value.get(roleId);
+  if (!found) {
+    return;
+  }
+  roleWorkflowInstallNotice.value = null;
+  const requestToken = ++roleWorkflowDetailRequestToken;
+  const override = roleWorkflowOverrides.value[roleId];
+  roleWorkflowDetailRoleId.value = roleId;
+  roleWorkflowDetailOriginalContent.value = "正在加载详情内容...";
+  roleWorkflowDetailDraft.value = {
+    contentZh: "正在加载详情内容..."
+  };
+  statusText.value = `正在加载 ${found.role.sourcePath}...`;
+
+  const detailSnapshot = await loadAgentDetailMarkdownZh(found.role.sourcePath);
+  if (requestToken !== roleWorkflowDetailRequestToken || roleWorkflowDetailRoleId.value !== roleId) {
+    return;
+  }
+
+  const baseContent = detailSnapshot.contentZh;
+  const baseNameZh = override?.nameZh ?? found.role.nameZh;
+  roleWorkflowDetailOriginalContent.value = baseContent;
+  roleWorkflowDetailDraft.value = {
+    contentZh: override?.detailContentZh ?? baseContent
+  };
+  roleWorkflowNameZhOriginal.value = baseNameZh;
+  roleWorkflowNameZhDraft.value = baseNameZh;
+  statusText.value = detailSnapshot.found
+    ? `已打开 ${found.role.nameZh} 的详情（${found.role.sourcePath}）。`
+    : `未找到 ${found.role.sourcePath}，已打开占位详情。`;
+
+  void syncCursorPassThrough();
+}
+
+function closeRoleWorkflowDetail() {
+  roleWorkflowDetailRequestToken += 1;
+  roleWorkflowDetailRoleId.value = null;
+  roleWorkflowDetailDraft.value = { contentZh: "" };
+  roleWorkflowDetailOriginalContent.value = "";
+  roleWorkflowNameZhDraft.value = "";
+  roleWorkflowNameZhOriginal.value = "";
+  roleWorkflowInstallNotice.value = null;
+  void syncCursorPassThrough();
+}
+
+function createRoleWorkflowVersionId() {
+  return `role-ver-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function saveRoleWorkflowDetail() {
+  const activeId = roleWorkflowDetailRoleId.value;
+  const found = activeRoleWorkflowBase.value;
+  if (!activeId || !found) {
+    return;
+  }
+
+  const nextContent = roleWorkflowDetailDraft.value.contentZh;
+  const nextNameZh = roleWorkflowNameZhDraft.value.trim() || found.role.nameZh;
+  const current = roleWorkflowOverrides.value[activeId] ?? {};
+  const nextVersions = [
+    {
+      id: createRoleWorkflowVersionId(),
+      contentZh: nextContent,
+      savedAt: Date.now()
+    },
+    ...(current.detailVersions ?? [])
+  ].slice(0, 3);
+
+  roleWorkflowOverrides.value = {
+    ...roleWorkflowOverrides.value,
+    [activeId]: {
+      ...current,
+      nameZh: nextNameZh,
+      detailContentZh: nextContent,
+      detailVersions: nextVersions
+    }
+  };
+  roleWorkflowDetailOriginalContent.value = nextContent;
+  roleWorkflowNameZhOriginal.value = nextNameZh;
+  roleWorkflowNameZhDraft.value = nextNameZh;
+  persistRoleWorkflowOverrides();
+  statusText.value = `${nextNameZh} 详情已保存（当前保留 ${nextVersions.length} 个版本）。`;
+}
+
+function restoreRoleWorkflowOriginalContent() {
+  const found = activeRoleWorkflowBase.value;
+  if (!found) {
+    return;
+  }
+  roleWorkflowDetailDraft.value = {
+    contentZh: roleWorkflowDetailOriginalContent.value
+  };
+  roleWorkflowNameZhDraft.value = roleWorkflowNameZhOriginal.value;
+  statusText.value = `${roleWorkflowNameZhOriginal.value || found.role.nameZh} 已恢复原始内容。`;
+}
+
+function applyRoleWorkflowSavedVersion(versionId: string) {
+  const found = activeRoleWorkflowBase.value;
+  const matched = roleWorkflowDetailSavedVersions.value.find((version) => version.id === versionId);
+  if (!found || !matched) {
+    return;
+  }
+  roleWorkflowDetailDraft.value = {
+    contentZh: matched.contentZh
+  };
+  statusText.value = `已载入 ${found.role.nameZh} 的历史版本（${formatTime(matched.savedAt)}）。`;
+}
+
+function deleteRoleWorkflowSavedVersion(versionId: string) {
+  const activeId = roleWorkflowDetailRoleId.value;
+  const found = activeRoleWorkflowBase.value;
+  if (!activeId || !found) {
+    return;
+  }
+  const current = roleWorkflowOverrides.value[activeId];
+  if (!current) {
+    return;
+  }
+
+  const nextVersions = (current.detailVersions ?? []).filter((version) => version.id !== versionId);
+  const nextOverride: RoleWorkflowOverride = {
+    ...current,
+    detailVersions: nextVersions
+  };
+  if ((nextOverride.detailVersions?.length ?? 0) === 0) {
+    delete nextOverride.detailVersions;
+  }
+
+  if (!nextOverride.nameZh && !nextOverride.workflowZh && !nextOverride.detailContentZh && !nextOverride.detailVersions) {
+    const { [activeId]: _, ...rest } = roleWorkflowOverrides.value;
+    roleWorkflowOverrides.value = rest;
+  } else {
+    roleWorkflowOverrides.value = {
+      ...roleWorkflowOverrides.value,
+      [activeId]: nextOverride
+    };
+  }
+  persistRoleWorkflowOverrides();
+  statusText.value = `${found.role.nameZh} 的历史版本已删除。`;
+}
+
+function buildInstallableRoleAgentId(sourcePath: string) {
+  const base = sourcePath
+    .replace(/\.md$/i, "")
+    .replace(/[\\/]+/g, "-")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base || `role-${Date.now()}`;
+}
+
+function resolveInstalledRoleWorkspaceDir(installResult: string, normalizedAgentId: string) {
+  const matched = installResult.match(/工作区[:：]\s*([^)）]+)/);
+  const workspaceWithFile = matched?.[1]?.trim() ?? "";
+  const normalizedPath = workspaceWithFile.replace(/[\\/]AGENTS\.md$/i, "");
+  if (normalizedPath) {
+    return normalizedPath;
+  }
+  return `~/.openclaw/workspace-${normalizedAgentId}`;
+}
+
+async function installRoleWorkflowRole() {
+  const found = activeRoleWorkflowBase.value;
+  if (!found || isRoleWorkflowInstalling.value) {
+    return;
+  }
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke) {
+    statusText.value = "当前环境不支持安装角色（仅桌面端可用）。";
+    return;
+  }
+
+  const agentId = buildInstallableRoleAgentId(found.role.sourcePath);
+  const markdown = roleWorkflowDetailDraft.value.contentZh.trim();
+  if (!markdown) {
+    statusText.value = "详情内容为空，无法安装角色。";
+    return;
+  }
+
+  roleWorkflowInstallNotice.value = null;
+  const selectedNameZh = roleWorkflowNameZhDraft.value.trim() || found.role.nameZh;
+  isRoleWorkflowInstalling.value = true;
+  try {
+    const result = (await invoke("install_role_workflow_agent", {
+      agentId,
+      displayName: selectedNameZh || found.role.nameEn || found.role.nameZh,
+      content: markdown,
+      sourcePath: found.role.sourcePath
+    })) as string;
+    const roleName = selectedNameZh || found.role.nameZh || found.role.nameEn || agentId;
+    const workspaceDir = resolveInstalledRoleWorkspaceDir(result ?? "", agentId);
+    const successMessage = `角色已安装，\n角色名称：${roleName}\n配置文件目录：${workspaceDir}`;
+    roleWorkflowInstallNotice.value = { tone: "success", text: successMessage };
+    await refreshStaffSnapshot();
+  } catch (error) {
+    roleWorkflowInstallNotice.value = {
+      tone: "error",
+      text: error instanceof Error ? error.message : `安装 ${found.role.nameZh} 失败。`
+    };
+  } finally {
+    isRoleWorkflowInstalling.value = false;
+  }
+}
+
+function openStaffDeleteConfirm(member: StaffMemberSnapshot) {
+  staffDeleteTargetMember.value = member;
+  staffDeleteRemoveFiles.value = false;
+  staffDeleteError.value = "";
+}
+
+function closeStaffDeleteConfirm() {
+  if (isStaffDeleting.value) {
+    return;
+  }
+  staffDeleteTargetMember.value = null;
+  staffDeleteRemoveFiles.value = false;
+  staffDeleteError.value = "";
+}
+
+async function confirmDeleteStaffMember() {
+  const target = staffDeleteTargetMember.value;
+  if (!target || isStaffDeleting.value) {
+    return;
+  }
+
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke) {
+    staffDeleteError.value = "当前环境不支持删除角色（仅桌面端可用）。";
+    return;
+  }
+
+  staffDeleteError.value = "";
+  isStaffDeleting.value = true;
+  let successMessage = "";
+  try {
+    const result = (await invoke("remove_role_workflow_agent", {
+      agentId: target.agentId,
+      deleteFiles: staffDeleteRemoveFiles.value
+    })) as string;
+    successMessage = result || `角色 ${target.displayName} 已删除。`;
+    await refreshStaffSnapshot();
+  } catch (error) {
+    staffDeleteError.value = error instanceof Error ? error.message : `删除 ${target.displayName} 失败。`;
+  } finally {
+    isStaffDeleting.value = false;
+    if (successMessage) {
+      closeStaffDeleteConfirm();
+      if (typeof window !== "undefined" && typeof window.alert === "function") {
+        window.alert(successMessage);
+      }
+    }
+  }
+}
+
+function getConsoleSectionTitle(section: ConsoleSection) {
+  if (section === "overview") return "总览";
+  if (section === "platforms") return "代理配置";
+  if (section === "staff") return "员工管理";
+  if (section === "role-workflow") return "角色工作流";
+  if (section === "skill-market") return "技能市场";
+  if (section === "channels") return "消息频道";
+  if (section === "bindings") return "宠物绑定";
+  return "任务管理";
+}
+
 async function openConsole(section: ConsoleSection) {
   const shouldOpenDetachedWindow = false;
   if (shouldOpenDetachedWindow) {
@@ -4610,7 +5587,7 @@ async function openConsole(section: ConsoleSection) {
         await invoke("open_console_window", { section });
         hideContextMenu();
         noteInteraction();
-        statusText.value = `${section === "platforms" ? "代理配置" : section === "staff" ? "员工管理" : section === "channels" ? "消息频道" : section === "tasks" ? "任务管理" : "控制台"}窗口已独立打开。`;
+        statusText.value = `${getConsoleSectionTitle(section)}窗口已独立打开。`;
         return;
       } catch {
         // Fallback to the embedded panel when window creation is unavailable.
@@ -4640,6 +5617,11 @@ async function openConsole(section: ConsoleSection) {
     void refreshStaffSnapshot();
     void refreshOpenClawSkillSnapshot();
     void refreshOpenClawSkillsList();
+  } else if (section === "role-workflow") {
+    statusText.value = "角色工作流已展开，按 The Agency Roster 分类查看全量角色。";
+  } else if (section === "skill-market") {
+    statusText.value = "技能市场已展开，可按分类浏览并快速查看热门技能。";
+    void refreshSkillMarket();
   } else if (section === "channels") {
     statusText.value = "消息频道已展开，可查看当前可接入渠道和已配置状态。";
     void refreshMessageChannelSnapshot();
@@ -4688,6 +5670,7 @@ function openLogAnalysis(view: LogAnalysisView = "timeline") {
 
 function openLobsterConfig() {
   activePanelMode.value = "lobster";
+  ensureLobsterInstallWizardPrimed();
   hideContextMenu();
   noteInteraction();
 
@@ -5234,6 +6217,7 @@ async function saveOpenClawProviderConfig(config: {
   providerId: string;
   name: string;
   protocol: PlatformProtocol;
+  apiKind?: LobsterProviderApiKind;
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -5391,6 +6375,7 @@ function getLobsterActionTitle(action: LobsterActionId | string) {
 }
 
 function getLobsterInstallCheckStatusLabel(status: LobsterInstallCheckStatus) {
+  if (status === "checking") return tr("wizard.runtime.checking");
   if (status === "success") return tr("wizard.check.success");
   if (status === "warning") return tr("wizard.check.warning");
   return tr("wizard.check.failed");
@@ -5403,9 +6388,75 @@ function getLobsterInstallComponentStatusLabel(status: LobsterInstallComponentSt
   return tr("wizard.installing.status.failed");
 }
 
+function getLobsterInstallGuideOs() {
+  if (isWindowsRuntime) {
+    return "windows";
+  }
+  if (typeof navigator === "undefined") {
+    return "unknown";
+  }
+  if (/mac os|macintosh|darwin/i.test(navigator.userAgent)) {
+    return "macos";
+  }
+  if (/linux/i.test(navigator.userAgent)) {
+    return "linux";
+  }
+  return "unknown";
+}
+
+function buildPendingLobsterInstallChecks() {
+  return LOBSTER_INSTALL_CHECK_BLUEPRINT.map((item) => ({
+    id: item.id,
+    title: item.title,
+    status: "checking" as LobsterInstallCheckStatus,
+    detail: "正在检查..."
+  }));
+}
+
+function createPendingLobsterInstallGuide() {
+  return {
+    os: getLobsterInstallGuideOs(),
+    ready: false,
+    checks: buildPendingLobsterInstallChecks()
+  } satisfies LobsterInstallGuideResponse;
+}
+
+function normalizeLobsterInstallGuideResponse(guide: LobsterInstallGuideResponse) {
+  const map = new Map(guide.checks.map((item) => [item.id, item]));
+  const orderedChecks: LobsterInstallCheckItem[] = LOBSTER_INSTALL_CHECK_BLUEPRINT.map((base) => {
+    const matched = map.get(base.id);
+    if (matched) {
+      return matched;
+    }
+    return {
+      id: base.id,
+      title: base.title,
+      status: "warning",
+      detail: "该项未返回检测结果，请手动确认。"
+    };
+  });
+
+  const knownIds = new Set(LOBSTER_INSTALL_CHECK_BLUEPRINT.map((item) => item.id));
+  const extraChecks = guide.checks.filter((item) => !knownIds.has(item.id));
+  const checks = [...orderedChecks, ...extraChecks];
+  return {
+    os: guide.os,
+    ready: !checks.some((item) => item.status === "failed"),
+    checks
+  } satisfies LobsterInstallGuideResponse;
+}
+
+function ensureLobsterInstallWizardPrimed() {
+  if (isLobsterInstallWizardPrimed.value) {
+    return;
+  }
+  isLobsterInstallWizardPrimed.value = true;
+}
+
 function getLobsterProviderOptionByDraft(draft: Pick<PlatformDraft, "name" | "protocol" | "baseUrl" | "pathPrefix">) {
   const baseUrl = normalizeBaseUrl(draft.baseUrl);
   const pathPrefix = normalizePathPrefix(draft.pathPrefix);
+  const name = draft.name.trim().toLowerCase();
 
   return (
     lobsterProviderOptions.find(
@@ -5414,14 +6465,46 @@ function getLobsterProviderOptionByDraft(draft: Pick<PlatformDraft, "name" | "pr
         normalizeBaseUrl(item.defaultBaseUrl) === baseUrl &&
         normalizePathPrefix(item.pathPrefix) === pathPrefix
     ) ??
-    lobsterProviderOptions.find((item) => item.protocol === draft.protocol && item.name === draft.name.trim()) ??
+    lobsterProviderOptions.find((item) => item.protocol === draft.protocol && item.name.toLowerCase() === name) ??
+    lobsterProviderOptions.find(
+      (item) =>
+        item.id === "custom" &&
+        (normalizePathPrefix(item.pathPrefix) === pathPrefix || item.name.toLowerCase() === name)
+    ) ??
     null
   );
 }
 
+function getLobsterProviderOptionDisplayName(option: Pick<LobsterProviderOption, "id" | "name">) {
+  return option.id === "custom" ? tr("provider.option.custom") : option.name;
+}
+
 function getLobsterProviderOptionLabel(option: Pick<LobsterProviderOption, "id" | "icon" | "name">) {
-  const localizedName = option.id === "custom" ? tr("provider.option.custom") : option.name;
+  const localizedName = getLobsterProviderOptionDisplayName(option);
   return option.icon ? `${option.icon} ${localizedName}` : localizedName;
+}
+
+function getLobsterProviderApiKindByDraft(draft: Pick<PlatformDraft, "protocol" | "apiPath">): LobsterProviderApiKind {
+  const normalizedApiPath = normalizeApiPath(draft.apiPath).toLowerCase();
+  if (normalizedApiPath.includes("responses")) {
+    return "openai-responses";
+  }
+  if (draft.protocol === "anthropic" || normalizedApiPath.includes("messages")) {
+    return "anthropic-messages";
+  }
+  return "openai-completions";
+}
+
+function applyLobsterProviderApiKind(apiKind: LobsterProviderApiKind) {
+  const nextProtocol: PlatformProtocol = apiKind === "anthropic-messages" ? "anthropic" : "openai";
+  const defaultApiPath = apiKind === "openai-responses"
+    ? "/v1/responses"
+    : apiKind === "anthropic-messages"
+      ? "/v1/messages"
+      : "/v1/chat/completions";
+  lobsterProviderForm.value.protocol = nextProtocol;
+  lobsterProviderForm.value.apiPath = inferApiPathForBaseUrl(nextProtocol, lobsterProviderForm.value.baseUrl, defaultApiPath);
+  lobsterProviderConfigured.value = false;
 }
 
 function isLobsterProviderDraftReady(
@@ -5459,7 +6542,11 @@ function resetLobsterProviderDraft() {
           protocol: preset.protocol,
           baseUrl: preset.defaultBaseUrl,
           pathPrefix: preset.pathPrefix,
-          apiPath: preset.protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions",
+          apiPath: inferApiPathForBaseUrl(
+            preset.protocol,
+            preset.defaultBaseUrl,
+            preset.protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions"
+          ),
           model: preset.defaultModelId,
           enabled: true
         }
@@ -5484,7 +6571,11 @@ function handleLobsterProviderPresetChange() {
     protocol: selectedOption.protocol,
     baseUrl: selectedOption.defaultBaseUrl,
     pathPrefix: selectedOption.pathPrefix,
-    apiPath: selectedOption.protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions",
+    apiPath: inferApiPathForBaseUrl(
+      selectedOption.protocol,
+      selectedOption.defaultBaseUrl,
+      selectedOption.protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions"
+    ),
     model: selectedOption.defaultModelId,
     apiKey: lobsterProviderForm.value.apiKey.trim(),
     enabled: true
@@ -5518,9 +6609,10 @@ async function saveLobsterProviderFromWizard() {
   try {
     const nextName = lobsterProviderForm.value.name.trim();
     const nextProtocol = lobsterProviderForm.value.protocol;
-    const nextApiPath = nextProtocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
+    const nextApiKind = getLobsterProviderApiKindByDraft(lobsterProviderForm.value);
     const nextApiKey = lobsterProviderForm.value.apiKey.trim();
     const nextBaseUrl = normalizeBaseUrl(lobsterProviderForm.value.baseUrl);
+    const nextApiPath = inferApiPathForBaseUrl(nextProtocol, nextBaseUrl, lobsterProviderForm.value.apiPath);
     const nextPathPrefix = normalizePathPrefix(lobsterProviderForm.value.pathPrefix);
     const nextModel = lobsterProviderForm.value.model.trim();
     const providerId = resolveLobsterProviderIdForOpenClaw();
@@ -5534,6 +6626,7 @@ async function saveLobsterProviderFromWizard() {
       providerId,
       name: nextName,
       protocol: nextProtocol,
+      apiKind: nextApiKind,
       baseUrl: nextBaseUrl,
       model: nextModel,
       apiKey: nextApiKey
@@ -5599,42 +6692,73 @@ async function refreshLobsterSnapshot() {
 }
 
 async function refreshLobsterInstallGuide() {
+  const requestToken = ++lobsterInstallGuideRefreshToken;
   const invoke = getTauriApi()?.core?.invoke;
-  if (!invoke) {
-    lobsterInstallGuide.value = {
-      os: "unknown",
-      ready: false,
-      checks: [
-        {
-          id: "tauri",
-          title: "运行环境",
-          status: "failed",
-          detail: "当前环境不支持安装检查，请在桌面端执行。"
-        }
-      ]
-    };
-    return;
-  }
-
+  lobsterInstallGuide.value = createPendingLobsterInstallGuide();
   lobsterInstallGuideLoading.value = true;
-  try {
-    const guide = (await invoke("load_lobster_install_guide")) as LobsterInstallGuideResponse;
-    lobsterInstallGuide.value = guide;
-  } catch (error) {
+
+  const applyGuideWithProgress = async (guide: LobsterInstallGuideResponse) => {
+    const normalized = normalizeLobsterInstallGuideResponse(guide);
+    const checkingChecks: LobsterInstallCheckItem[] = normalized.checks.map((item) => ({
+      id: item.id,
+      title: item.title,
+      status: "checking",
+      detail: "正在检查..."
+    }));
     lobsterInstallGuide.value = {
-      os: "unknown",
+      os: normalized.os,
       ready: false,
-      checks: [
-        {
-          id: "invoke",
-          title: "环境检查",
-          status: "failed",
-          detail: error instanceof Error ? error.message : "加载安装检查失败。"
-        }
-      ]
+      checks: checkingChecks
     };
+
+    for (let index = 0; index < normalized.checks.length; index += 1) {
+      if (requestToken !== lobsterInstallGuideRefreshToken) {
+        return;
+      }
+      const currentChecks: LobsterInstallCheckItem[] =
+        (lobsterInstallGuide.value?.checks.slice() ?? checkingChecks.slice()) as LobsterInstallCheckItem[];
+      currentChecks[index] = normalized.checks[index];
+      lobsterInstallGuide.value = {
+        os: normalized.os,
+        ready: false,
+        checks: currentChecks
+      };
+      if (index < normalized.checks.length - 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 80));
+      }
+    }
+
+    if (requestToken !== lobsterInstallGuideRefreshToken) {
+      return;
+    }
+    lobsterInstallGuide.value = normalized;
+  };
+
+  const buildErrorGuide = (detail: string): LobsterInstallGuideResponse => ({
+    os: getLobsterInstallGuideOs(),
+    ready: false,
+    checks: LOBSTER_INSTALL_CHECK_BLUEPRINT.map((item, index) => ({
+      id: item.id,
+      title: item.title,
+      status: index === LOBSTER_INSTALL_CHECK_BLUEPRINT.length - 1 ? "warning" : "failed",
+      detail
+    }))
+  });
+
+  try {
+    if (!invoke) {
+      await applyGuideWithProgress(buildErrorGuide("当前环境不支持安装检查，请在桌面端执行。"));
+      return;
+    }
+
+    const guide = (await invoke("load_lobster_install_guide")) as LobsterInstallGuideResponse;
+    await applyGuideWithProgress(guide);
+  } catch (error) {
+    await applyGuideWithProgress(buildErrorGuide(error instanceof Error ? error.message : "加载安装检查失败。"));
   } finally {
-    lobsterInstallGuideLoading.value = false;
+    if (requestToken === lobsterInstallGuideRefreshToken) {
+      lobsterInstallGuideLoading.value = false;
+    }
   }
 }
 
@@ -5654,7 +6778,8 @@ function stopLobsterInstallProgress() {
   window.clearInterval(lobsterInstallProgressTimer);
 }
 
-async function openLobsterInstallWizard() {
+function openLobsterInstallWizard() {
+  ensureLobsterInstallWizardPrimed();
   isLobsterInstallWizardOpen.value = true;
   lobsterInstallWizardStep.value = 1;
   lobsterInstallRiskAccepted.value = false;
@@ -5665,8 +6790,13 @@ async function openLobsterInstallWizard() {
   stopLobsterInstallProgress();
   lobsterInstallGuide.value = null;
   lobsterProviderShowKey.value = false;
-  resetLobsterProviderDraft();
   statusText.value = "已进入龙虾安装引导。";
+  void syncCursorPassThrough();
+
+  // Defer heavier form initialization to the next frame so the modal appears instantly.
+  window.requestAnimationFrame(() => {
+    resetLobsterProviderDraft();
+  });
 }
 
 function closeLobsterInstallWizard() {
@@ -5771,7 +6901,7 @@ async function runLobsterAction(action: LobsterActionId) {
   }
 
   if (action === "install") {
-    await openLobsterInstallWizard();
+    openLobsterInstallWizard();
     return;
   }
 
@@ -6007,6 +7137,12 @@ function handleEscape(event: KeyboardEvent) {
     return;
   }
 
+  if (activeSkillMarketDetail.value) {
+    closeSkillMarketDetailModal();
+    event.preventDefault();
+    return;
+  }
+
   if (activeRecentOutputMember.value) {
     closeRecentOutputModal();
     event.preventDefault();
@@ -6021,6 +7157,12 @@ function handleEscape(event: KeyboardEvent) {
 
   if (isSystemSettingsOpen.value) {
     closeSystemSettings();
+    event.preventDefault();
+    return;
+  }
+
+  if (staffDeleteTargetMember.value) {
+    closeStaffDeleteConfirm();
     event.preventDefault();
     return;
   }
@@ -6061,6 +7203,9 @@ function handleBlur() {
 
 function handleVisibilityChange() {
   isWindowActive.value = !document.hidden && document.hasFocus();
+  if (shouldAutoRefreshStaffSnapshot()) {
+    void refreshStaffSnapshot();
+  }
 }
 
 function handleContextMenu(event: MouseEvent) {
@@ -6084,7 +7229,23 @@ function handleContextMenu(event: MouseEvent) {
 }
 
 function handleWindowPointerDown(event: PointerEvent) {
+  if (event.target instanceof HTMLElement && event.target.closest("select")) {
+    lastSelectInteractionAt = performance.now();
+  }
+
+  if (activeRoleWorkflowBase.value && event.target instanceof HTMLElement && event.target.closest(".role-workflow-detail-modal")) {
+    return;
+  }
+
+  if (staffDeleteTargetMember.value && event.target instanceof HTMLElement && event.target.closest(".staff-delete-modal")) {
+    return;
+  }
+
   if (isLobsterInstallWizardOpen.value && event.target instanceof HTMLElement && event.target.closest(".lobster-install-wizard-modal")) {
+    return;
+  }
+
+  if (activeSkillMarketDetail.value && event.target instanceof HTMLElement && event.target.closest(".skill-market-detail-modal")) {
     return;
   }
 
@@ -7028,6 +8189,7 @@ function closeResourceModal() {
   activeResourceModal.value = null;
   activeResourceMemberId.value = null;
   openClawToolsScope.value = "agent";
+  openClawSkillCategory.value = "builtIn";
   resourceModalFilterText.value = "";
   resourceDocumentRecords.value = [];
   void syncCursorPassThrough();
@@ -7037,6 +8199,9 @@ async function openMemberResourceModal(member: StaffMemberSnapshot, kind: Resour
   activeResourceMemberId.value = member.agentId;
   activeResourceModal.value = kind;
   resourceModalFilterText.value = "";
+  if (kind === "skill") {
+    openClawSkillCategory.value = "builtIn";
+  }
 
   if (kind === "memory") {
     await refreshMemorySnapshot();
@@ -7089,9 +8254,14 @@ async function refreshStaffSnapshot() {
     staffMembers.value = [];
     staffSnapshotSourcePath.value = "";
     staffSnapshotDetail.value = "当前环境不支持读取 openclaw.json。";
-    return;
+    return false;
   }
 
+  if (isStaffSnapshotRefreshing.value) {
+    return false;
+  }
+
+  isStaffSnapshotRefreshing.value = true;
   try {
     const result = (await invoke("load_staff_snapshot")) as StaffSnapshotResponse;
     staffMembers.value = Array.isArray(result.members) ? result.members : [];
@@ -7106,11 +8276,28 @@ async function refreshStaffSnapshot() {
     staffSnapshotSourcePath.value = result.sourcePath ?? "";
     staffSnapshotDetail.value = result.detail ?? "员工配置读取完成。";
     staffMissionStatement.value = result.missionStatement || staffMissionStatement.value;
+    return true;
   } catch (error) {
     staffMembers.value = [];
     closeRecentOutputModal();
     staffSnapshotSourcePath.value = "";
     staffSnapshotDetail.value = error instanceof Error ? error.message : "员工配置读取失败。";
+    return false;
+  } finally {
+    isStaffSnapshotRefreshing.value = false;
+  }
+}
+
+function shouldAutoRefreshStaffSnapshot() {
+  return activeSection.value === "staff" && isConsoleOpen.value && !document.hidden;
+}
+
+async function handleRefreshStaffSnapshot() {
+  const refreshed = await refreshStaffSnapshot();
+  if (refreshed) {
+    statusText.value = "员工配置已刷新，并已同步最新 OpenClaw Agent 状态。";
+  } else {
+    statusText.value = staffSnapshotDetail.value || "员工配置刷新失败。";
   }
 }
 
@@ -7712,6 +8899,8 @@ async function syncCursorPassThrough() {
   }
 
   const isAnyModalOpen =
+    !!activeRoleWorkflowBase.value ||
+    !!staffDeleteTargetMember.value ||
     isLobsterInstallWizardOpen.value ||
     !!activeRecentOutputMember.value ||
     (activeResourceModal.value && activeResourceMember.value) ||
@@ -7723,6 +8912,21 @@ async function syncCursorPassThrough() {
   if (isDragging.value || contextMenu.value.visible || isAnyModalOpen) {
     await setWindowIgnoreCursorEvents(false);
     if (isAnyModalOpen) return;
+  }
+
+  // Windows fallback: while console is open, keep the whole window interactive.
+  // This avoids WebView2 dropdowns being interrupted by pass-through toggling.
+  if (isWindowsRuntime && isConsoleOpen.value) {
+    await setWindowIgnoreCursorEvents(false);
+    return;
+  }
+
+  const isRecentSelectInteraction = performance.now() - lastSelectInteractionAt < 1400;
+  // Windows/WebView2: keep native <select> interactive while the option
+  // popup is open, otherwise cursor pass-through can swallow dropdown clicks.
+  if (document.activeElement instanceof HTMLSelectElement || isRecentSelectInteraction) {
+    await setWindowIgnoreCursorEvents(false);
+    return;
   }
 
   const cursor = await cursorPosition();
@@ -8335,6 +9539,14 @@ watch(
   { deep: true }
 );
 
+watch(
+  roleWorkflowOverrides,
+  () => {
+    persistRoleWorkflowOverrides();
+  },
+  { deep: true }
+);
+
 watch(proxyPort, (value) => {
   safeLocalStorageSetItem("keai.desktop-pet.proxy-port", String(value));
 });
@@ -8370,6 +9582,24 @@ watch(
       width: Math.min(Math.max(minWidth, panelPlacement.value.width), availableWidth),
       height: Math.min(Math.max(minHeight, panelPlacement.value.height || 0), availableHeight)
     };
+  }
+);
+
+watch(
+  [skillMarketCurrentTotalPages, () => skillMarketSearch.value],
+  ([totalPages, keyword], [, prevKeyword = ""]) => {
+    if (keyword !== prevKeyword) {
+      skillMarketPage.value = 1;
+      if (keyword.trim() !== "") {
+        void refreshSkillMarket();
+      } else if (prevKeyword.trim() !== "") {
+        void refreshSkillMarket();
+      }
+      return;
+    }
+    if (skillMarketPage.value > totalPages) {
+      skillMarketPage.value = totalPages;
+    }
   }
 );
 
@@ -8540,6 +9770,9 @@ onMounted(async () => {
   if (activeSection.value === "channels") {
     void refreshMessageChannelSnapshot();
   }
+  if (activeSection.value === "skill-market") {
+    void refreshSkillMarket();
+  }
   void refreshLobsterSnapshot();
   setAppTheme(appTheme.value, { persist: false });
   bindSystemThemeListener();
@@ -8569,6 +9802,12 @@ onMounted(async () => {
   runtimeLogTimer = window.setInterval(() => {
     void refreshOpenClawMessageLogs();
   }, runtimeLogPollIntervalMs);
+  staffSnapshotPollTimer = window.setInterval(() => {
+    if (!shouldAutoRefreshStaffSnapshot()) {
+      return;
+    }
+    void refreshStaffSnapshot();
+  }, staffSnapshotPollIntervalMs);
   windowPointerMoveListener = (event: PointerEvent) => {
     handlePointerMove(event);
   };
@@ -8609,6 +9848,7 @@ onBeforeUnmount(() => {
   window.clearInterval(cursorPassThroughTimer);
   window.clearInterval(gatewayMonitorTimer);
   window.clearInterval(runtimeLogTimer);
+  window.clearInterval(staffSnapshotPollTimer);
   window.clearInterval(lobsterInstallProgressTimer);
   if (windowPointerMoveListener) {
     window.removeEventListener("pointermove", windowPointerMoveListener);
@@ -8634,7 +9874,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main ref="stage" class="desktop-pet-stage" :class="{ 'desktop-pet-stage--console': isConsoleWindowMode }">
+  <main
+    ref="stage"
+    class="desktop-pet-stage"
+    :class="{ 'desktop-pet-stage--console': isConsoleWindowMode, 'desktop-pet-stage--windows': isWindowsRuntime }"
+  >
 <div v-if="!isConsoleWindowMode && shouldShowHint" class="desktop-pet-hint" :style="hintStyle">
       <span class="desktop-pet-hint-title">{{ activeAnimation.label }}</span>
       <p>{{ statusText }}</p>
@@ -8795,6 +10039,9 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </article>
+            <div v-if="chatMessages.length === 0" class="empty-state empty-state--small">
+              当前会话还没有消息，发送第一句开始对话吧。
+            </div>
           </div>
 
           <footer
@@ -9603,7 +10850,7 @@ onBeforeUnmount(() => {
               <strong>按场景推荐</strong>
               <span>5 个高频使用场景</span>
             </div>
-            <div class="subscription-table-scroll">
+            <div v-if="subscriptionScenarioRecommendations.length > 0" class="subscription-table-scroll">
               <table class="subscription-table">
                 <thead>
                   <tr>
@@ -9623,6 +10870,7 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
+            <div v-else class="empty-state">暂无场景推荐数据。</div>
           </div>
 
           <div class="subscription-table-card">
@@ -9630,7 +10878,7 @@ onBeforeUnmount(() => {
               <strong>平台实测对比</strong>
               <span>6 个平台横向评估</span>
             </div>
-            <div class="subscription-table-scroll">
+            <div v-if="subscriptionPlatformBenchmarks.length > 0" class="subscription-table-scroll">
               <table class="subscription-table subscription-table--benchmark">
                 <colgroup>
                   <col class="subscription-col-platform" />
@@ -9759,6 +11007,7 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
+            <div v-else class="empty-state">暂无平台对比数据。</div>
           </div>
 
           <div class="coding-plan-section">
@@ -9767,7 +11016,7 @@ onBeforeUnmount(() => {
               <span class="coding-plan-section__count">{{ cloudCodingPlans.length }} 项</span>
             </div>
 
-            <div class="coding-plan-grid">
+            <div v-if="cloudCodingPlans.length > 0" class="coding-plan-grid">
               <article
                 v-for="plan in cloudCodingPlans"
                 :key="plan.id"
@@ -9805,6 +11054,7 @@ onBeforeUnmount(() => {
                 </div>
               </article>
             </div>
+            <div v-else class="empty-state">暂无可展示的云厂商平台。</div>
           </div>
 
           <div class="coding-plan-section">
@@ -9813,7 +11063,7 @@ onBeforeUnmount(() => {
               <span class="coding-plan-section__count">{{ modelCodingPlans.length }} 项</span>
             </div>
 
-            <div class="coding-plan-grid">
+            <div v-if="modelCodingPlans.length > 0" class="coding-plan-grid">
               <article
                 v-for="plan in modelCodingPlans"
                 :key="plan.id"
@@ -9851,6 +11101,7 @@ onBeforeUnmount(() => {
                 </div>
               </article>
             </div>
+            <div v-else class="empty-state">暂无可展示的模型厂商平台。</div>
           </div>
         </section>
       </div>
@@ -9938,7 +11189,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <div class="platform-list platform-list--grid">
+            <div v-if="platforms.length > 0" class="platform-list platform-list--grid">
               <article v-for="platform in platforms" :key="platform.id" class="platform-card">
                 <div class="platform-card__header">
                   <div>
@@ -9975,20 +11226,42 @@ onBeforeUnmount(() => {
                 </div>
               </article>
             </div>
+            <div v-else class="empty-state">暂无平台配置，点击“新增平台”开始接入。</div>
           </section>
         </section>
       </div>
 
       <div v-else-if="activeSection === 'staff'" class="desktop-console-body desktop-console-body--overview staff-layout">
         <section class="section-block overview-section">
-          <header class="section-block__header">
+          <header class="section-block__header staff-overview-header">
             <div>
               <h3>员工总览</h3>
+            </div>
+            <div class="toolbar-actions">
+              <button
+                class="desktop-console-panel__action desktop-console-panel__action--ghost"
+                type="button"
+                :disabled="isStaffSnapshotRefreshing"
+                @click="handleRefreshStaffSnapshot()"
+              >
+                {{ isStaffSnapshotRefreshing ? "刷新中..." : "刷新" }}
+              </button>
             </div>
           </header>
 
           <div class="staff-brief-grid">
             <article v-for="member in staffMembers" :key="member.agentId" class="staff-brief-card">
+              <button
+                class="staff-brief-card__delete"
+                type="button"
+                title="删除角色"
+                :aria-label="`删除角色 ${member.displayName}`"
+                @click.stop="openStaffDeleteConfirm(member)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 7h2v8h-2v-8Zm4 0h2v8h-2v-8ZM7 10h2v8H7v-8Zm-1 10h12l1-13H5l1 13Z" />
+                </svg>
+              </button>
               <div class="staff-brief-head">
                 <div class="staff-avatar">
                   <div class="staff-avatar__badge" :class="[getStaffStatusClass(member), getStaffAvatarColorClass(member.agentId)]">
@@ -10078,6 +11351,162 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
+      <div v-else-if="activeSection === 'role-workflow'" class="desktop-console-body desktop-console-body--overview role-workflow-layout">
+        <section class="section-block overview-section role-workflow-section">
+          <header class="section-block__header role-workflow-header">
+            <h3>角色工作流</h3>
+            <input
+              v-model="roleWorkflowKeyword"
+              class="management-filter-input role-workflow-search"
+              type="search"
+              placeholder="搜索角色 / 分组 / 场景"
+            />
+          </header>
+
+          <p class="role-workflow-summary">
+            共 {{ roleWorkflowTotalCount }} 个角色，当前显示 {{ roleWorkflowVisibleCount }} 个。
+          </p>
+
+          <div v-if="roleWorkflowVisibleCount === 0" class="empty-state">未找到匹配角色，请调整关键词。</div>
+
+          <div v-else class="role-workflow-division-list">
+            <section v-for="division in roleWorkflowDivisions" :key="division.id" class="role-workflow-division">
+              <header class="role-workflow-division__header">
+                <h4>{{ division.titleZh }}</h4>
+                <span>{{ division.count }} 个角色</span>
+              </header>
+
+              <div v-for="group in division.groups" :key="group.id" class="role-workflow-group">
+                <h5 v-if="group.titleZh && division.groups.length > 1">{{ group.titleZh }}</h5>
+                <div class="role-workflow-grid">
+                  <article
+                    v-for="role in group.roles"
+                    :key="role.id"
+                    class="role-workflow-card"
+                    role="button"
+                    tabindex="0"
+                    @click="openRoleWorkflowDetail(role.id)"
+                    @keydown.enter.prevent="openRoleWorkflowDetail(role.id)"
+                    @keydown.space.prevent="openRoleWorkflowDetail(role.id)"
+                  >
+                    <strong>{{ role.nameZh }}</strong>
+                    <p>{{ role.workflowZh }}</p>
+                  </article>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
+
+      <div v-else-if="activeSection === 'skill-market'" class="desktop-console-body desktop-console-body--overview skill-market-layout">
+        <section class="section-block overview-section skill-market-section">
+          <div class="skill-market-category-row" role="tablist" aria-label="技能分类">
+            <button
+              v-for="category in skillMarketCategories"
+              :key="`skill-market-category-${category.id}`"
+              class="skill-market-category-card"
+              :class="{
+                active: activeSkillMarketCategory === category.id,
+                'skill-market-category-card--top': category.id === 'top'
+              }"
+              type="button"
+              @click="selectSkillMarketCategory(category.id)"
+            >
+              <span class="skill-market-category-card__icon">{{ category.icon }}</span>
+              <strong>{{ category.label }}</strong>
+              <small>{{ category.hint }}</small>
+            </button>
+          </div>
+
+          <div class="skill-market-toolbar">
+            <input
+              v-model="skillMarketSearch"
+              class="management-filter-input skill-market-toolbar__search"
+              type="search"
+              placeholder="搜索关键词..."
+              @keydown.enter.prevent="refreshSkillMarket(true)"
+            />
+            <button class="desktop-console-panel__action desktop-console-panel__action--ghost skill-market-toolbar__refresh" type="button" @click="refreshSkillMarket(true)">
+              搜索
+            </button>
+          </div>
+
+          <p class="skill-market-summary">{{ skillMarketSummaryText }}</p>
+
+          <div v-if="skillMarketLoading" class="empty-state">正在加载技能市场数据...</div>
+          <div v-else-if="skillMarketError" class="empty-state">{{ skillMarketError }}</div>
+          <div v-else-if="pagedSkillMarketSkills.length === 0" class="empty-state">没有匹配的技能，请调整关键词或分类。</div>
+          <div v-else class="skill-market-grid">
+            <article
+              v-for="(skill, index) in pagedSkillMarketSkills"
+              :key="`${skill.slug || skill.name}-${index}`"
+              class="skill-market-card"
+              role="button"
+              tabindex="0"
+              @click="openSkillMarketDetailModal(skill)"
+              @keydown.enter.prevent="openSkillMarketDetailModal(skill)"
+              @keydown.space.prevent="openSkillMarketDetailModal(skill)"
+            >
+              <div class="skill-market-card__head">
+                <div class="skill-market-card__avatar">{{ getSkillMarketInitial(skill.name) }}</div>
+                <div class="skill-market-card__title">
+                  <strong>{{ skill.name }}</strong>
+                  <p>{{ getSkillMarketDescription(skill) }}</p>
+                </div>
+              </div>
+              <div class="skill-market-card__chips">
+                <span>{{ getSkillMarketCategoryLabel(skill.category) }}</span>
+                <span v-if="skill.ownerName">@{{ skill.ownerName }}</span>
+              </div>
+              <div class="skill-market-card__meta">
+                <span>↓ {{ formatSkillMarketCount(skill.downloads) }}</span>
+                <span>☆ {{ formatSkillMarketCount(skill.stars) }}</span>
+                <span>{{ formatSkillMarketVersion(skill.version) }}</span>
+              </div>
+            </article>
+          </div>
+          <div v-if="!skillMarketLoading && !skillMarketError && skillMarketCurrentTotalPages > 1" class="skill-market-pagination">
+            <button
+              class="skill-market-pagination__button"
+              type="button"
+              :disabled="!skillMarketCanPrevPage"
+              @click="goPrevSkillMarketPage"
+            >
+              上一页
+            </button>
+            <button
+              v-for="page in skillMarketPageNumbers"
+              :key="`skill-market-page-${page}`"
+              class="skill-market-pagination__page"
+              :class="{ active: page === skillMarketPage }"
+              type="button"
+              @click="goToSkillMarketPage(page)"
+            >
+              {{ page }}
+            </button>
+            <button
+              class="skill-market-pagination__button"
+              type="button"
+              :disabled="!skillMarketCanNextPage"
+              @click="goNextSkillMarketPage"
+            >
+              下一页
+            </button>
+          </div>
+          <p class="skill-market-copyright">
+            数据来源于
+            <button
+              class="skill-market-copyright__link"
+              type="button"
+              @click="openCodingPlanPlatform('https://skillhub.tencent.com/')"
+            >
+              腾讯云 SkillHub
+            </button>
+          </p>
+        </section>
+      </div>
+
       <div v-else-if="activeSection === 'channels'" class="desktop-console-body desktop-console-body--overview">
         <section class="section-block overview-section channels-section">
           <header class="section-block__header channels-config-header">
@@ -10148,42 +11577,19 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
                 </div>
+                <div v-if="group.accounts.length === 0" class="empty-state empty-state--small">
+                  当前频道暂无账号，点击“添加账号”开始配置。
+                </div>
               </div>
             </article>
           </div>
           <div v-else class="empty-state">暂无已配置频道。可在下方点击频道卡片开始配置。</div>
 
           <div class="channel-group">
-            <h4>可用频道</h4>
-            <div class="channel-grid channel-grid--single">
-              <button
-                v-for="channel in featuredMessageChannels"
-                :key="`featured-${channel.id}`"
-                class="channel-card channel-card--interactive"
-                :class="{ 'channel-card--configured': isMessageChannelConfigured(channel.id) }"
-                type="button"
-                @click="handleOpenChannelConfigFromCard(channel.id)"
-              >
-                <div class="channel-card__icon-shell">
-                  <img :src="channel.icon" :alt="channel.name" />
-                </div>
-                <div class="channel-card__content">
-                  <div class="channel-card__title-row">
-                    <strong>{{ channel.name }}</strong>
-                    <span v-if="channel.plugin" class="channel-pill">插件</span>
-                    <span class="channel-status-dot" :class="{ 'is-on': isMessageChannelConfigured(channel.id) }" />
-                  </div>
-                  <p>{{ channel.description }}</p>
-                </div>
-              </button>
-            </div>
-          </div>
-
-          <div class="channel-group">
             <h4>支持的频道</h4>
-            <div class="channel-grid">
+            <div v-if="visibleMessageChannels.length > 0" class="channel-grid">
               <button
-                v-for="channel in supportedMessageChannels"
+                v-for="channel in visibleMessageChannels"
                 :key="`supported-${channel.id}`"
                 class="channel-card channel-card--interactive"
                 :class="{ 'channel-card--configured': isMessageChannelConfigured(channel.id) }"
@@ -10203,6 +11609,7 @@ onBeforeUnmount(() => {
                 </div>
               </button>
             </div>
+            <div v-else class="empty-state empty-state--small">暂无可用频道。</div>
           </div>
         </section>
       </div>
@@ -10315,6 +11722,9 @@ onBeforeUnmount(() => {
                       />
                       <span>{{ capability.label }}</span>
                     </label>
+                    <div v-if="petPeer.capabilities.length === 0" class="empty-state empty-state--small">
+                      当前远程宠物暂无可配置能力。
+                    </div>
                   </dd>
                 </div>
               </dl>
@@ -10487,6 +11897,59 @@ onBeforeUnmount(() => {
     <div v-if="!isConsoleWindowMode" class="desktop-console-panel__resize-handle" @pointerdown="handlePanelResizeStart" />
   </section>
 
+    <div v-if="activeSkillMarketDetail" class="platform-modal-backdrop" @click.self="closeSkillMarketDetailModal">
+      <section class="platform-modal skill-market-detail-modal" role="dialog" aria-modal="true" aria-label="技能详情">
+        <header class="platform-modal__header skill-market-detail-modal__header">
+          <div class="skill-market-detail-modal__identity">
+            <div class="skill-market-detail-modal__avatar">{{ getSkillMarketInitial(activeSkillMarketDetail.name) }}</div>
+            <div>
+              <strong>{{ activeSkillMarketDetail.name }}</strong>
+              <p>{{ activeSkillMarketDetail.slug || "skill" }}</p>
+            </div>
+          </div>
+          <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop="closeSkillMarketDetailModal">×</button>
+        </header>
+
+        <div class="skill-market-detail-modal__body">
+          <div class="skill-market-detail-modal__chips">
+            <span>{{ formatSkillMarketVersion(activeSkillMarketDetail.version) }}</span>
+            <span>{{ getSkillMarketCategoryLabel(activeSkillMarketDetail.category) }}</span>
+          </div>
+
+          <p class="skill-market-detail-modal__description">{{ getSkillMarketDescription(activeSkillMarketDetail) }}</p>
+
+          <div class="skill-market-detail-modal__stats">
+            <article class="skill-market-detail-modal__stat">
+              <span>下载量</span>
+              <strong>{{ formatSkillMarketCount(activeSkillMarketDetail.downloads) }}</strong>
+            </article>
+            <article class="skill-market-detail-modal__stat">
+              <span>收藏</span>
+              <strong>{{ formatSkillMarketCount(activeSkillMarketDetail.stars) }}</strong>
+            </article>
+            <article class="skill-market-detail-modal__stat">
+              <span>安装量</span>
+              <strong>{{ formatSkillMarketCount(activeSkillMarketDetail.installs) }}</strong>
+            </article>
+          </div>
+
+          <p class="skill-market-detail-modal__source">
+            数据来源于腾讯云 SkillHub，作者 {{ activeSkillMarketDetail.ownerName || "未知" }}
+          </p>
+        </div>
+
+        <div class="platform-modal__actions skill-market-detail-modal__actions">
+          <button
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            @click="openSkillMarketHomepage(activeSkillMarketDetail.homepage)"
+          >
+            访问 SkillHub
+          </button>
+        </div>
+      </section>
+    </div>
+
     <div v-if="activeRecentOutputMember" class="platform-modal-backdrop" @click.self="closeRecentOutputModal">
       <section class="platform-modal recent-output-modal" role="dialog" aria-modal="true" :aria-label="recentOutputModalTitle">
         <header class="platform-modal__header">
@@ -10613,46 +12076,50 @@ onBeforeUnmount(() => {
                 <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshOpenClawSkillsList()">重新读取</button>
               </div>
 
-              <div class="openclaw-skills-sections">
-                <section class="openclaw-skills-section">
-                  <h5 class="openclaw-tools-category__title">内置技能</h5>
-                  <div v-if="filteredOpenClawBuiltInSkills.length === 0" class="empty-state management-empty-state empty-state--small">
-                    暂无内置技能。
-                  </div>
-                  <ul v-else class="openclaw-skill-cards">
-                    <li v-for="skill in filteredOpenClawBuiltInSkills" :key="skill.id" class="openclaw-skill-card">
-                      <div class="openclaw-skill-card__head">
-                        <strong>{{ skill.name }}</strong>
-                        <label class="openclaw-skill-card__toggle" :aria-label="`${skill.enabled ? '禁用' : '启用'}技能 ${skill.name}`">
-                          <input type="checkbox" :checked="skill.enabled" @change="setOpenClawSkillEnabled(skill.id, ($event.target as HTMLInputElement).checked)" />
-                          <span class="openclaw-skill-card__toggle-slider" />
-                        </label>
-                      </div>
-                      <p class="openclaw-skill-card__desc">{{ skill.description }}</p>
-                    </li>
-                  </ul>
-                </section>
-
-                <section class="openclaw-skills-section">
-                  <h5 class="openclaw-tools-category__title">安装技能</h5>
-                  <div v-if="filteredOpenClawInstalledSkills.length === 0" class="empty-state management-empty-state empty-state--small">
-                    暂无安装技能。在 ~/.openclaw/skills 或 workspace/skills 下为每个技能建子目录并放入 SKILL.md。
-                  </div>
-                  <ul v-else class="openclaw-skill-cards">
-                    <li v-for="skill in filteredOpenClawInstalledSkills" :key="skill.id" class="openclaw-skill-card">
-                      <div class="openclaw-skill-card__head">
-                        <strong>{{ skill.name }}</strong>
-                        <label class="openclaw-skill-card__toggle" :aria-label="`${skill.enabled ? '禁用' : '启用'}技能 ${skill.name}`">
-                          <input type="checkbox" :checked="skill.enabled" @change="setOpenClawSkillEnabled(skill.id, ($event.target as HTMLInputElement).checked)" />
-                          <span class="openclaw-skill-card__toggle-slider" />
-                        </label>
-                      </div>
-                      <p class="openclaw-skill-card__desc">{{ skill.description }}</p>
-                      <small v-if="skill.relativePath" class="openclaw-skill-card__path">{{ skill.relativePath }}</small>
-                    </li>
-                  </ul>
-                </section>
+              <div class="openclaw-skill-switch" role="tablist" aria-label="技能分类切换">
+                <button
+                  class="openclaw-skill-switch__button"
+                  :class="{ 'is-active': openClawSkillCategory === 'builtIn' }"
+                  type="button"
+                  role="tab"
+                  :aria-selected="openClawSkillCategory === 'builtIn'"
+                  @click="openClawSkillCategory = 'builtIn'"
+                >
+                  内置技能
+                  <em>{{ filteredOpenClawBuiltInSkills.length }}</em>
+                </button>
+                <button
+                  class="openclaw-skill-switch__button"
+                  :class="{ 'is-active': openClawSkillCategory === 'installed' }"
+                  type="button"
+                  role="tab"
+                  :aria-selected="openClawSkillCategory === 'installed'"
+                  @click="openClawSkillCategory = 'installed'"
+                >
+                  安装技能
+                  <em>{{ filteredOpenClawInstalledSkills.length }}</em>
+                </button>
               </div>
+
+              <section class="openclaw-skills-section">
+                <h5 class="openclaw-tools-category__title">{{ activeOpenClawSkillsTitle }}</h5>
+                <div v-if="activeOpenClawSkills.length === 0" class="empty-state management-empty-state empty-state--small">
+                  {{ activeOpenClawSkillsEmptyText }}
+                </div>
+                <ul v-else class="openclaw-skill-cards">
+                  <li v-for="skill in activeOpenClawSkills" :key="skill.id" class="openclaw-skill-card">
+                    <div class="openclaw-skill-card__head">
+                      <strong>{{ skill.name }}</strong>
+                      <label class="openclaw-skill-card__toggle" :aria-label="`${skill.enabled ? '禁用' : '启用'}技能 ${skill.name}`">
+                        <input type="checkbox" :checked="skill.enabled" @change="setOpenClawSkillEnabled(skill.id, ($event.target as HTMLInputElement).checked)" />
+                        <span class="openclaw-skill-card__toggle-slider" />
+                      </label>
+                    </div>
+                    <p class="openclaw-skill-card__desc">{{ skill.description }}</p>
+                    <small v-if="openClawSkillCategory === 'installed' && skill.relativePath" class="openclaw-skill-card__path">{{ skill.relativePath }}</small>
+                  </li>
+                </ul>
+              </section>
             </section>
           </template>
 
@@ -10804,7 +12271,14 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <div v-if="isLobsterInstallWizardOpen" class="platform-modal-backdrop" @click.self="closeLobsterInstallWizard">
+    <div
+      v-if="isLobsterInstallWizardPrimed"
+      class="platform-modal-backdrop lobster-install-wizard-backdrop"
+      :class="{ 'is-open': isLobsterInstallWizardOpen }"
+      :aria-hidden="!isLobsterInstallWizardOpen"
+      :inert="!isLobsterInstallWizardOpen"
+      @click.self="closeLobsterInstallWizard"
+    >
       <section
         class="platform-modal lobster-install-wizard-modal"
         :class="{ 'lobster-install-wizard-modal--step3': lobsterInstallWizardStep === 3 }"
@@ -10902,10 +12376,14 @@ onBeforeUnmount(() => {
               </div>
               <div
                 class="lobster-install-wizard__runtime-summary"
-                :class="{ 'is-ready': lobsterInstallGuide?.ready, 'is-blocked': lobsterInstallGuide && !lobsterInstallGuide.ready }"
+                :class="{
+                  'is-ready': lobsterInstallGuide?.ready && !lobsterInstallGuideLoading,
+                  'is-blocked': lobsterInstallGuide && !lobsterInstallGuide.ready && !lobsterInstallGuideLoading,
+                  'is-checking': lobsterInstallGuideLoading
+                }"
               >
-                <span>{{ lobsterInstallGuide?.ready ? tr("wizard.runtime.ready") : tr("wizard.runtime.blocked") }}</span>
-                <small>{{ lobsterInstallGuide?.checks?.length ?? 0 }} {{ tr("wizard.runtime.check_count_unit") }}</small>
+                <span>{{ lobsterInstallGuideSummaryText }}</span>
+                <small>{{ lobsterInstallGuideCheckedCount }}/{{ lobsterInstallGuideCheckTotal }} {{ tr("wizard.runtime.check_count_unit") }}</small>
               </div>
 
               <div class="lobster-install-wizard__check-list">
@@ -10943,25 +12421,61 @@ onBeforeUnmount(() => {
                       {{ tr("wizard.provider.docs") }}
                     </button>
                   </div>
-                  <select
-                    v-model="lobsterProviderPresetKey"
-                    @change="handleLobsterProviderPresetChange()"
-                  >
-                    <option value="">{{ tr("wizard.provider.keep_current") }}</option>
+                  <div v-if="isWindowsRuntime" class="lobster-provider-picker" role="group" :aria-label="tr('wizard.provider.field.provider')">
+                    <div class="lobster-provider-picker__options">
+                      <button
+                        type="button"
+                        class="lobster-provider-picker__option"
+                        :class="{ 'is-active': lobsterProviderPresetKey === '' }"
+                        @click="lobsterProviderPresetKey = ''; handleLobsterProviderPresetChange()"
+                      >
+                        {{ tr("wizard.provider.keep_current") }}
+                      </button>
+                    </div>
                     <template v-for="group in lobsterProviderGroupOptions" :key="`wizard-provider-group-${group.key}`">
-                      <option v-if="group.key === 'custom'" disabled value="__divider__">────────────</option>
-                      <optgroup v-if="group.key !== 'custom'" :label="group.label">
-                        <option v-for="preset in group.options" :key="`wizard-provider-${preset.id}`" :value="preset.id">
-                          {{ getLobsterProviderOptionLabel(preset) }}
-                        </option>
-                      </optgroup>
-                      <template v-else>
-                        <option v-for="preset in group.options" :key="`wizard-provider-${preset.id}`" :value="preset.id">
-                          {{ getLobsterProviderOptionLabel(preset) }}
-                        </option>
-                      </template>
+                      <div class="lobster-provider-picker__group">
+                        <p v-if="group.key !== 'custom'" class="lobster-provider-picker__title">{{ group.label }}</p>
+                        <div class="lobster-provider-picker__options">
+                          <button
+                            v-for="preset in group.options"
+                            :key="`wizard-provider-${preset.id}`"
+                            type="button"
+                            class="lobster-provider-picker__option"
+                            :class="{ 'is-active': lobsterProviderPresetKey === preset.id }"
+                            @click="lobsterProviderPresetKey = preset.id; handleLobsterProviderPresetChange()"
+                          >
+                            {{ getLobsterProviderOptionLabel(preset) }}
+                          </button>
+                        </div>
+                      </div>
                     </template>
-                  </select>
+                  </div>
+                  <div v-else class="lobster-install-wizard__provider-select-wrap">
+                    <span class="lobster-install-wizard__provider-select-icon" aria-hidden="true">
+                      {{ lobsterProviderSelectedIcon }}
+                    </span>
+                    <select
+                      v-model="lobsterProviderPresetKey"
+                      class="lobster-install-wizard__provider-select"
+                      @change="handleLobsterProviderPresetChange()"
+                    >
+                      <option value="">{{ tr("wizard.provider.keep_current") }}</option>
+                      <template v-for="group in lobsterProviderGroupOptions" :key="`wizard-provider-group-${group.key}`">
+                        <option v-if="group.key === 'custom'" disabled value="__divider__">────────────</option>
+                        <optgroup v-if="group.key !== 'custom'" :label="group.label">
+                          <option v-for="preset in group.options" :key="`wizard-provider-${preset.id}`" :value="preset.id">
+                            {{ getLobsterProviderOptionDisplayName(preset) }}
+                          </option>
+                        </optgroup>
+                        <template v-else>
+                          <option v-for="preset in group.options" :key="`wizard-provider-${preset.id}`" :value="preset.id">
+                            {{ getLobsterProviderOptionDisplayName(preset) }}
+                          </option>
+                        </template>
+                      </template>
+                    </select>
+                    <span class="lobster-install-wizard__provider-select-caret" aria-hidden="true" />
+                  </div>
                 </label>
 
                 <label class="lobster-install-wizard__field lobster-install-wizard__field--span2">
@@ -10983,6 +12497,25 @@ onBeforeUnmount(() => {
                     @input="lobsterProviderConfigured = false"
                   />
                   <small class="lobster-install-wizard__field-hint">{{ tr("wizard.provider.model_hint") }}</small>
+                </label>
+
+                <label
+                  v-if="lobsterShowCustomProtocolPicker"
+                  class="lobster-install-wizard__field lobster-install-wizard__field--span2"
+                >
+                  <span>{{ tr("wizard.provider.protocol") }}</span>
+                  <div class="lobster-install-wizard__protocol-toggle" role="group" :aria-label="tr('wizard.provider.protocol')">
+                    <button
+                      v-for="option in lobsterProviderApiKindOptions"
+                      :key="`wizard-provider-api-kind-${option.value}`"
+                      type="button"
+                      class="lobster-install-wizard__protocol-option"
+                      :class="{ 'is-active': lobsterProviderApiKind === option.value }"
+                      @click="applyLobsterProviderApiKind(option.value)"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
                 </label>
 
                 <label class="lobster-install-wizard__field lobster-install-wizard__field--span2">
@@ -11322,7 +12855,25 @@ onBeforeUnmount(() => {
             </label>
             <label>
               <span>协议类型</span>
-              <select v-model="platformForm.protocol">
+              <div v-if="isWindowsRuntime" class="platform-protocol-toggle" role="group" aria-label="协议类型">
+                <button
+                  type="button"
+                  class="platform-protocol-toggle__option"
+                  :class="{ 'is-active': platformForm.protocol === 'openai' }"
+                  @click="platformForm.protocol = 'openai'"
+                >
+                  OpenAI 兼容
+                </button>
+                <button
+                  type="button"
+                  class="platform-protocol-toggle__option"
+                  :class="{ 'is-active': platformForm.protocol === 'anthropic' }"
+                  @click="platformForm.protocol = 'anthropic'"
+                >
+                  Anthropic Messages
+                </button>
+              </div>
+              <select v-else v-model="platformForm.protocol">
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic Messages</option>
               </select>
@@ -11441,6 +12992,129 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </form>
+      </section>
+    </div>
+
+    <div v-if="activeRoleWorkflowBase" class="platform-modal-backdrop" @click.self="closeRoleWorkflowDetail">
+      <section class="platform-modal role-workflow-detail-modal">
+        <header class="platform-modal__header role-workflow-detail-modal__header">
+          <div>
+            <strong>角色详情</strong>
+            <p>
+              {{ activeRoleWorkflowBase.divisionTitleZh }}
+              <span v-if="activeRoleWorkflowBase.groupTitleZh"> / {{ activeRoleWorkflowBase.groupTitleZh }}</span>
+            </p>
+          </div>
+          <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop="closeRoleWorkflowDetail">×</button>
+        </header>
+
+        <div class="role-workflow-detail-modal__body">
+          <div
+            v-if="roleWorkflowInstallNotice"
+            class="role-workflow-detail-modal__notice"
+            :class="`role-workflow-detail-modal__notice--${roleWorkflowInstallNotice.tone}`"
+          >
+            {{ roleWorkflowInstallNotice.text }}
+          </div>
+
+          <label class="role-workflow-detail-modal__field role-workflow-detail-modal__field--name">
+            <span>角色中文名称</span>
+            <input
+              v-model="roleWorkflowNameZhDraft"
+              class="role-workflow-detail-modal__name-input"
+              type="text"
+              placeholder="请输入角色中文名称"
+            />
+          </label>
+
+          <label class="role-workflow-detail-modal__field">
+            <span>详情内容（Markdown，可编辑）</span>
+            <textarea
+              v-model="roleWorkflowDetailDraft.contentZh"
+              class="role-workflow-detail-modal__editor"
+              rows="18"
+              placeholder="在这里编辑角色详情 Markdown"
+            />
+          </label>
+
+          <section class="role-workflow-detail-modal__versions">
+            <header class="role-workflow-detail-modal__versions-header">
+              <strong>已保存版本（最多 3 个）</strong>
+            </header>
+            <p v-if="roleWorkflowDetailSavedVersions.length === 0" class="role-workflow-detail-modal__versions-empty">
+              暂无已保存版本，点击“保存修改”后会自动保留历史。
+            </p>
+            <ul v-else class="role-workflow-detail-modal__versions-list">
+              <li v-for="version in roleWorkflowDetailSavedVersions" :key="version.id" class="role-workflow-detail-modal__version-item">
+                <span class="role-workflow-detail-modal__version-time">{{ formatTime(version.savedAt) }}</span>
+                <div class="role-workflow-detail-modal__version-actions">
+                  <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="applyRoleWorkflowSavedVersion(version.id)">
+                    载入
+                  </button>
+                  <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="deleteRoleWorkflowSavedVersion(version.id)">
+                    删除
+                  </button>
+                </div>
+              </li>
+            </ul>
+          </section>
+        </div>
+
+        <div class="platform-modal__actions role-workflow-detail-modal__actions">
+          <button
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            :disabled="!isRoleWorkflowDraftChanged"
+            @click="restoreRoleWorkflowOriginalContent"
+          >
+            恢复原始内容
+          </button>
+          <button
+            class="desktop-console-panel__action"
+            type="button"
+            :disabled="!isRoleWorkflowDraftChanged"
+            @click="saveRoleWorkflowDetail"
+          >
+            保存修改
+          </button>
+          <button
+            class="desktop-console-panel__action desktop-console-panel__action--ghost"
+            type="button"
+            :disabled="isRoleWorkflowInstalling"
+            @click="installRoleWorkflowRole"
+          >
+            {{ isRoleWorkflowInstalling ? "安装中..." : "安装角色" }}
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="staffDeleteTargetMember" class="platform-modal-backdrop" @click.self="closeStaffDeleteConfirm">
+      <section class="platform-modal staff-delete-modal" role="dialog" aria-modal="true" aria-label="删除角色确认">
+        <header class="platform-modal__header">
+          <div>
+            <strong>移除角色</strong>
+            <p>将「{{ staffDeleteTargetMember.displayName }}」从员工列表移除？</p>
+          </div>
+          <button class="platform-modal__close" type="button" aria-label="关闭" :disabled="isStaffDeleting" @click.stop="closeStaffDeleteConfirm">×</button>
+        </header>
+
+        <div class="staff-delete-modal__body">
+          <label class="staff-delete-modal__option">
+            <input v-model="staffDeleteRemoveFiles" type="checkbox" />
+            <span>同时删除本地配置文件（工作区目录）</span>
+          </label>
+          <p v-if="staffDeleteError" class="platform-form-error">{{ staffDeleteError }}</p>
+        </div>
+
+        <div class="platform-modal__actions">
+          <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" :disabled="isStaffDeleting" @click="closeStaffDeleteConfirm">
+            取消
+          </button>
+          <button class="desktop-console-panel__action desktop-console-panel__action--danger" type="button" :disabled="isStaffDeleting" @click="confirmDeleteStaffMember">
+            {{ isStaffDeleting ? "移除中..." : "确认移除" }}
+          </button>
+        </div>
       </section>
     </div>
 

@@ -1,0 +1,36 @@
+{
+  "skills": [
+    {
+      "slug": "pdf",
+      "autoEnable": true
+    },
+    {
+      "slug": "xlsx",
+      "autoEnable": true
+    },
+    {
+      "slug": "docx",
+      "autoEnable": true
+    },
+    {
+      "slug": "pptx",
+      "autoEnable": true
+    },
+    {
+      "slug": "find-skills",
+      "autoEnable": true
+    },
+    {
+      "slug": "self-improving-agent",
+      "autoEnable": true
+    },
+    {
+      "slug": "tavily-search",
+      "autoEnable": true
+    },
+    {
+      "slug": "brave-web-search",
+      "autoEnable": true
+    }
+  ]
+}

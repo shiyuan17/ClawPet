@@ -1,4 +1,5 @@
 use base64::Engine;
+use getrandom::getrandom;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -324,6 +325,20 @@ struct OpenClawChannelAccountPayload {
     account_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreinstalledSkillsManifest {
+    skills: Option<Vec<PreinstalledSkillSpec>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreinstalledSkillSpec {
+    slug: String,
+    version: Option<String>,
+    auto_enable: Option<bool>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenClawMessageLogItem {
@@ -429,8 +444,8 @@ struct LocalProxyPlatform {
 #[serde(rename_all = "camelCase")]
 struct OpenClawProviderConfigPayload {
     provider_id: String,
-    name: String,
     protocol: String,
+    api_kind: Option<String>,
     base_url: String,
     model: String,
     api_key: String,
@@ -443,9 +458,14 @@ struct LocalProxyState {
 }
 
 static LOCAL_PROXY_STATE: OnceLock<Mutex<LocalProxyState>> = OnceLock::new();
+static APP_RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 fn local_proxy_state() -> &'static Mutex<LocalProxyState> {
     LOCAL_PROXY_STATE.get_or_init(|| Mutex::new(LocalProxyState::default()))
+}
+
+fn set_app_resource_dir(path: PathBuf) {
+    let _ = APP_RESOURCE_DIR.set(path);
 }
 
 fn load_env_file(path: &Path) {
@@ -475,10 +495,7 @@ fn load_openclaw_env() {
 }
 
 fn load_openclaw_gateway_token_from_config() -> Option<String> {
-    let home_dir = std::env::var_os("HOME")?;
-    let config_path = PathBuf::from(home_dir)
-        .join(".openclaw")
-        .join("openclaw.json");
+    let config_path = resolve_openclaw_config_path();
     let config_text = std::fs::read_to_string(config_path).ok()?;
     let config = serde_json::from_str::<serde_json::Value>(&config_text).ok()?;
     let auth = config.get("gateway")?.get("auth")?;
@@ -494,6 +511,117 @@ fn load_openclaw_gateway_token_from_config() -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn generate_openclaw_gateway_token() -> Result<String, String> {
+    let mut random_bytes = [0u8; 16];
+    getrandom(&mut random_bytes).map_err(|error| format!("生成网关令牌失败: {error}"))?;
+    Ok(format!("clawpet-{}", bytes_to_lower_hex(&random_bytes)))
+}
+
+fn persist_openclaw_gateway_token(token: &str) -> Result<(), String> {
+    let trimmed_token = token.trim();
+    if trimmed_token.is_empty() {
+        return Err("网关令牌不能为空".to_string());
+    }
+
+    let source_path = resolve_openclaw_config_path();
+    let mut parsed = match std::fs::read_to_string(&source_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    if !parsed.is_object() {
+        parsed = serde_json::json!({});
+    }
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象，无法写入网关令牌。")?;
+
+    if !matches!(root.get("gateway"), Some(Value::Object(_))) {
+        root.insert("gateway".to_string(), serde_json::json!({}));
+    }
+    let gateway_obj = root
+        .get_mut("gateway")
+        .and_then(Value::as_object_mut)
+        .ok_or("openclaw.json 的 gateway 字段不是对象。")?;
+
+    if !matches!(gateway_obj.get("auth"), Some(Value::Object(_))) {
+        gateway_obj.insert("auth".to_string(), serde_json::json!({}));
+    }
+    let auth_obj = gateway_obj
+        .get_mut("auth")
+        .and_then(Value::as_object_mut)
+        .ok_or("openclaw.json 的 gateway.auth 字段不是对象。")?;
+    auth_obj.insert("mode".to_string(), Value::String("token".to_string()));
+    auth_obj.insert("token".to_string(), Value::String(trimmed_token.to_string()));
+
+    if !matches!(gateway_obj.get("controlUi"), Some(Value::Object(_))) {
+        gateway_obj.insert("controlUi".to_string(), serde_json::json!({}));
+    }
+    let control_ui_obj = gateway_obj
+        .get_mut("controlUi")
+        .and_then(Value::as_object_mut)
+        .ok_or("openclaw.json 的 gateway.controlUi 字段不是对象。")?;
+    let mut allowed_origins = control_ui_obj
+        .get("allowedOrigins")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !allowed_origins.iter().any(|item| item == "file://") {
+        allowed_origins.push("file://".to_string());
+    }
+    control_ui_obj.insert(
+        "allowedOrigins".to_string(),
+        Value::Array(allowed_origins.into_iter().map(Value::String).collect()),
+    );
+
+    if gateway_obj
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        gateway_obj.insert("mode".to_string(), Value::String("local".to_string()));
+    }
+
+    write_openclaw_config_value(&source_path, &parsed)
+}
+
+fn ensure_openclaw_gateway_token() -> Result<String, String> {
+    if let Some(existing_token) = load_openclaw_gateway_token_from_config() {
+        return Ok(existing_token);
+    }
+
+    if let Ok(env_token) = std::env::var("OPENCLAW_GATEWAY_TOKEN") {
+        let trimmed = env_token.trim();
+        if !trimmed.is_empty() {
+            persist_openclaw_gateway_token(trimmed)?;
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    let generated_token = generate_openclaw_gateway_token()?;
+    persist_openclaw_gateway_token(&generated_token)?;
+    Ok(generated_token)
+}
+
 fn resolve_openclaw_config_path() -> PathBuf {
     if let Ok(explicit) = std::env::var("OPENCLAW_CONFIG_PATH") {
         let trimmed = explicit.trim();
@@ -502,13 +630,7 @@ fn resolve_openclaw_config_path() -> PathBuf {
         }
     }
 
-    if let Ok(home_dir) = std::env::var("HOME") {
-        return PathBuf::from(home_dir)
-            .join(".openclaw")
-            .join("openclaw.json");
-    }
-
-    PathBuf::from(".openclaw").join("openclaw.json")
+    resolve_openclaw_home_path().join("openclaw.json")
 }
 
 fn resolve_openclaw_home_path() -> PathBuf {
@@ -768,15 +890,119 @@ fn normalize_local_proxy_base_url_for_persist(base_url: &str) -> String {
     url.to_string().trim_end_matches('/').to_string()
 }
 
+fn ensure_openclaw_json_object(value: &mut Value) -> &mut serde_json::Map<String, Value> {
+    if !value.is_object() {
+        *value = Value::Object(serde_json::Map::new());
+    }
+    if let Value::Object(obj) = value {
+        obj
+    } else {
+        unreachable!("openclaw config entry must be an object")
+    }
+}
+
+fn normalize_openclaw_config_defaults(parsed: &Value) -> Value {
+    let mut normalized = parsed.clone();
+    let root = ensure_openclaw_json_object(&mut normalized);
+
+    let commands = ensure_openclaw_json_object(
+        root.entry("commands".to_string())
+            .or_insert_with(|| serde_json::json!({})),
+    );
+    commands.insert("restart".to_string(), Value::Bool(true));
+
+    let gateway = ensure_openclaw_json_object(
+        root.entry("gateway".to_string())
+            .or_insert_with(|| serde_json::json!({})),
+    );
+    if gateway
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        gateway.insert("mode".to_string(), Value::String("local".to_string()));
+    }
+    let control_ui = ensure_openclaw_json_object(
+        gateway
+            .entry("controlUi".to_string())
+            .or_insert_with(|| serde_json::json!({})),
+    );
+    let mut allowed_origins = control_ui
+        .get("allowedOrigins")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !allowed_origins.iter().any(|item| item == "file://") {
+        allowed_origins.push("file://".to_string());
+    }
+    control_ui.insert(
+        "allowedOrigins".to_string(),
+        Value::Array(allowed_origins.into_iter().map(Value::String).collect()),
+    );
+
+    let browser = ensure_openclaw_json_object(
+        root.entry("browser".to_string())
+            .or_insert_with(|| serde_json::json!({})),
+    );
+    if !browser.contains_key("enabled") {
+        browser.insert("enabled".to_string(), Value::Bool(true));
+    }
+    if !browser.contains_key("defaultProfile") {
+        browser.insert(
+            "defaultProfile".to_string(),
+            Value::String("openclaw".to_string()),
+        );
+    }
+
+    let tools = ensure_openclaw_json_object(
+        root.entry("tools".to_string())
+            .or_insert_with(|| serde_json::json!({})),
+    );
+    tools.insert("profile".to_string(), Value::String("full".to_string()));
+    let sessions = ensure_openclaw_json_object(
+        tools
+            .entry("sessions".to_string())
+            .or_insert_with(|| serde_json::json!({})),
+    );
+    sessions.insert("visibility".to_string(), Value::String("all".to_string()));
+
+    normalized
+}
+
 fn write_openclaw_config_value(source_path: &Path, parsed: &Value) -> Result<(), String> {
+    let normalized = normalize_openclaw_config_defaults(parsed);
     if let Some(parent) = source_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("创建 openclaw 配置目录失败: {error}"))?;
     }
-    let output = serde_json::to_string_pretty(parsed)
+    let output = serde_json::to_string_pretty(&normalized)
         .map_err(|error| format!("序列化 openclaw.json 失败: {error}"))?;
+    if let Ok(existing) = std::fs::read_to_string(source_path) {
+        if existing == output {
+            return Ok(());
+        }
+    }
     std::fs::write(source_path, output).map_err(|error| format!("写入 openclaw.json 失败: {error}"))?;
     Ok(())
+}
+
+fn ensure_openclaw_config_defaults_on_disk() -> Result<(), String> {
+    let source_path = resolve_openclaw_config_path();
+    let parsed = match std::fs::read_to_string(&source_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    write_openclaw_config_value(&source_path, &parsed)
 }
 
 /// 从 openclaw.json 的 bindings 中按 agentId 匹配，收集每个 agent 的 match.channel，多个用 ", " 拼接。
@@ -2685,9 +2911,7 @@ fn save_openclaw_skill_enabled(skill_id: String, enabled: bool) -> Result<(), St
         .or_insert_with(|| serde_json::json!({}));
     let entry_obj = entry.as_object_mut().ok_or("skills.entries 项不是对象")?;
     entry_obj.insert("enabled".to_string(), Value::Bool(enabled));
-    let new_raw = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, new_raw).map_err(|e| e.to_string())?;
-    Ok(())
+    write_openclaw_config_value(&config_path, &parsed)
 }
 
 /// OpenClaw 内置工具清单（与 docs 一致）：id, 名称, 描述, 分类
@@ -3150,9 +3374,7 @@ fn save_openclaw_tools_config(
         tools_obj.remove("deny");
     }
 
-    let new_raw = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, new_raw).map_err(|e| e.to_string())?;
-    Ok(())
+    write_openclaw_config_value(&config_path, &parsed)
 }
 
 #[tauri::command]
@@ -3326,6 +3548,507 @@ fn save_source_file(kind: String, source_path: String, content: String) -> Resul
     }
     std::fs::write(&target.source_path, content).map_err(|error| error.to_string())?;
     Ok(target.source_path)
+}
+
+fn strip_wrapping_quotes(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
+        return trimmed[1..trimmed.len() - 1].trim().to_string();
+    }
+    trimmed.to_string()
+}
+
+fn parse_markdown_frontmatter_and_body(markdown: &str) -> (std::collections::HashMap<String, String>, String) {
+    let normalized = markdown.replace("\r\n", "\n").replace('\r', "\n");
+    let mut fields = std::collections::HashMap::new();
+    let lines = normalized.split('\n').collect::<Vec<_>>();
+
+    if lines.first().map(|line| line.trim()) != Some("---") {
+        return (fields, normalized);
+    }
+
+    let mut end_index = None;
+    for (index, line) in lines.iter().enumerate().skip(1) {
+        if line.trim() == "---" {
+            end_index = Some(index);
+            break;
+        }
+    }
+
+    let Some(end) = end_index else {
+        return (fields, normalized);
+    };
+
+    for line in &lines[1..end] {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = raw_key.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        fields.insert(key, strip_wrapping_quotes(raw_value));
+    }
+
+    let body = if end + 1 < lines.len() {
+        lines[end + 1..].join("\n")
+    } else {
+        String::new()
+    };
+    (fields, body)
+}
+
+fn is_soul_header(header: &str) -> bool {
+    let normalized = header.to_ascii_lowercase();
+    let soul_keywords = [
+        "identity",
+        "communication",
+        "style",
+        "critical rule",
+        "critical-rule",
+        "rules you must follow",
+        "身份",
+        "记忆",
+        "溝通",
+        "沟通",
+        "风格",
+        "風格",
+        "关键规则",
+        "關鍵規則",
+    ];
+    soul_keywords.iter().any(|keyword| normalized.contains(keyword))
+}
+
+fn split_openclaw_markdown_sections(body: &str) -> (String, String) {
+    let mut soul_content = String::new();
+    let mut agents_content = String::new();
+    let mut current_section = String::new();
+    let mut current_target_is_soul = false;
+
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("## ") || trimmed.starts_with("##\t") {
+            if !current_section.is_empty() {
+                if current_target_is_soul {
+                    soul_content.push_str(&current_section);
+                } else {
+                    agents_content.push_str(&current_section);
+                }
+            }
+            current_section.clear();
+            current_target_is_soul = is_soul_header(trimmed);
+        }
+
+        current_section.push_str(line);
+        current_section.push('\n');
+    }
+
+    if !current_section.is_empty() {
+        if current_target_is_soul {
+            soul_content.push_str(&current_section);
+        } else {
+            agents_content.push_str(&current_section);
+        }
+    }
+
+    (soul_content, agents_content)
+}
+
+fn normalize_markdown_output(content: String) -> String {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{trimmed}\n")
+    }
+}
+
+#[tauri::command]
+fn install_role_workflow_agent(
+    agent_id: String,
+    display_name: String,
+    content: String,
+    source_path: Option<String>,
+) -> Result<String, String> {
+    let normalized_id = {
+        let mut output = String::new();
+        for ch in agent_id.trim().chars() {
+            if ch.is_ascii_alphanumeric() {
+                output.push(ch.to_ascii_lowercase());
+            } else if ch == '-' || ch == '_' || ch == '/' || ch == '\\' {
+                if !output.ends_with('-') {
+                    output.push('-');
+                }
+            }
+        }
+        output = output.trim_matches('-').to_string();
+        if output.is_empty() {
+            return Err("角色 ID 为空，无法安装。".to_string());
+        }
+        output
+    };
+
+    let workspace_root = resolve_openclaw_home_path().join(format!("workspace-{normalized_id}"));
+    std::fs::create_dir_all(&workspace_root)
+        .map_err(|error| format!("创建角色工作区失败（{}）：{error}", workspace_root.display()))?;
+
+    let source_label = source_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    let raw_markdown = if content.trim().is_empty() {
+        format!(
+            "# {name}\n\n来源：{source}\n\n> 该角色由 ClawPet 安装，请补充具体职责内容。\n",
+            name = display_name.trim(),
+            source = source_label
+        )
+    } else {
+        let mut normalized = content.replace("\r\n", "\n");
+        if !normalized.ends_with('\n') {
+            normalized.push('\n');
+        }
+        normalized
+    };
+
+    let (frontmatter_fields, body_markdown_raw) = parse_markdown_frontmatter_and_body(&raw_markdown);
+    let body_markdown = normalize_markdown_output(body_markdown_raw);
+    let (soul_split, agents_split) = split_openclaw_markdown_sections(&body_markdown);
+    let mut soul_markdown = normalize_markdown_output(soul_split);
+    let mut agents_markdown = normalize_markdown_output(agents_split);
+
+    if agents_markdown.is_empty() {
+        agents_markdown = if body_markdown.is_empty() {
+            normalize_markdown_output(raw_markdown.clone())
+        } else {
+            body_markdown.clone()
+        };
+    }
+
+    let configured_name = display_name.trim();
+    let frontmatter_name = frontmatter_fields
+        .get("name")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim();
+    let next_name = if !configured_name.is_empty() {
+        configured_name.to_string()
+    } else if !frontmatter_name.is_empty() {
+        frontmatter_name.to_string()
+    } else {
+        normalized_id.clone()
+    };
+
+    let frontmatter_desc = frontmatter_fields
+        .get("description")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let frontmatter_vibe = frontmatter_fields
+        .get("vibe")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let frontmatter_emoji = frontmatter_fields
+        .get("emoji")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if soul_markdown.is_empty() {
+        let soul_summary = if !frontmatter_desc.is_empty() {
+            frontmatter_desc.clone()
+        } else {
+            format!("该角色来源于 {source_label}，请补充身份、记忆、沟通风格与关键规则。")
+        };
+        soul_markdown = format!("## 你的身份与记忆\n\n- **角色**：{next_name}\n- **定位**：{soul_summary}\n");
+    }
+
+    let identity_title = if frontmatter_emoji.is_empty() {
+        format!("# {next_name}")
+    } else {
+        format!("# {} {next_name}", frontmatter_emoji)
+    };
+    let identity_summary = if !frontmatter_vibe.is_empty() {
+        frontmatter_vibe
+    } else if !frontmatter_desc.is_empty() {
+        frontmatter_desc
+    } else {
+        format!("来源：{source_label}")
+    };
+    let identity_markdown = format!("{identity_title}\n\n{identity_summary}\n");
+
+    let agents_md_path = workspace_root.join("AGENTS.md");
+    std::fs::write(&agents_md_path, agents_markdown)
+        .map_err(|error| format!("写入角色文件失败（{}）：{error}", agents_md_path.display()))?;
+    let soul_md_path = workspace_root.join("SOUL.md");
+    std::fs::write(&soul_md_path, soul_markdown)
+        .map_err(|error| format!("写入角色文件失败（{}）：{error}", soul_md_path.display()))?;
+    let identity_md_path = workspace_root.join("IDENTITY.md");
+    std::fs::write(&identity_md_path, identity_markdown)
+        .map_err(|error| format!("写入角色文件失败（{}）：{error}", identity_md_path.display()))?;
+
+    let config_path = resolve_openclaw_config_path();
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("创建配置目录失败（{}）：{error}", parent.display()))?;
+    }
+
+    let mut parsed = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)
+            .map_err(|error| format!("读取配置失败（{}）：{error}", config_path.display()))?;
+        if raw.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str::<Value>(&raw)
+                .unwrap_or_else(|_| serde_json::json!({}))
+        }
+    } else {
+        serde_json::json!({})
+    };
+
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象，无法安装角色。")?;
+    let agents = root
+        .entry("agents")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("openclaw.json 的 agents 字段不是对象。")?;
+    let list = agents
+        .entry("list")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or("openclaw.json 的 agents.list 字段不是数组。")?;
+
+    let workspace_hint = format!("~/.openclaw/workspace-{normalized_id}");
+    let mut updated = false;
+    for item in list.iter_mut() {
+        let Some(obj) = item.as_object_mut() else {
+            continue;
+        };
+        let current_id = obj
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        if !current_id.eq_ignore_ascii_case(&normalized_id) {
+            continue;
+        }
+        obj.insert("id".to_string(), Value::String(normalized_id.clone()));
+        obj.insert("name".to_string(), Value::String(next_name.clone()));
+        obj.insert("workspace".to_string(), Value::String(workspace_hint.clone()));
+        updated = true;
+        break;
+    }
+
+    if !updated {
+        list.push(serde_json::json!({
+            "id": normalized_id,
+            "name": next_name,
+            "workspace": workspace_hint
+        }));
+    }
+
+    write_openclaw_config_value(&config_path, &parsed)?;
+
+    Ok(format!(
+        "角色已安装：{}（工作区：{}）",
+        agents_md_path
+            .parent()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("workspace"),
+        agents_md_path.display()
+    ))
+}
+
+#[tauri::command]
+fn remove_role_workflow_agent(agent_id: String, delete_files: bool) -> Result<String, String> {
+    let normalized_id = {
+        let mut output = String::new();
+        for ch in agent_id.trim().chars() {
+            if ch.is_ascii_alphanumeric() {
+                output.push(ch.to_ascii_lowercase());
+            } else if ch == '-' || ch == '_' || ch == '/' || ch == '\\' {
+                if !output.ends_with('-') {
+                    output.push('-');
+                }
+            }
+        }
+        output = output.trim_matches('-').to_string();
+        if output.is_empty() {
+            return Err("角色 ID 为空，无法删除。".to_string());
+        }
+        output
+    };
+
+    let source_path = resolve_openclaw_config_path();
+    let mut parsed = match std::fs::read_to_string(&source_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    if !parsed.is_object() {
+        parsed = serde_json::json!({});
+    }
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象，无法删除角色。")?;
+
+    let mut removed_name = normalized_id.clone();
+    let mut configured_workspace: Option<String> = None;
+    let mut removed_count = 0usize;
+    if let Some(list) = root
+        .get_mut("agents")
+        .and_then(Value::as_object_mut)
+        .and_then(|agents| agents.get_mut("list"))
+        .and_then(Value::as_array_mut)
+    {
+        list.retain(|item| {
+            let Some(obj) = item.as_object() else {
+                return true;
+            };
+            let current_id = obj
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            let should_remove =
+                !current_id.is_empty() && current_id.eq_ignore_ascii_case(&normalized_id);
+            if should_remove {
+                removed_count += 1;
+                if let Some(name) = obj
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    removed_name = name.to_string();
+                }
+                if configured_workspace.is_none() {
+                    configured_workspace = obj
+                        .get("workspace")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned);
+                }
+            }
+            !should_remove
+        });
+    }
+
+    if removed_count == 0 {
+        return Err(format!("未找到角色 ID「{}」，无法删除。", normalized_id));
+    }
+
+    let mut removed_binding_count = 0usize;
+    if let Some(bindings) = root.get_mut("bindings").and_then(Value::as_array_mut) {
+        let before = bindings.len();
+        bindings.retain(|item| {
+            let target_id = item
+                .get("agentId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            !target_id.eq_ignore_ascii_case(&normalized_id)
+        });
+        removed_binding_count = before.saturating_sub(bindings.len());
+    }
+
+    let mut cleared_channel_binding_count = 0usize;
+    if let Some(channels) = root.get_mut("channels").and_then(Value::as_object_mut) {
+        for channel_section in channels.values_mut() {
+            let Some(section_obj) = channel_section.as_object_mut() else {
+                continue;
+            };
+            if let Some(accounts) = section_obj.get_mut("accounts").and_then(Value::as_object_mut)
+            {
+                for account in accounts.values_mut() {
+                    let Some(account_obj) = account.as_object_mut() else {
+                        continue;
+                    };
+                    let is_target = account_obj
+                        .get("agentId")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .map(|value| value.eq_ignore_ascii_case(&normalized_id))
+                        .unwrap_or(false);
+                    if is_target {
+                        account_obj.remove("agentId");
+                        cleared_channel_binding_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    write_openclaw_config_value(&source_path, &parsed)?;
+
+    let mut removed_paths: Vec<String> = Vec::new();
+    let mut delete_warnings: Vec<String> = Vec::new();
+    if delete_files {
+        let mut candidates = Vec::<PathBuf>::new();
+        if let Some(workspace) = configured_workspace.as_deref() {
+            let expanded = expand_home_path(workspace);
+            let candidate = if expanded.is_absolute() {
+                expanded
+            } else {
+                resolve_openclaw_home_path().join(expanded)
+            };
+            candidates.push(candidate);
+        }
+        candidates.push(resolve_openclaw_home_path().join(format!("workspace-{normalized_id}")));
+        candidates.push(resolve_workspace_agents_root().join(&normalized_id));
+
+        let mut seen = std::collections::HashSet::new();
+        for path in candidates {
+            let key = path.to_string_lossy().to_string();
+            if !seen.insert(key.clone()) || !path.exists() {
+                continue;
+            }
+            let result = if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            match result {
+                Ok(_) => removed_paths.push(key),
+                Err(error) => delete_warnings.push(format!("{key}: {error}")),
+            }
+        }
+    }
+
+    let mut detail = format!("角色「{}」已删除。", removed_name);
+    let binding_cleanup_count = removed_binding_count + cleared_channel_binding_count;
+    if binding_cleanup_count > 0 {
+        detail.push_str(&format!(" 已清理 {} 条绑定关系。", binding_cleanup_count));
+    }
+    if delete_files {
+        if removed_paths.is_empty() {
+            detail.push_str(" 未删除配置文件（未找到可删除目录或文件）。");
+        } else {
+            detail.push_str(&format!(" 已删除 {} 个配置文件/目录。", removed_paths.len()));
+        }
+        if !delete_warnings.is_empty() {
+            detail.push_str(" 部分配置文件删除失败：");
+            detail.push_str(&delete_warnings.join("；"));
+        }
+    } else {
+        detail.push_str(" 配置文件已保留。");
+    }
+
+    Ok(detail)
 }
 
 fn load_recent_activity_from_session_file(session_file: &str) -> (Option<String>, Option<String>) {
@@ -4292,11 +5015,7 @@ fn save_openclaw_provider_base_url(provider_id: String, base_url: String) -> Res
     let provider_obj = provider.as_object_mut().ok_or("provider 配置不是对象")?;
     provider_obj.insert("baseUrl".to_string(), Value::String(normalized_base_url));
 
-    let output = serde_json::to_string_pretty(&parsed)
-        .map_err(|error| format!("序列化 openclaw.json 失败: {error}"))?;
-    std::fs::write(&source_path, output)
-        .map_err(|error| format!("写入 openclaw.json 失败: {error}"))?;
-    Ok(())
+    write_openclaw_config_value(&source_path, &parsed)
 }
 
 #[tauri::command]
@@ -4312,17 +5031,19 @@ fn save_openclaw_provider_config(config: OpenClawProviderConfigPayload) -> Resul
     }
     let normalized_base_url = normalize_local_proxy_base_url_for_persist(base_url);
 
-    let model = config.model.trim();
+    let model = config.model.trim().to_string();
     if model.is_empty() {
         return Err("model 不能为空".to_string());
     }
 
-    let normalized_name = if config.name.trim().is_empty() {
-        humanize_provider_name(&normalized_provider_id)
-    } else {
-        config.name.trim().to_string()
-    };
-    let api_kind = if config.protocol.trim().eq_ignore_ascii_case("anthropic") {
+    let requested_api_kind = config.api_kind.as_deref().unwrap_or("").trim().to_ascii_lowercase();
+    let api_kind = if requested_api_kind == "openai-responses" {
+        "openai-responses"
+    } else if requested_api_kind == "anthropic-messages" {
+        "anthropic-messages"
+    } else if requested_api_kind == "openai-completions" {
+        "openai-completions"
+    } else if config.protocol.trim().eq_ignore_ascii_case("anthropic") {
         "anthropic-messages"
     } else {
         "openai-completions"
@@ -4362,28 +5083,76 @@ fn save_openclaw_provider_config(config: OpenClawProviderConfigPayload) -> Resul
     let provider_obj = provider
         .as_object_mut()
         .ok_or("provider 配置不是对象")?;
-    provider_obj.insert("name".to_string(), Value::String(normalized_name));
+    provider_obj.remove("name");
     provider_obj.insert("api".to_string(), Value::String(api_kind.to_string()));
     provider_obj.insert("baseUrl".to_string(), Value::String(normalized_base_url));
     provider_obj.insert("apiKey".to_string(), Value::String(api_key));
-    provider_obj.insert(
-        "models".to_string(),
-        serde_json::json!([{
+    let existing_models = provider_obj
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut next_models = Vec::new();
+    let mut seen_model_ids = std::collections::HashSet::new();
+    for item in existing_models {
+        let Some(model_id) = item
+            .as_object()
+            .and_then(|obj| obj.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if seen_model_ids.insert(model_id.to_string()) {
+            next_models.push(item);
+        }
+    }
+    if seen_model_ids.insert(model.clone()) {
+        next_models.push(serde_json::json!({
             "id": model,
             "name": model
-        }]),
-    );
+        }));
+    }
+    provider_obj.insert("models".to_string(), Value::Array(next_models));
 
     if let Some(models_obj) = root.get_mut("models").and_then(Value::as_object_mut) {
-        let default_model_ref = format!("{}/{}", target_key, model);
-        models_obj.insert("default".to_string(), Value::String(default_model_ref));
+        models_obj.remove("default");
     }
 
-    let output = serde_json::to_string_pretty(&parsed)
-        .map_err(|error| format!("序列化 openclaw.json 失败: {error}"))?;
-    std::fs::write(&source_path, output)
-        .map_err(|error| format!("写入 openclaw.json 失败: {error}"))?;
-    Ok(())
+    if !matches!(root.get("agents"), Some(Value::Object(_))) {
+        root.insert("agents".to_string(), serde_json::json!({}));
+    }
+    let agents_obj = root
+        .get_mut("agents")
+        .and_then(Value::as_object_mut)
+        .ok_or("openclaw.json 的 agents 不是对象")?;
+    if !matches!(agents_obj.get("defaults"), Some(Value::Object(_))) {
+        agents_obj.insert("defaults".to_string(), serde_json::json!({}));
+    }
+    let defaults_obj = agents_obj
+        .get_mut("defaults")
+        .and_then(Value::as_object_mut)
+        .ok_or("openclaw.json 的 agents.defaults 不是对象")?;
+    let existing_fallbacks = defaults_obj
+        .get("model")
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("fallbacks"))
+        .cloned();
+    let fallbacks = match existing_fallbacks {
+        Some(Value::Array(items)) => Value::Array(items),
+        _ => Value::Array(Vec::new()),
+    };
+    let primary_model_ref = format!("{}/{}", target_key, model);
+    defaults_obj.insert(
+        "model".to_string(),
+        serde_json::json!({
+            "primary": primary_model_ref,
+            "fallbacks": fallbacks
+        }),
+    );
+
+    write_openclaw_config_value(&source_path, &parsed)
 }
 
 #[tauri::command]
@@ -4749,24 +5518,6 @@ fn collect_lobster_backups() -> Vec<LobsterBackupItem> {
     backups
 }
 
-fn find_openclaw_binary_path() -> Option<String> {
-    #[cfg(target_os = "windows")]
-    let output = Command::new("where").arg("openclaw").output().ok()?;
-
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("which").arg("openclaw").output().ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 fn find_command_path(command: &str) -> Option<String> {
     #[cfg(target_os = "windows")]
     let output = Command::new("where").arg(command).output().ok()?;
@@ -4785,34 +5536,898 @@ fn find_command_path(command: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn is_command_available(command: &str) -> bool {
-    find_command_path(command).is_some()
+fn resolve_project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn read_command_output_line(command: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(command).args(args).output().ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    stdout
-        .lines()
+fn resolve_resource_root_candidates() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Some(path) = APP_RESOURCE_DIR.get() {
+        roots.push(path.clone());
+        roots.push(path.join("resources"));
+        roots.push(path.join("src-tauri").join("resources"));
+    }
+
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"));
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            roots.push(exe_dir.join("resources"));
+            roots.push(exe_dir.join("../resources"));
+        }
+    }
+
+    let mut dedup = std::collections::HashSet::new();
+    let mut output = Vec::new();
+    for root in roots {
+        let key = root.display().to_string();
+        if dedup.insert(key) {
+            output.push(root);
+        }
+    }
+
+    output
+}
+
+fn resolve_openclaw_runtime_dir() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("OPENCLAW_DIR") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            let candidate = PathBuf::from(trimmed);
+            if candidate.join("openclaw.mjs").exists() && candidate.join("package.json").exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    let project_root = resolve_project_root();
+    let mut candidates = Vec::new();
+    for root in resolve_resource_root_candidates() {
+        candidates.push(root.join("openclaw"));
+        candidates.push(root.join("resources").join("openclaw"));
+        candidates.push(root.join("build").join("openclaw"));
+        candidates.push(root.join("resources").join("build").join("openclaw"));
+    }
+    candidates.push(project_root.join("build").join("openclaw"));
+    candidates.push(project_root.join("node_modules").join("openclaw"));
+
+    candidates.into_iter().find(|candidate| {
+        candidate.join("openclaw.mjs").exists() && candidate.join("package.json").exists()
+    })
+}
+
+fn resolve_openclaw_plugins_source_root() -> Option<PathBuf> {
+    let project_root = resolve_project_root();
+    let mut candidates = Vec::new();
+    for root in resolve_resource_root_candidates() {
+        candidates.push(root.join("openclaw-plugins"));
+        candidates.push(root.join("resources").join("openclaw-plugins"));
+        candidates.push(root.join("build").join("openclaw-plugins"));
+        candidates.push(root.join("resources").join("build").join("openclaw-plugins"));
+    }
+    candidates.push(project_root.join("build").join("openclaw-plugins"));
+    candidates.into_iter().find(|dir| dir.exists() && dir.is_dir())
+}
+
+fn resolve_preinstalled_skills_source_root() -> Option<PathBuf> {
+    let project_root = resolve_project_root();
+    let mut candidates = Vec::new();
+    for root in resolve_resource_root_candidates() {
+        candidates.push(root.join("preinstalled-skills"));
+        candidates.push(root.join("resources").join("preinstalled-skills"));
+    }
+    candidates.push(project_root.join("src-tauri").join("resources").join("preinstalled-skills"));
+    candidates
+        .into_iter()
+        .find(|dir| dir.exists() && dir.is_dir())
+}
+
+fn resolve_context_source_root() -> Option<PathBuf> {
+    let project_root = resolve_project_root();
+    let mut candidates = Vec::new();
+    for root in resolve_resource_root_candidates() {
+        candidates.push(root.join("context"));
+        candidates.push(root.join("resources").join("context"));
+    }
+    candidates.push(project_root.join("src-tauri").join("resources").join("context"));
+    candidates
+        .into_iter()
+        .find(|dir| dir.exists() && dir.is_dir())
+}
+
+fn resolve_openclaw_cli_wrapper_source() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    for root in resolve_resource_root_candidates() {
+        #[cfg(target_os = "windows")]
+        {
+            candidates.push(root.join("cli").join("openclaw.cmd"));
+            candidates.push(root.join("cli").join("win32").join("openclaw.cmd"));
+            candidates.push(root.join("resources").join("cli").join("openclaw.cmd"));
+            candidates.push(root.join("resources").join("cli").join("win32").join("openclaw.cmd"));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            candidates.push(root.join("cli").join("openclaw"));
+            candidates.push(root.join("cli").join("posix").join("openclaw"));
+            candidates.push(root.join("resources").join("cli").join("openclaw"));
+            candidates.push(root.join("resources").join("cli").join("posix").join("openclaw"));
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|path| path.exists() && path.is_file())
+}
+
+fn resolve_node_binary_path() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("OPENCLAW_NODE_PATH") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            let candidate = PathBuf::from(trimmed);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    for root in resolve_resource_root_candidates() {
+        #[cfg(target_os = "windows")]
+        let node_candidates = [
+            root.join("bin").join("node.exe"),
+            root.join("resources").join("bin").join("node.exe"),
+            root.join("node.exe"),
+        ];
+        #[cfg(not(target_os = "windows"))]
+        let node_candidates = [
+            root.join("bin").join("node"),
+            root.join("resources").join("bin").join("node"),
+            root.join("node"),
+        ];
+
+        for candidate in node_candidates {
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    find_command_path("node").map(PathBuf::from)
+}
+
+const OPENCLAW_MIN_NODE_MAJOR: u32 = 22;
+const OPENCLAW_MIN_NODE_MINOR: u32 = 16;
+
+fn parse_node_version_component(raw: &str) -> Option<u32> {
+    let digits = raw
+        .trim()
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u32>().ok()
+}
+
+fn parse_node_version_triplet(raw: &str) -> Option<(u32, u32, u32)> {
+    let cleaned = raw.trim().trim_start_matches('v');
+    let mut parts = cleaned.split('.');
+    let major = parts.next().and_then(parse_node_version_component)?;
+    let minor = parts
+        .next()
+        .and_then(parse_node_version_component)
+        .unwrap_or(0);
+    let patch = parts
+        .next()
+        .and_then(parse_node_version_component)
+        .unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+fn openclaw_required_node_version_label() -> String {
+    format!("{OPENCLAW_MIN_NODE_MAJOR}.{OPENCLAW_MIN_NODE_MINOR}.0")
+}
+
+fn check_node_version_supported(raw: &str) -> bool {
+    let Some((major, minor, _patch)) = parse_node_version_triplet(raw) else {
+        return false;
+    };
+    major > OPENCLAW_MIN_NODE_MAJOR
+        || (major == OPENCLAW_MIN_NODE_MAJOR && minor >= OPENCLAW_MIN_NODE_MINOR)
+}
+
+fn read_node_binary_version(node_path: &Path) -> Result<String, String> {
+    let output = Command::new(node_path)
+        .arg("-v")
+        .output()
+        .map_err(|error| format!("执行 Node 版本检查失败（{}）: {error}", node_path.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!(
+                "Node 版本检查失败（{}，exit: {}）。",
+                node_path.display(),
+                output.status.code().unwrap_or(-1)
+            )
+        } else {
+            format!("Node 版本检查失败（{}）：{stderr}", node_path.display())
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let normalized = stdout.trim().trim_start_matches('v').to_string();
+    if normalized.is_empty() {
+        return Err(format!(
+            "无法解析 Node 版本（{} 输出为空）。",
+            node_path.display()
+        ));
+    }
+
+    Ok(normalized)
+}
+
+fn resolve_openclaw_node_runtime() -> Result<(PathBuf, String), String> {
+    let node = resolve_node_binary_path()
+        .ok_or("未找到 Node.js 可执行文件（可通过 OPENCLAW_NODE_PATH 指定）。".to_string())?;
+    let version = read_node_binary_version(&node)?;
+    if !check_node_version_supported(&version) {
+        return Err(format!(
+            "Node.js 版本过低：当前 {}（{}），OpenClaw 需要 >= {}。请升级 Node，或通过 OPENCLAW_NODE_PATH 指向更高版本。",
+            version,
+            node.display(),
+            openclaw_required_node_version_label()
+        ));
+    }
+    Ok((node, version))
+}
+
+fn read_json_version_field(path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let parsed = serde_json::from_str::<Value>(&raw).ok()?;
+    parsed
+        .get("version")
+        .and_then(Value::as_str)
         .map(str::trim)
-        .find(|line| !line.is_empty())
+        .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            stderr
-                .lines()
+}
+
+fn build_openclaw_command_display(node: &Path, entry: &Path, args: &[&str]) -> String {
+    let mut parts = vec![node.display().to_string(), entry.display().to_string()];
+    parts.extend(args.iter().map(|arg| arg.to_string()));
+    parts.join(" ")
+}
+
+fn run_openclaw_cli_output(args: &[&str]) -> Result<(String, std::process::Output), String> {
+    let runtime_dir = resolve_openclaw_runtime_dir()
+        .ok_or("未找到 bundled OpenClaw 运行时目录（openclaw.mjs/package.json）。".to_string())?;
+    let entry = runtime_dir.join("openclaw.mjs");
+    if !entry.exists() {
+        return Err(format!("未找到 OpenClaw 入口脚本：{}", entry.display()));
+    }
+    let (node, _node_version) = resolve_openclaw_node_runtime()?;
+    let openclaw_home = resolve_openclaw_home_path();
+    let openclaw_config = resolve_openclaw_config_path();
+
+    let mut command = Command::new(&node);
+    command
+        .arg(&entry)
+        .args(args)
+        .current_dir(&runtime_dir)
+        .env("OPENCLAW_NO_RESPAWN", "1")
+        .env("OPENCLAW_EMBEDDED_IN", "ClawPet")
+        .env("OPENCLAW_HOME", openclaw_home)
+        .env("OPENCLAW_CONFIG_PATH", openclaw_config);
+
+    if let Ok(token) = ensure_openclaw_gateway_token() {
+        if !token.trim().is_empty() {
+            command.env("OPENCLAW_GATEWAY_TOKEN", token);
+        }
+    }
+
+    let command_display = build_openclaw_command_display(&node, &entry, args);
+    let output = command.output().map_err(|error| {
+        format!(
+            "执行 OpenClaw 命令失败（{command_display}）: {error}"
+        )
+    })?;
+
+    Ok((command_display, output))
+}
+
+fn resolve_workspace_dirs_from_config() -> Vec<PathBuf> {
+    let mut dirs = std::collections::BTreeSet::new();
+    dirs.insert(resolve_workspace_main_root().display().to_string());
+
+    let config_path = resolve_openclaw_config_path();
+    if let Ok(raw) = std::fs::read_to_string(&config_path) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+            if let Some(default_ws) = parsed
+                .get("agents")
+                .and_then(Value::as_object)
+                .and_then(|agents| agents.get("defaults"))
+                .and_then(Value::as_object)
+                .and_then(|defaults| defaults.get("workspace"))
+                .and_then(Value::as_str)
                 .map(str::trim)
-                .find(|line| !line.is_empty())
-                .map(ToOwned::to_owned)
+                .filter(|value| !value.is_empty())
+            {
+                let expanded = expand_home_path(default_ws);
+                dirs.insert(expanded.display().to_string());
+            }
+
+            if let Some(list) = parsed
+                .get("agents")
+                .and_then(Value::as_object)
+                .and_then(|agents| agents.get("list"))
+                .and_then(Value::as_array)
+            {
+                for item in list {
+                    let workspace = item
+                        .as_object()
+                        .and_then(|obj| obj.get("workspace"))
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty());
+                    if let Some(workspace) = workspace {
+                        let expanded = expand_home_path(workspace);
+                        dirs.insert(expanded.display().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if dirs.is_empty() {
+        dirs.insert(resolve_workspace_main_root().display().to_string());
+    }
+
+    dirs.into_iter().map(PathBuf::from).collect()
+}
+
+fn merge_clawpet_context_section(existing: &str, section: &str) -> String {
+    const BEGIN: &str = "<!-- clawpet:begin -->";
+    const END: &str = "<!-- clawpet:end -->";
+    let wrapped = format!("{BEGIN}\n{}\n{END}", section.trim());
+    let begin_idx = existing.find(BEGIN);
+    let end_idx = existing.find(END);
+    match (begin_idx, end_idx) {
+        (Some(begin), Some(end)) if end >= begin => {
+            let mut output = String::new();
+            output.push_str(&existing[..begin]);
+            output.push_str(&wrapped);
+            output.push_str(&existing[end + END.len()..]);
+            output
+        }
+        _ => {
+            if existing.trim().is_empty() {
+                format!("{wrapped}\n")
+            } else {
+                format!("{}\n\n{wrapped}\n", existing.trim_end())
+            }
+        }
+    }
+}
+
+fn merge_bundled_context_into_workspaces() -> Result<usize, String> {
+    let Some(context_dir) = resolve_context_source_root() else {
+        return Ok(0);
+    };
+
+    let mut context_files = Vec::new();
+    let entries = std::fs::read_dir(&context_dir)
+        .map_err(|error| format!("读取上下文目录失败（{}）: {error}", context_dir.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".clawpet.md") || name.ends_with(".clawx.md") {
+            context_files.push((name, path));
+        }
+    }
+    if context_files.is_empty() {
+        return Ok(0);
+    }
+
+    let workspace_dirs = resolve_workspace_dirs_from_config();
+    let mut changed = 0usize;
+    for workspace_dir in workspace_dirs {
+        if std::fs::create_dir_all(&workspace_dir).is_err() {
+            continue;
+        }
+        for (name, source_path) in &context_files {
+            let target_name = if name.ends_with(".clawpet.md") {
+                name.trim_end_matches(".clawpet.md").to_string() + ".md"
+            } else {
+                name.trim_end_matches(".clawx.md").to_string() + ".md"
+            };
+            let target_path = workspace_dir.join(target_name);
+            let section = match std::fs::read_to_string(source_path) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let existing = std::fs::read_to_string(&target_path).unwrap_or_default();
+            let merged = merge_clawpet_context_section(&existing, &section);
+            if merged != existing && std::fs::write(&target_path, merged).is_ok() {
+                changed += 1;
+            }
+        }
+    }
+
+    Ok(changed)
+}
+
+fn install_or_upgrade_bundled_plugins() -> Result<(usize, usize), String> {
+    let Some(source_root) = resolve_openclaw_plugins_source_root() else {
+        return Ok((0, 0));
+    };
+
+    let target_root = resolve_openclaw_home_path().join("extensions");
+    std::fs::create_dir_all(&target_root)
+        .map_err(|error| format!("创建插件目录失败（{}）: {error}", target_root.display()))?;
+
+    let mut installed = 0usize;
+    let mut upgraded = 0usize;
+
+    let entries = std::fs::read_dir(&source_root)
+        .map_err(|error| format!("读取 bundled 插件目录失败（{}）: {error}", source_root.display()))?;
+    for entry in entries.flatten() {
+        let source_dir = entry.path();
+        if !source_dir.is_dir() {
+            continue;
+        }
+        if !source_dir.join("openclaw.plugin.json").exists() {
+            continue;
+        }
+
+        let plugin_name = entry.file_name().to_string_lossy().to_string();
+        let target_dir = target_root.join(&plugin_name);
+        let source_version = read_json_version_field(&source_dir.join("package.json"));
+        let target_version = read_json_version_field(&target_dir.join("package.json"));
+        let target_exists = target_dir.join("openclaw.plugin.json").exists();
+        let needs_update = !target_exists || source_version != target_version;
+        if !needs_update {
+            continue;
+        }
+
+        if target_dir.exists() {
+            let _ = std::fs::remove_dir_all(&target_dir);
+        }
+        copy_directory_recursive(&source_dir, &target_dir)?;
+        if target_exists {
+            upgraded += 1;
+        } else {
+            installed += 1;
+        }
+    }
+
+    Ok((installed, upgraded))
+}
+
+fn sync_preinstalled_skills_enabled_in_config(skill_slugs: &[String]) -> Result<(), String> {
+    if skill_slugs.is_empty() {
+        return Ok(());
+    }
+
+    let source_path = resolve_openclaw_config_path();
+    let mut parsed = match std::fs::read_to_string(&source_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    if !parsed.is_object() {
+        parsed = serde_json::json!({});
+    }
+
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象，无法写入预装技能配置。")?;
+    let skills = ensure_openclaw_json_object(
+        root.entry("skills".to_string())
+            .or_insert_with(|| serde_json::json!({})),
+    );
+    let entries = ensure_openclaw_json_object(
+        skills
+            .entry("entries".to_string())
+            .or_insert_with(|| serde_json::json!({})),
+    );
+
+    for slug in skill_slugs {
+        let normalized = slug.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        let entry = ensure_openclaw_json_object(
+            entries
+                .entry(normalized.to_string())
+                .or_insert_with(|| serde_json::json!({})),
+        );
+        entry.insert("enabled".to_string(), Value::Bool(true));
+    }
+
+    write_openclaw_config_value(&source_path, &parsed)
+}
+
+fn read_preinstalled_skill_specs(source_root: &Path) -> Vec<PreinstalledSkillSpec> {
+    let manifest_path = source_root.join("preinstalled-manifest.json");
+    let raw = match std::fs::read_to_string(&manifest_path) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let parsed = match serde_json::from_str::<PreinstalledSkillsManifest>(&raw) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    parsed.skills.unwrap_or_default()
+}
+
+fn install_preinstalled_skill_marker(
+    target_dir: &Path,
+    slug: &str,
+    version: Option<&str>,
+) -> Result<(), String> {
+    let marker_version = version
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    let marker_path = target_dir.join(".clawx-preinstalled.json");
+    let marker = serde_json::json!({
+        "source": "clawx-preinstalled",
+        "slug": slug,
+        "version": marker_version,
+        "installedAt": current_timestamp_millis().to_string()
+    });
+    let marker_text = serde_json::to_string_pretty(&marker)
+        .map_err(|error| format!("序列化预装技能标记失败（{}）: {error}", marker_path.display()))?;
+    std::fs::write(&marker_path, format!("{marker_text}\n"))
+        .map_err(|error| format!("写入预装技能标记失败（{}）: {error}", marker_path.display()))
+}
+
+fn install_preinstalled_skills() -> Result<usize, String> {
+    let Some(source_root) = resolve_preinstalled_skills_source_root() else {
+        return Ok(0);
+    };
+
+    let target_root = resolve_openclaw_home_path().join("skills");
+    std::fs::create_dir_all(&target_root)
+        .map_err(|error| format!("创建 skills 目录失败（{}）: {error}", target_root.display()))?;
+
+    let mut specs = read_preinstalled_skill_specs(&source_root);
+    if specs.is_empty() {
+        let entries = std::fs::read_dir(&source_root).map_err(|error| {
+            format!(
+                "读取 preinstalled skills 目录失败（{}）: {error}",
+                source_root.display()
+            )
+        })?;
+        for entry in entries.flatten() {
+            let source_dir = entry.path();
+            if !source_dir.is_dir() {
+                continue;
+            }
+            if !source_dir.join("SKILL.md").exists() {
+                continue;
+            }
+            specs.push(PreinstalledSkillSpec {
+                slug: entry.file_name().to_string_lossy().to_string(),
+                version: None,
+                auto_enable: Some(true),
+            });
+        }
+    }
+
+    let mut installed = 0usize;
+    let mut enable_targets = std::collections::BTreeSet::new();
+    for spec in specs {
+        let slug = spec.slug.trim().to_string();
+        if slug.is_empty() {
+            continue;
+        }
+        let source_dir = source_root.join(&slug);
+        if !source_dir.join("SKILL.md").exists() {
+            continue;
+        }
+        if spec.auto_enable.unwrap_or(true) {
+            enable_targets.insert(slug.clone());
+        }
+
+        let target_dir = target_root.join(&slug);
+        if target_dir.join("SKILL.md").exists() {
+            continue;
+        }
+        copy_directory_recursive(&source_dir, &target_dir)?;
+        install_preinstalled_skill_marker(&target_dir, &slug, spec.version.as_deref())?;
+        installed += 1;
+    }
+
+    let enable_targets = enable_targets.into_iter().collect::<Vec<_>>();
+    sync_preinstalled_skills_enabled_in_config(&enable_targets)?;
+
+    Ok(installed)
+}
+
+fn install_openclaw_cli_wrapper() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let wrapper = resolve_openclaw_cli_wrapper_source()
+            .ok_or("未找到 bundled OpenClaw CLI 包装器（openclaw.cmd）。".to_string())?;
+        let cli_dir = wrapper
+            .parent()
+            .ok_or("无法解析 CLI 包装器目录。".to_string())?;
+        let helper_path = cli_dir.join("update-user-path.ps1");
+        if !helper_path.exists() {
+            return Ok(Some(cli_dir.display().to_string()));
+        }
+
+        let power_shell = std::env::var("SystemRoot")
+            .map(|root| PathBuf::from(root).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe"))
+            .unwrap_or_else(|_| PathBuf::from("powershell.exe"));
+
+        let output = Command::new(power_shell)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                helper_path.to_string_lossy().as_ref(),
+                "-Action",
+                "add",
+                "-CliDir",
+                cli_dir.to_string_lossy().as_ref(),
+            ])
+            .output()
+            .map_err(|error| format!("更新 Windows PATH 失败: {error}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if stderr.is_empty() {
+                format!(
+                    "更新 Windows PATH 失败（exit: {}）。",
+                    output.status.code().unwrap_or(-1)
+                )
+            } else {
+                format!("更新 Windows PATH 失败：{stderr}")
+            });
+        }
+
+        return Ok(Some(cli_dir.display().to_string()));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let source = resolve_openclaw_cli_wrapper_source()
+            .ok_or("未找到 bundled OpenClaw CLI 包装器。".to_string())?;
+        let home = std::env::var("HOME").map_err(|_| "无法读取 HOME 环境变量。".to_string())?;
+        let target_dir = PathBuf::from(home).join(".local").join("bin");
+        std::fs::create_dir_all(&target_dir)
+            .map_err(|error| format!("创建 CLI 目录失败（{}）: {error}", target_dir.display()))?;
+        let target_path = target_dir.join("openclaw");
+
+        if target_path.exists() {
+            let _ = std::fs::remove_file(&target_path);
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{symlink, PermissionsExt};
+            symlink(&source, &target_path).map_err(|error| {
+                format!(
+                    "创建 CLI 软链接失败（{} -> {}）: {error}",
+                    target_path.display(),
+                    source.display()
+                )
+            })?;
+            if let Ok(metadata) = std::fs::metadata(&source) {
+                let mut perms = metadata.permissions();
+                perms.set_mode(0o755);
+                let _ = std::fs::set_permissions(&source, perms);
+            }
+        }
+
+        Ok(Some(target_path.display().to_string()))
+    }
+}
+
+const OPENCLAW_EXPECTED_STATE_DIRS: &[&str] = &[
+    "agents",
+    "canvas",
+    "completions",
+    "cron",
+    "devices",
+    "extensions",
+    "logs",
+    "qqbot",
+    "skills",
+    "workspace",
+    "workspace-main",
+    "workspaces",
+];
+
+const OPENCLAW_EXPECTED_STATE_FILES: &[(&str, &str)] = &[("update-check.json", "{}\n")];
+
+fn ensure_openclaw_state_layout(openclaw_home: &Path) -> Result<(usize, usize), String> {
+    let mut created_dirs = 0usize;
+    for dir_name in OPENCLAW_EXPECTED_STATE_DIRS {
+        let dir_path = openclaw_home.join(dir_name);
+        if dir_path.exists() {
+            if !dir_path.is_dir() {
+                return Err(format!(
+                    "OpenClaw 状态目录冲突：{} 已存在但不是目录。",
+                    dir_path.display()
+                ));
+            }
+            continue;
+        }
+        std::fs::create_dir_all(&dir_path).map_err(|error| {
+            format!(
+                "创建 OpenClaw 状态目录失败（{}）: {error}",
+                dir_path.display()
+            )
+        })?;
+        created_dirs += 1;
+    }
+
+    let mut created_files = 0usize;
+    for (file_name, default_content) in OPENCLAW_EXPECTED_STATE_FILES {
+        let file_path = openclaw_home.join(file_name);
+        if file_path.exists() {
+            if !file_path.is_file() {
+                return Err(format!(
+                    "OpenClaw 状态文件冲突：{} 已存在但不是文件。",
+                    file_path.display()
+                ));
+            }
+            continue;
+        }
+        std::fs::write(&file_path, default_content).map_err(|error| {
+            format!(
+                "创建 OpenClaw 状态文件失败（{}）: {error}",
+                file_path.display()
+            )
+        })?;
+        created_files += 1;
+    }
+
+    Ok((created_dirs, created_files))
+}
+
+fn collect_missing_openclaw_state_layout(openclaw_home: &Path) -> Vec<String> {
+    let mut missing = Vec::new();
+    for dir_name in OPENCLAW_EXPECTED_STATE_DIRS {
+        if !openclaw_home.join(dir_name).is_dir() {
+            missing.push(format!("{dir_name}/"));
+        }
+    }
+    for (file_name, _) in OPENCLAW_EXPECTED_STATE_FILES {
+        if !openclaw_home.join(file_name).is_file() {
+            missing.push((*file_name).to_string());
+        }
+    }
+    missing
+}
+
+fn bootstrap_openclaw_runtime(install_cli: bool) -> Result<Vec<String>, String> {
+    let openclaw_home = resolve_openclaw_home_path();
+    std::fs::create_dir_all(&openclaw_home)
+        .map_err(|error| format!("创建 openclaw 根目录失败（{}）: {error}", openclaw_home.display()))?;
+    let (created_state_dirs, created_state_files) = ensure_openclaw_state_layout(&openclaw_home)?;
+    ensure_openclaw_config_defaults_on_disk()?;
+
+    let token = ensure_openclaw_gateway_token()?;
+    std::env::set_var("OPENCLAW_GATEWAY_TOKEN", token);
+
+    let (plugin_installed, plugin_upgraded) = install_or_upgrade_bundled_plugins()?;
+    let skill_installed = install_preinstalled_skills()?;
+    let context_merged = merge_bundled_context_into_workspaces()?;
+
+    let runtime_dir = resolve_openclaw_runtime_dir();
+    let runtime_note = runtime_dir
+        .as_ref()
+        .map(|path| format!("runtime={}", path.display()))
+        .unwrap_or_else(|| "runtime=missing".to_string());
+    let entry_note = runtime_dir
+        .as_ref()
+        .map(|path| path.join("openclaw.mjs"))
+        .map(|entry| {
+            if entry.exists() {
+                format!("entry={}", entry.display())
+            } else {
+                format!("entry=missing ({})", entry.display())
+            }
         })
+        .unwrap_or_else(|| "entry=missing".to_string());
+    let node_note = resolve_node_binary_path()
+        .map(|path| format!("node={}", path.display()))
+        .unwrap_or_else(|| "node=missing".to_string());
+
+    let mut notes = vec![
+        format!("home={}", openclaw_home.display()),
+        format!("config={}", resolve_openclaw_config_path().display()),
+        format!(
+            "state_layout: dirs+={created_state_dirs}, files+={created_state_files}"
+        ),
+        runtime_note,
+        entry_note,
+        node_note,
+        format!("plugins: install={plugin_installed}, upgrade={plugin_upgraded}"),
+        format!("skills: install={skill_installed}"),
+        format!("context: merged={context_merged}"),
+    ];
+    let layout_missing = collect_missing_openclaw_state_layout(&openclaw_home);
+    if layout_missing.is_empty() {
+        notes.push("state_layout=complete".to_string());
+    } else {
+        notes.push(format!("state_layout=missing({})", layout_missing.join(", ")));
+    }
+    if install_cli {
+        match install_openclaw_cli_wrapper() {
+            Ok(Some(path)) => notes.push(format!("cli={path}")),
+            Ok(None) => notes.push("cli=skipped".to_string()),
+            Err(error) => notes.push(format!("cli_error={error}")),
+        }
+    }
+
+    Ok(notes)
+}
+
+fn is_openclaw_home_bootstrapped() -> bool {
+    let home = resolve_openclaw_home_path();
+    let config = resolve_openclaw_config_path();
+    home.exists() && config.exists()
 }
 
 fn detect_openclaw_installation() -> (bool, Option<String>, Option<String>, String) {
-    let binary = find_openclaw_binary_path();
-    let output = Command::new("openclaw").arg("--version").output();
+    let home_bootstrapped = is_openclaw_home_bootstrapped();
+    let runtime_dir = resolve_openclaw_runtime_dir();
+    let binary = runtime_dir
+        .as_ref()
+        .map(|dir| dir.join("openclaw.mjs").display().to_string());
 
-    match output {
-        Ok(result) if result.status.success() => {
+    let Some(runtime_dir) = runtime_dir else {
+        return (
+            false,
+            None,
+            None,
+            if home_bootstrapped {
+                format!(
+                    "未找到 bundled OpenClaw 运行时目录，但已创建基础配置（{}）。请补齐 runtime 资源。",
+                    resolve_openclaw_config_path().display()
+                )
+            } else {
+                "未找到 bundled OpenClaw 运行时目录。请先执行打包脚本。".to_string()
+            },
+        );
+    };
+    if !runtime_dir.join("openclaw.mjs").exists() {
+        return (
+            false,
+            None,
+            binary,
+            "运行时目录存在，但 openclaw.mjs 缺失。".to_string(),
+        );
+    }
+    let runtime_version = read_json_version_field(&runtime_dir.join("package.json"));
+    if let Err(error) = resolve_openclaw_node_runtime() {
+        return (
+            false,
+            runtime_version,
+            binary,
+            if home_bootstrapped {
+                format!("{} 基础目录已初始化，但 OpenClaw CLI 运行条件不满足。", error)
+            } else {
+                error
+            },
+        );
+    }
+
+    match run_openclaw_cli_output(&["--version"]) {
+        Ok((command_display, result)) if result.status.success() => {
             let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
             let version = if stdout.is_empty() {
@@ -4824,71 +6439,285 @@ fn detect_openclaw_installation() -> (bool, Option<String>, Option<String>, Stri
             } else {
                 Some(stdout)
             };
-            (true, version, binary, "已检测到 OpenClaw CLI。".to_string())
+            (
+                true,
+                version,
+                binary,
+                format!("已检测到 bundled OpenClaw（{command_display}）。"),
+            )
         }
-        Ok(result) => {
+        Ok((command_display, result)) => {
             let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
             let detail = if stderr.is_empty() {
                 format!(
-                    "OpenClaw CLI 已找到，但执行失败（exit: {}）。",
+                    "OpenClaw 命令执行失败（{command_display}，exit: {}）。",
                     result.status.code().unwrap_or(-1)
                 )
             } else {
-                format!("OpenClaw CLI 执行失败：{stderr}")
+                format!("OpenClaw 命令执行失败（{command_display}）：{stderr}")
             };
-            (false, None, binary, detail)
+            (
+                false,
+                runtime_version,
+                binary,
+                if home_bootstrapped {
+                    format!("OpenClaw CLI 自检未通过。{detail} 基础目录已初始化。")
+                } else {
+                    detail
+                },
+            )
         }
-        Err(error) => (
-            false,
-            None,
-            binary,
-            format!("未检测到 OpenClaw CLI：{error}"),
-        ),
+        Err(error) => {
+            (
+                false,
+                runtime_version,
+                binary,
+                if home_bootstrapped {
+                    format!("OpenClaw CLI 自检执行失败：{error} 基础目录已初始化。")
+                } else {
+                    error
+                },
+            )
+        }
     }
 }
 
-fn run_shell_command(command_line: &str) -> Result<std::process::Output, String> {
-    #[cfg(target_os = "windows")]
-    let output = Command::new("cmd")
-        .args(["/C", command_line])
-        .output()
-        .map_err(|error| format!("执行命令失败：{error}"))?;
-
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("sh")
-        .args(["-lc", command_line])
-        .output()
-        .map_err(|error| format!("执行命令失败：{error}"))?;
-
-    Ok(output)
+struct CompletionBootstrapOutcome {
+    success: bool,
+    command: String,
+    detail: String,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
 }
 
-fn create_lobster_shell_action_result(action: &str, command_line: &str) -> LobsterActionResult {
-    let started_at = std::time::Instant::now();
-    match run_shell_command(command_line) {
-        Ok(output) => LobsterActionResult {
-            action: action.to_string(),
-            command: command_line.to_string(),
-            success: output.status.success(),
-            detail: if output.status.success() {
-                "命令执行成功。".to_string()
-            } else {
-                format!(
-                    "命令执行失败（exit: {}）。",
-                    output.status.code().unwrap_or(-1)
-                )
-            },
+fn run_openclaw_completion_bootstrap_once() -> CompletionBootstrapOutcome {
+    let (command_display, output) = match run_openclaw_cli_output(&["completion", "--write-state"]) {
+        Ok(value) => value,
+        Err(error) => {
+            return CompletionBootstrapOutcome {
+                success: false,
+                command: "openclaw completion --write-state".to_string(),
+                detail: "补全状态写入失败，未能调用 bundled OpenClaw CLI。".to_string(),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: error,
+            };
+        }
+    };
+
+    if output.status.success() {
+        return CompletionBootstrapOutcome {
+            success: true,
+            command: command_display,
+            detail: "已写入 OpenClaw completion 状态。".to_string(),
             exit_code: output.status.code(),
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            duration_ms: started_at.elapsed().as_millis(),
-            backup_path: None,
+        };
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    CompletionBootstrapOutcome {
+        success: false,
+        command: command_display,
+        detail: if stderr.is_empty() {
+            format!(
+                "补全状态写入失败（exit: {}）。",
+                output.status.code().unwrap_or(-1)
+            )
+        } else {
+            format!("补全状态写入失败：{stderr}")
         },
+        exit_code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    }
+}
+
+struct GatewayBootstrapOutcome {
+    success: bool,
+    command: String,
+    detail: String,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+fn run_openclaw_gateway_bootstrap_once() -> GatewayBootstrapOutcome {
+    let (command_display, output) = match run_openclaw_cli_output(&["gateway", "restart"]) {
+        Ok(value) => value,
+        Err(error) => {
+            return GatewayBootstrapOutcome {
+                success: false,
+                command: "openclaw gateway restart".to_string(),
+                detail: "网关初始化失败，未能调用 bundled OpenClaw CLI。".to_string(),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: error,
+            };
+        }
+    };
+
+    if output.status.success() {
+        return GatewayBootstrapOutcome {
+            success: true,
+            command: command_display,
+            detail: "网关初始化完成。".to_string(),
+            exit_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        };
+    }
+
+    let primary_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let primary_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let stop_result = run_openclaw_cli_output(&["gateway", "stop"]);
+    let start_result = run_openclaw_cli_output(&["gateway", "start"]);
+    if let (Ok((stop_cmd, stop_out)), Ok((start_cmd, start_out))) = (&stop_result, &start_result) {
+        if stop_out.status.success() && start_out.status.success() {
+            return GatewayBootstrapOutcome {
+                success: true,
+                command: format!("{stop_cmd} && {start_cmd}"),
+                detail: "已通过 stop/start 方式完成网关初始化。".to_string(),
+                exit_code: start_out.status.code().or(stop_out.status.code()),
+                stdout: format!(
+                    "首次尝试:\n{}\n\n回退 stop:\n{}\n\n回退 start:\n{}",
+                    primary_stdout.trim(),
+                    String::from_utf8_lossy(&stop_out.stdout).trim(),
+                    String::from_utf8_lossy(&start_out.stdout).trim()
+                ),
+                stderr: format!(
+                    "首次尝试:\n{}\n\n回退 stop:\n{}\n\n回退 start:\n{}",
+                    primary_stderr.trim(),
+                    String::from_utf8_lossy(&stop_out.stderr).trim(),
+                    String::from_utf8_lossy(&start_out.stderr).trim()
+                ),
+            };
+        }
+    }
+
+    GatewayBootstrapOutcome {
+        success: false,
+        command: command_display,
+        detail: "网关初始化失败，请检查 bundled OpenClaw 运行环境与配置。".to_string(),
+        exit_code: output.status.code(),
+        stdout: primary_stdout,
+        stderr: primary_stderr,
+    }
+}
+
+fn run_lobster_install_action() -> LobsterActionResult {
+    let started_at = std::time::Instant::now();
+    match bootstrap_openclaw_runtime(true) {
+        Ok(mut notes) => {
+            let gateway_bootstrap = run_openclaw_gateway_bootstrap_once();
+            notes.push(format!(
+                "gateway_bootstrap: success={}, command={}",
+                gateway_bootstrap.success, gateway_bootstrap.command
+            ));
+            notes.push(format!("gateway_bootstrap_detail={}", gateway_bootstrap.detail));
+
+            let completion_bootstrap = run_openclaw_completion_bootstrap_once();
+            notes.push(format!(
+                "completion_bootstrap: success={}, command={}",
+                completion_bootstrap.success, completion_bootstrap.command
+            ));
+            notes.push(format!(
+                "completion_bootstrap_detail={}",
+                completion_bootstrap.detail
+            ));
+
+            let (installed, version, _, detail) = detect_openclaw_installation();
+            let success = installed && gateway_bootstrap.success;
+            let gateway_warning = if gateway_bootstrap.success {
+                String::new()
+            } else {
+                format!(" 网关初始化提示：{}", gateway_bootstrap.detail)
+            };
+            let completion_warning = if completion_bootstrap.success {
+                String::new()
+            } else {
+                format!(" 补全状态提示：{}", completion_bootstrap.detail)
+            };
+
+            let mut runtime_logs = Vec::new();
+            if !gateway_bootstrap.stdout.trim().is_empty() {
+                runtime_logs.push(gateway_bootstrap.stdout.trim().to_string());
+            }
+            if !completion_bootstrap.stdout.trim().is_empty() {
+                runtime_logs.push(format!(
+                    "[completion]\n{}",
+                    completion_bootstrap.stdout.trim()
+                ));
+            }
+            let stdout = if runtime_logs.is_empty() {
+                notes.join("\n")
+            } else {
+                format!("{}\n\n{}", notes.join("\n"), runtime_logs.join("\n\n"))
+            };
+            let stderr = format!(
+                "{}{}{}{}",
+                gateway_bootstrap.stderr,
+                if gateway_bootstrap.stderr.trim().is_empty() {
+                    ""
+                } else {
+                    "\n"
+                },
+                completion_bootstrap.stderr,
+                if completion_bootstrap.stderr.trim().is_empty() {
+                    ""
+                } else {
+                    "\n"
+                }
+            )
+            .trim()
+            .to_string();
+
+            LobsterActionResult {
+                action: "install".to_string(),
+                command: "bootstrap bundled openclaw runtime".to_string(),
+                success,
+                detail: if success {
+                    format!(
+                        "OpenClaw 已完成自举安装。{}{}{}{}",
+                        version
+                            .map(|value| format!("当前版本：{value}。"))
+                            .unwrap_or_default(),
+                        if detail.trim().is_empty() {
+                            String::new()
+                        } else {
+                            format!(" {detail}")
+                        },
+                        gateway_warning,
+                        completion_warning
+                    )
+                } else {
+                    format!(
+                        "OpenClaw 自举执行后仍未就绪：{detail} 网关初始化结果：{} 补全状态结果：{}",
+                        gateway_bootstrap.detail, completion_bootstrap.detail
+                    )
+                },
+                exit_code: if success {
+                    completion_bootstrap
+                        .exit_code
+                        .or(gateway_bootstrap.exit_code)
+                        .or(Some(0))
+                } else {
+                    None
+                },
+                stdout,
+                stderr,
+                duration_ms: started_at.elapsed().as_millis(),
+                backup_path: None,
+            }
+        }
         Err(error) => LobsterActionResult {
-            action: action.to_string(),
-            command: command_line.to_string(),
+            action: "install".to_string(),
+            command: "bootstrap bundled openclaw runtime".to_string(),
             success: false,
-            detail: error.clone(),
+            detail: format!("OpenClaw 自举安装失败：{error}"),
             exit_code: None,
             stdout: String::new(),
             stderr: error,
@@ -4898,173 +6727,154 @@ fn create_lobster_shell_action_result(action: &str, command_line: &str) -> Lobst
     }
 }
 
-fn run_lobster_install_action() -> LobsterActionResult {
-    let started_at = std::time::Instant::now();
-    let (installed, version, _, _) = detect_openclaw_installation();
-    if installed {
-        let version_text = version.unwrap_or_else(|| "未知版本".to_string());
-        return LobsterActionResult {
-            action: "install".to_string(),
-            command: "openclaw --version".to_string(),
-            success: true,
-            detail: format!("OpenClaw 已安装（{version_text}）。"),
-            exit_code: Some(0),
-            stdout: version_text,
-            stderr: String::new(),
-            duration_ms: started_at.elapsed().as_millis(),
-            backup_path: None,
-        };
-    }
-
-    let candidates = [
-        "npm install -g openclaw@latest",
-        "pnpm add -g openclaw@latest",
-        "yarn global add openclaw@latest",
-    ];
-    let mut all_stdout = String::new();
-    let mut all_stderr = String::new();
-
-    for command in candidates {
-        let mut attempt = create_lobster_shell_action_result("install", command);
-        if !all_stdout.is_empty() {
-            all_stdout.push_str("\n\n");
-        }
-        all_stdout.push_str(&format!("$ {command}\n{}", attempt.stdout.trim()));
-        if !attempt.stderr.trim().is_empty() {
-            if !all_stderr.is_empty() {
-                all_stderr.push_str("\n\n");
-            }
-            all_stderr.push_str(&format!("$ {command}\n{}", attempt.stderr.trim()));
-        }
-        if attempt.success {
-            let (installed_now, version_now, _, detail_now) = detect_openclaw_installation();
-            attempt.detail = if installed_now {
-                format!(
-                    "龙虾安装完成。{}",
-                    version_now
-                        .map(|value| format!("当前版本：{value}。"))
-                        .unwrap_or_default()
-                )
-            } else {
-                format!("安装命令执行成功，但版本检查未通过：{detail_now}")
-            };
-            attempt.stdout = all_stdout;
-            if !all_stderr.is_empty() {
-                attempt.stderr = all_stderr;
-            }
-            attempt.duration_ms = started_at.elapsed().as_millis();
-            return attempt;
-        }
-    }
-
-    LobsterActionResult {
-        action: "install".to_string(),
-        command: "npm install -g openclaw@latest".to_string(),
-        success: false,
-        detail: "龙虾安装失败，请检查 Node/npm 权限或网络后重试。".to_string(),
-        exit_code: None,
-        stdout: all_stdout,
-        stderr: all_stderr,
-        duration_ms: started_at.elapsed().as_millis(),
-        backup_path: None,
-    }
-}
-
 fn run_lobster_upgrade_action() -> LobsterActionResult {
     let started_at = std::time::Instant::now();
-    let candidates = [
-        "npm install -g openclaw@latest",
-        "pnpm add -g openclaw@latest",
-        "yarn global add openclaw@latest",
-    ];
-    let mut all_stdout = String::new();
-    let mut all_stderr = String::new();
+    match bootstrap_openclaw_runtime(true) {
+        Ok(mut notes) => {
+            let gateway_bootstrap = run_openclaw_gateway_bootstrap_once();
+            notes.push(format!(
+                "gateway_bootstrap: success={}, command={}",
+                gateway_bootstrap.success, gateway_bootstrap.command
+            ));
+            notes.push(format!("gateway_bootstrap_detail={}", gateway_bootstrap.detail));
 
-    for command in candidates {
-        let mut attempt = create_lobster_shell_action_result("upgrade", command);
-        if !all_stdout.is_empty() {
-            all_stdout.push_str("\n\n");
-        }
-        all_stdout.push_str(&format!("$ {command}\n{}", attempt.stdout.trim()));
-        if !attempt.stderr.trim().is_empty() {
-            if !all_stderr.is_empty() {
-                all_stderr.push_str("\n\n");
-            }
-            all_stderr.push_str(&format!("$ {command}\n{}", attempt.stderr.trim()));
-        }
-        if attempt.success {
-            let (_, version_now, _, _) = detect_openclaw_installation();
-            attempt.detail = format!(
-                "龙虾升级完成。{}",
-                version_now
-                    .map(|value| format!("当前版本：{value}。"))
-                    .unwrap_or_default()
-            );
-            attempt.stdout = all_stdout;
-            if !all_stderr.is_empty() {
-                attempt.stderr = all_stderr;
-            }
-            attempt.duration_ms = started_at.elapsed().as_millis();
-            return attempt;
-        }
-    }
+            let completion_bootstrap = run_openclaw_completion_bootstrap_once();
+            notes.push(format!(
+                "completion_bootstrap: success={}, command={}",
+                completion_bootstrap.success, completion_bootstrap.command
+            ));
+            notes.push(format!(
+                "completion_bootstrap_detail={}",
+                completion_bootstrap.detail
+            ));
 
-    LobsterActionResult {
-        action: "upgrade".to_string(),
-        command: "npm install -g openclaw@latest".to_string(),
-        success: false,
-        detail: "龙虾升级失败，请检查 Node/npm 权限或网络后重试。".to_string(),
-        exit_code: None,
-        stdout: all_stdout,
-        stderr: all_stderr,
-        duration_ms: started_at.elapsed().as_millis(),
-        backup_path: None,
+            let (installed, version, _, detail) = detect_openclaw_installation();
+            let success = installed && gateway_bootstrap.success;
+            let gateway_warning = if gateway_bootstrap.success {
+                String::new()
+            } else {
+                format!(" 网关初始化提示：{}", gateway_bootstrap.detail)
+            };
+            let completion_warning = if completion_bootstrap.success {
+                String::new()
+            } else {
+                format!(" 补全状态提示：{}", completion_bootstrap.detail)
+            };
+
+            let mut runtime_logs = Vec::new();
+            if !gateway_bootstrap.stdout.trim().is_empty() {
+                runtime_logs.push(gateway_bootstrap.stdout.trim().to_string());
+            }
+            if !completion_bootstrap.stdout.trim().is_empty() {
+                runtime_logs.push(format!(
+                    "[completion]\n{}",
+                    completion_bootstrap.stdout.trim()
+                ));
+            }
+            let stdout = if runtime_logs.is_empty() {
+                notes.join("\n")
+            } else {
+                format!("{}\n\n{}", notes.join("\n"), runtime_logs.join("\n\n"))
+            };
+            let stderr = format!(
+                "{}{}{}{}",
+                gateway_bootstrap.stderr,
+                if gateway_bootstrap.stderr.trim().is_empty() {
+                    ""
+                } else {
+                    "\n"
+                },
+                completion_bootstrap.stderr,
+                if completion_bootstrap.stderr.trim().is_empty() {
+                    ""
+                } else {
+                    "\n"
+                }
+            )
+            .trim()
+            .to_string();
+
+            LobsterActionResult {
+                action: "upgrade".to_string(),
+                command: "refresh bundled openclaw runtime".to_string(),
+                success,
+                detail: if success {
+                    format!(
+                        "OpenClaw 资源同步完成。{}{}{}{}",
+                        version
+                            .map(|value| format!("当前版本：{value}。"))
+                            .unwrap_or_default(),
+                        if detail.trim().is_empty() {
+                            String::new()
+                        } else {
+                            format!(" {detail}")
+                        },
+                        gateway_warning,
+                        completion_warning
+                    )
+                } else {
+                    format!(
+                        "OpenClaw 资源同步后仍未就绪：{detail} 网关初始化结果：{} 补全状态结果：{}",
+                        gateway_bootstrap.detail, completion_bootstrap.detail
+                    )
+                },
+                exit_code: if success {
+                    completion_bootstrap
+                        .exit_code
+                        .or(gateway_bootstrap.exit_code)
+                        .or(Some(0))
+                } else {
+                    None
+                },
+                stdout,
+                stderr,
+                duration_ms: started_at.elapsed().as_millis(),
+                backup_path: None,
+            }
+        }
+        Err(error) => LobsterActionResult {
+            action: "upgrade".to_string(),
+            command: "refresh bundled openclaw runtime".to_string(),
+            success: false,
+            detail: format!("OpenClaw 资源同步失败：{error}"),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: error,
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: None,
+        },
     }
 }
 
 fn run_lobster_restart_gateway_action() -> LobsterActionResult {
     let started_at = std::time::Instant::now();
-    let mut primary =
-        create_lobster_shell_action_result("restart_gateway", "openclaw gateway restart");
-    if primary.success {
-        primary.detail = "网关重启完成。".to_string();
-        primary.duration_ms = started_at.elapsed().as_millis();
-        return primary;
+    if let Err(error) = bootstrap_openclaw_runtime(false) {
+        return LobsterActionResult {
+            action: "restart_gateway".to_string(),
+            command: "openclaw gateway restart".to_string(),
+            success: false,
+            detail: format!("网关重启前自举失败：{error}"),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: error,
+            duration_ms: started_at.elapsed().as_millis(),
+            backup_path: None,
+        };
     }
 
-    let mut fallback = create_lobster_shell_action_result(
-        "restart_gateway",
-        "openclaw gateway stop && openclaw gateway start",
-    );
-    if fallback.success {
-        fallback.detail = "已通过 stop/start 方式完成网关重启。".to_string();
-        if !primary.stderr.trim().is_empty() {
-            fallback.stderr = format!(
-                "初次命令失败（openclaw gateway restart）:\n{}\n\n{}",
-                primary.stderr.trim(),
-                fallback.stderr.trim()
-            );
-        }
-        fallback.duration_ms = started_at.elapsed().as_millis();
-        return fallback;
-    }
-
+    let gateway_bootstrap = run_openclaw_gateway_bootstrap_once();
     LobsterActionResult {
         action: "restart_gateway".to_string(),
-        command: "openclaw gateway restart".to_string(),
-        success: false,
-        detail: "网关重启失败，请确认 openclaw 可执行且配置正确。".to_string(),
-        exit_code: fallback.exit_code.or(primary.exit_code),
-        stdout: format!(
-            "首次尝试:\n{}\n\n回退尝试:\n{}",
-            primary.stdout.trim(),
-            fallback.stdout.trim()
-        ),
-        stderr: format!(
-            "首次尝试:\n{}\n\n回退尝试:\n{}",
-            primary.stderr.trim(),
-            fallback.stderr.trim()
-        ),
+        command: gateway_bootstrap.command,
+        success: gateway_bootstrap.success,
+        detail: if gateway_bootstrap.success {
+            "网关重启完成。".to_string()
+        } else {
+            gateway_bootstrap.detail
+        },
+        exit_code: gateway_bootstrap.exit_code,
+        stdout: gateway_bootstrap.stdout,
+        stderr: gateway_bootstrap.stderr,
         duration_ms: started_at.elapsed().as_millis(),
         backup_path: None,
     }
@@ -5958,7 +7768,9 @@ async fn openclaw_chat(
         .unwrap_or_else(|| "openai".to_string())
         .to_lowercase();
     let is_openai_compatible = is_openai_compatible_endpoint(&endpoint);
-    let gateway_token = load_openclaw_gateway_token_from_config()
+    let gateway_token = ensure_openclaw_gateway_token()
+        .ok()
+        .or_else(load_openclaw_gateway_token_from_config)
         .or_else(|| std::env::var("OPENCLAW_GATEWAY_TOKEN").ok());
     let api_key = api_key.filter(|value| !value.trim().is_empty());
     let model = model
@@ -6142,104 +7954,153 @@ fn load_lobster_snapshot() -> Result<LobsterSnapshotResponse, String> {
 fn load_lobster_install_guide() -> Result<LobsterInstallGuideResponse, String> {
     let mut checks: Vec<LobsterInstallCheckItem> = Vec::new();
 
-    let (openclaw_installed, openclaw_version, _, openclaw_detail) = detect_openclaw_installation();
+    let runtime_dir = resolve_openclaw_runtime_dir();
     checks.push(LobsterInstallCheckItem {
-        id: "openclaw".to_string(),
-        title: "OpenClaw CLI".to_string(),
+        id: "runtime".to_string(),
+        title: "Bundled OpenClaw 运行时".to_string(),
+        status: if runtime_dir.is_some() {
+            "success".to_string()
+        } else {
+            "failed".to_string()
+        },
+        detail: runtime_dir
+            .map(|path| format!("已找到运行时目录：{}", path.display()))
+            .unwrap_or_else(|| "未找到运行时目录，请先执行 `npm run bundle:openclaw`。".to_string()),
+    });
+
+    let node_check = match resolve_node_binary_path() {
+        Some(path) => match read_node_binary_version(&path) {
+            Ok(version) if check_node_version_supported(&version) => LobsterInstallCheckItem {
+                id: "nodejs".to_string(),
+                title: "Node.js 执行器".to_string(),
+                status: "success".to_string(),
+                detail: format!(
+                    "已找到 Node 可执行文件：{}（版本 {}）",
+                    path.display(),
+                    version
+                ),
+            },
+            Ok(version) => LobsterInstallCheckItem {
+                id: "nodejs".to_string(),
+                title: "Node.js 执行器".to_string(),
+                status: "failed".to_string(),
+                detail: format!(
+                    "Node 版本过低：{}（版本 {}），OpenClaw 需要 >= {}。",
+                    path.display(),
+                    version,
+                    openclaw_required_node_version_label()
+                ),
+            },
+            Err(error) => LobsterInstallCheckItem {
+                id: "nodejs".to_string(),
+                title: "Node.js 执行器".to_string(),
+                status: "failed".to_string(),
+                detail: error,
+            },
+        },
+        None => LobsterInstallCheckItem {
+            id: "nodejs".to_string(),
+            title: "Node.js 执行器".to_string(),
+            status: "failed".to_string(),
+            detail: "未找到 Node.js，可通过 OPENCLAW_NODE_PATH 指定，或安装系统 node。".to_string(),
+        },
+    };
+    checks.push(node_check);
+
+    let (openclaw_installed, openclaw_version, _, openclaw_detail) = detect_openclaw_installation();
+    let cli_blocking = openclaw_detail.contains("版本过低")
+        || openclaw_detail.contains("未找到 Node.js")
+        || openclaw_detail.contains("运行条件不满足");
+    checks.push(LobsterInstallCheckItem {
+        id: "openclaw-cli".to_string(),
+        title: "OpenClaw CLI 可执行性".to_string(),
         status: if openclaw_installed {
             "success".to_string()
+        } else if cli_blocking {
+            "failed".to_string()
         } else {
             "warning".to_string()
         },
         detail: if openclaw_installed {
             openclaw_version
-                .map(|value| format!("已安装，当前版本：{value}"))
-                .unwrap_or_else(|| "已安装，版本号待确认。".to_string())
+                .map(|value| format!("可执行，当前版本：{value}"))
+                .unwrap_or_else(|| "可执行，版本号待确认。".to_string())
         } else {
-            format!("尚未安装，将在下一步执行安装。{openclaw_detail}")
+            format!("尚未通过 OpenClaw CLI 自检，安装步骤仍可继续。{openclaw_detail}")
         },
     });
 
-    let node_ready = is_command_available("node");
+    let openclaw_home = resolve_openclaw_home_path();
+    let missing_layout = collect_missing_openclaw_state_layout(&openclaw_home);
     checks.push(LobsterInstallCheckItem {
-        id: "nodejs".to_string(),
-        title: "Node.js 运行环境".to_string(),
-        status: if node_ready {
+        id: "state-layout".to_string(),
+        title: "OpenClaw 状态目录".to_string(),
+        status: if missing_layout.is_empty() {
+            "success".to_string()
+        } else {
+            "warning".to_string()
+        },
+        detail: if missing_layout.is_empty() {
+            format!(
+                "目录结构完整：{} 个目录、{} 个状态文件。",
+                OPENCLAW_EXPECTED_STATE_DIRS.len(),
+                OPENCLAW_EXPECTED_STATE_FILES.len()
+            )
+        } else {
+            format!(
+                "检测到缺失项（{}）：{}。点击“开始安装”后会自动补齐。",
+                missing_layout.len(),
+                missing_layout.join("、")
+            )
+        },
+    });
+
+    let plugin_root = resolve_openclaw_plugins_source_root();
+    checks.push(LobsterInstallCheckItem {
+        id: "plugins".to_string(),
+        title: "Bundled 插件镜像".to_string(),
+        status: if plugin_root.is_some() {
+            "success".to_string()
+        } else {
+            "warning".to_string()
+        },
+        detail: plugin_root
+            .map(|path| format!("已找到插件目录：{}", path.display()))
+            .unwrap_or_else(|| "未找到插件目录，将跳过插件预部署。".to_string()),
+    });
+
+    let skills_root = resolve_preinstalled_skills_source_root();
+    checks.push(LobsterInstallCheckItem {
+        id: "skills".to_string(),
+        title: "预装 Skills 资源".to_string(),
+        status: if skills_root.is_some() {
+            "success".to_string()
+        } else {
+            "warning".to_string()
+        },
+        detail: skills_root
+            .map(|path| format!("已找到 skills 目录：{}", path.display()))
+            .unwrap_or_else(|| "未找到预装 skills 目录，将跳过 skills 预部署。".to_string()),
+    });
+
+    let config_path = resolve_openclaw_config_path();
+    let config_ready = config_path
+        .parent()
+        .map(|parent| std::fs::create_dir_all(parent).is_ok())
+        .unwrap_or(false);
+    checks.push(LobsterInstallCheckItem {
+        id: "config".to_string(),
+        title: "OpenClaw 配置目录".to_string(),
+        status: if config_ready {
             "success".to_string()
         } else {
             "failed".to_string()
         },
-        detail: if node_ready {
-            read_command_output_line("node", &["-v"])
-                .map(|version| format!("检测通过：{version}"))
-                .unwrap_or_else(|| "检测通过：已找到 node 命令。".to_string())
+        detail: if config_ready {
+            format!("配置目录可写：{}", config_path.display())
         } else {
-            "未检测到 node 命令，请先安装 Node.js LTS（建议 18+）。".to_string()
+            format!("配置目录不可写：{}", config_path.display())
         },
-    });
-
-    let npm_ready = is_command_available("npm");
-    let pnpm_ready = is_command_available("pnpm");
-    let yarn_ready = is_command_available("yarn");
-    let mut managers = Vec::new();
-    if npm_ready {
-        managers.push("npm");
-    }
-    if pnpm_ready {
-        managers.push("pnpm");
-    }
-    if yarn_ready {
-        managers.push("yarn");
-    }
-    let manager_detail = if managers.is_empty() {
-        "未检测到 npm / pnpm / yarn，请先安装 npm（随 Node.js 一并安装）。".to_string()
-    } else {
-        format!("可用包管理器：{}。", managers.join(" / "))
-    };
-    checks.push(LobsterInstallCheckItem {
-        id: "package-manager".to_string(),
-        title: "包管理器".to_string(),
-        status: if managers.is_empty() {
-            "failed".to_string()
-        } else {
-            "success".to_string()
-        },
-        detail: manager_detail,
-    });
-
-    if npm_ready {
-        let prefix = read_command_output_line("npm", &["config", "get", "prefix"]);
-        #[cfg(target_os = "windows")]
-        let npm_prefix_warning = prefix
-            .as_ref()
-            .map(|value| value.to_ascii_lowercase().contains("program files"))
-            .unwrap_or(false);
-        #[cfg(not(target_os = "windows"))]
-        let npm_prefix_warning = false;
-
-        checks.push(LobsterInstallCheckItem {
-            id: "npm-prefix".to_string(),
-            title: "全局安装目录权限".to_string(),
-            status: if npm_prefix_warning {
-                "warning".to_string()
-            } else {
-                "success".to_string()
-            },
-            detail: match prefix {
-                Some(value) if npm_prefix_warning => {
-                    format!("npm prefix 为 {value}，可能需要管理员权限，建议以管理员身份运行。")
-                }
-                Some(value) => format!("npm prefix：{value}"),
-                None => "无法读取 npm prefix，可继续安装并观察结果。".to_string(),
-            },
-        });
-    }
-
-    checks.push(LobsterInstallCheckItem {
-        id: "network".to_string(),
-        title: "网络与镜像".to_string(),
-        status: "warning".to_string(),
-        detail: "若安装长时间无响应，请先检查网络代理，或配置 npm 镜像后再安装。".to_string(),
     });
 
     let ready = !checks.iter().any(|item| item.status == "failed");
@@ -6268,16 +8129,49 @@ fn run_lobster_action(
         "install" => run_lobster_install_action(),
         "restart_gateway" => run_lobster_restart_gateway_action(),
         "auto_fix" => {
-            let mut output = create_lobster_shell_action_result(
-                "auto_fix",
-                "openclaw doctor --fix --yes --non-interactive",
-            );
-            output.detail = if output.success {
-                "自动修复执行完成。".to_string()
+            let started_at = std::time::Instant::now();
+            if let Err(error) = bootstrap_openclaw_runtime(false) {
+                LobsterActionResult {
+                    action: "auto_fix".to_string(),
+                    command: "openclaw doctor --fix --yes --non-interactive".to_string(),
+                    success: false,
+                    detail: format!("自动修复前自举失败：{error}"),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: error,
+                    duration_ms: started_at.elapsed().as_millis(),
+                    backup_path: None,
+                }
             } else {
-                "自动修复执行失败，请查看日志输出。".to_string()
-            };
-            output
+                match run_openclaw_cli_output(&["doctor", "--fix", "--yes", "--non-interactive"]) {
+                    Ok((command_display, output)) => LobsterActionResult {
+                        action: "auto_fix".to_string(),
+                        command: command_display,
+                        success: output.status.success(),
+                        detail: if output.status.success() {
+                            "自动修复执行完成。".to_string()
+                        } else {
+                            "自动修复执行失败，请查看日志输出。".to_string()
+                        },
+                        exit_code: output.status.code(),
+                        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                        duration_ms: started_at.elapsed().as_millis(),
+                        backup_path: None,
+                    },
+                    Err(error) => LobsterActionResult {
+                        action: "auto_fix".to_string(),
+                        command: "openclaw doctor --fix --yes --non-interactive".to_string(),
+                        success: false,
+                        detail: "自动修复执行失败，请查看日志输出。".to_string(),
+                        exit_code: None,
+                        stdout: String::new(),
+                        stderr: error,
+                        duration_ms: started_at.elapsed().as_millis(),
+                        backup_path: None,
+                    },
+                }
+            }
         }
         "backup" => run_lobster_backup_action(),
         "restore" => run_lobster_restore_action(backup_path),
@@ -6319,12 +8213,23 @@ async fn check_openclaw_gateway(endpoint: Option<String>) -> Result<GatewayHealt
         .timeout(Duration::from_secs(3))
         .build()
         .map_err(|error| format!("创建网关检查客户端失败: {error}"))?;
+    let gateway_token = ensure_openclaw_gateway_token()
+        .ok()
+        .or_else(load_openclaw_gateway_token_from_config)
+        .or_else(|| std::env::var("OPENCLAW_GATEWAY_TOKEN").ok());
 
     let mut last_error = None;
 
     for candidate in candidates {
         let started_at = std::time::Instant::now();
-        match client.get(&candidate).send().await {
+        let mut request = client.get(&candidate);
+        if let Some(token) = gateway_token
+            .as_deref()
+            .filter(|token| !token.trim().is_empty())
+        {
+            request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        match request.send().await {
             Ok(response) => {
                 let latency_ms = started_at.elapsed().as_millis();
                 let status = response.status();
@@ -6389,9 +8294,81 @@ fn open_external_url(url: String) -> Result<(), String> {
         .map_err(|error| format!("打开外部浏览器失败：{error}"))
 }
 
+async fn fetch_skill_market_json(url: &str) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|error| format!("创建技能市场客户端失败: {error}"))?;
+
+    let response = client
+        .get(url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|error| format!("技能市场请求失败: {error}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let detail = response.text().await.unwrap_or_default();
+        return Err(if detail.trim().is_empty() {
+            format!("技能市场请求失败（{status}）")
+        } else {
+            format!("技能市场请求失败（{status}）：{detail}")
+        });
+    }
+
+    response
+        .json::<Value>()
+        .await
+        .map_err(|error| format!("技能市场响应解析失败: {error}"))
+}
+
+#[tauri::command]
+async fn load_skill_market_top() -> Result<Value, String> {
+    fetch_skill_market_json("https://lightmake.site/api/skills/top").await
+}
+
+#[tauri::command]
+async fn load_skill_market_by_category(
+    page: Option<u32>,
+    page_size: Option<u32>,
+    sort_by: Option<String>,
+    order: Option<String>,
+    category: String,
+) -> Result<Value, String> {
+    let category = category.trim().to_string();
+
+    let page = page.unwrap_or(1).max(1);
+    let page_size = page_size.unwrap_or(24).clamp(1, 100);
+    let sort_by = sort_by
+        .unwrap_or_else(|| "score".to_string())
+        .trim()
+        .to_string();
+    let order = order
+        .unwrap_or_else(|| "desc".to_string())
+        .trim()
+        .to_string();
+
+    let mut url = reqwest::Url::parse("https://lightmake.site/api/skills")
+        .map_err(|error| format!("技能市场地址解析失败: {error}"))?;
+    url.query_pairs_mut()
+        .append_pair("page", &page.to_string())
+        .append_pair("pageSize", &page_size.to_string())
+        .append_pair("sortBy", &sort_by)
+        .append_pair("order", &order);
+    if !category.is_empty() {
+        url.query_pairs_mut().append_pair("category", &category);
+    }
+
+    fetch_skill_market_json(url.as_str()).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     load_openclaw_env();
+    if let Ok(token) = ensure_openclaw_gateway_token() {
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN", token);
+    }
 
     // WebView2 必须在创建前设置透明背景，否则会显示默认灰底
     #[cfg(target_os = "windows")]
@@ -6445,9 +8422,21 @@ pub fn run() {
             load_openclaw_tools_list,
             save_openclaw_tools_config,
             save_source_file,
-            open_external_url
+            install_role_workflow_agent,
+            remove_role_workflow_agent,
+            open_external_url,
+            load_skill_market_top,
+            load_skill_market_by_category
         ])
         .setup(|app| {
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                set_app_resource_dir(resource_dir);
+            }
+
+            if let Err(error) = bootstrap_openclaw_runtime(true) {
+                eprintln!("[clawpet] openclaw bootstrap skipped: {error}");
+            }
+
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_autostart::init(

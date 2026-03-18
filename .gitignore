@@ -37,6 +37,8 @@ Thumbs.db
 
 # Tauri / Rust
 src-tauri/target/
+src-tauri/resources/openclaw/
+src-tauri/resources/openclaw-plugins/
 
 # Vite
 *.local

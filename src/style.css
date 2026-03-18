@@ -215,7 +215,7 @@ select {
 
 /* macOS overlay titlebar mode:
    keep content below the traffic-light controls area. */
-.desktop-pet-stage--console .desktop-console-panel {
+.desktop-pet-stage--console:not(.desktop-pet-stage--windows) .desktop-console-panel {
   inset: 0 !important;
   width: 100vw !important;
   height: 100vh !important;
@@ -230,6 +230,11 @@ select {
 
 .desktop-pet-stage--console {
   background: var(--app-console-stage-bg);
+}
+
+.desktop-pet-stage--console.desktop-pet-stage--windows .desktop-console-panel {
+  border-radius: 24px;
+  overflow: hidden;
 }
 
 .desktop-console-panel__dragbar {
@@ -960,9 +965,754 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
   margin-top: 8px;
 }
 
+.staff-layout .toolbar-actions {
+  margin-top: 12px;
+}
+
+.staff-layout .staff-overview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.staff-layout .staff-overview-header .toolbar-actions {
+  margin-top: 0;
+  margin-left: auto;
+}
+
 .staff-layout .platform-card__actions {
   margin-top: 14px;
   gap: 16px;
+}
+
+.role-workflow-layout {
+  display: block;
+  overflow: auto;
+  padding-right: 4px;
+  padding-bottom: 28px;
+}
+
+.role-workflow-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.role-workflow-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.role-workflow-header h3 {
+  margin: 0;
+}
+
+.role-workflow-search {
+  flex: 0 0 280px;
+  min-height: 38px;
+}
+
+.role-workflow-summary {
+  margin: 0;
+  color: rgba(94, 60, 35, 0.75);
+  font-size: 12px;
+}
+
+.role-workflow-division-list {
+  display: grid;
+  gap: 14px;
+}
+
+.role-workflow-division {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(121, 73, 34, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.role-workflow-division__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.role-workflow-division__header h4 {
+  margin: 0;
+  color: #5f3418;
+  font-size: 16px;
+}
+
+.role-workflow-division__header span {
+  color: rgba(94, 60, 35, 0.72);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.role-workflow-group {
+  display: grid;
+  gap: 8px;
+}
+
+.role-workflow-group h5 {
+  margin: 0;
+  color: rgba(95, 52, 24, 0.84);
+  font-size: 13px;
+}
+
+.role-workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.role-workflow-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(121, 73, 34, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.74);
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.role-workflow-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(121, 73, 34, 0.28);
+  box-shadow: 0 6px 16px rgba(121, 73, 34, 0.08);
+}
+
+.role-workflow-card:focus-visible {
+  outline: none;
+  border-color: rgba(121, 73, 34, 0.36);
+  box-shadow: 0 0 0 3px rgba(191, 124, 74, 0.18);
+}
+
+.role-workflow-card strong {
+  color: #4d2913;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.role-workflow-card p {
+  margin: 0;
+  color: rgba(72, 44, 25, 0.76);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.platform-modal.role-workflow-detail-modal {
+  width: min(74vw, 860px);
+  min-width: min(520px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
+  height: auto;
+  min-height: 0;
+  max-height: min(84vh, 860px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  resize: none;
+}
+
+.role-workflow-detail-modal__header p {
+  margin: 6px 0 0;
+}
+
+.role-workflow-detail-modal__body {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.role-workflow-detail-modal__notice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.role-workflow-detail-modal__notice--success {
+  border: 1px solid rgba(57, 145, 86, 0.34);
+  background: rgba(235, 253, 241, 0.9);
+  color: #1f6f3b;
+}
+
+.role-workflow-detail-modal__notice--error {
+  border: 1px solid rgba(189, 75, 75, 0.34);
+  background: rgba(255, 238, 238, 0.92);
+  color: #9f2f2f;
+}
+
+.role-workflow-detail-modal__field {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+}
+
+.role-workflow-detail-modal__field > span {
+  color: rgba(79, 43, 19, 0.84);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.role-workflow-detail-modal__name-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(121, 73, 34, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #4f2b13;
+  font: inherit;
+  font-size: 14px;
+}
+
+.role-workflow-detail-modal__name-input:focus {
+  outline: none;
+  border-color: rgba(140, 84, 40, 0.42);
+  box-shadow: 0 0 0 3px rgba(191, 124, 74, 0.14);
+}
+
+.role-workflow-detail-modal__editor {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 280px;
+  max-height: min(62vh, 680px);
+  overflow: auto;
+  border: 1px solid rgba(121, 73, 34, 0.2);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #4f2b13;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  word-break: break-word;
+  resize: vertical;
+}
+
+.role-workflow-detail-modal__editor:focus {
+  outline: none;
+  border-color: rgba(140, 84, 40, 0.42);
+  box-shadow: 0 0 0 3px rgba(191, 124, 74, 0.14);
+}
+
+.role-workflow-detail-modal__versions {
+  display: grid;
+  gap: 8px;
+  border: 1px dashed rgba(121, 73, 34, 0.24);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.role-workflow-detail-modal__versions-header strong {
+  color: rgba(79, 43, 19, 0.88);
+  font-size: 13px;
+}
+
+.role-workflow-detail-modal__versions-empty {
+  margin: 0;
+  color: rgba(94, 60, 35, 0.72);
+  font-size: 12px;
+}
+
+.role-workflow-detail-modal__versions-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.role-workflow-detail-modal__version-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(121, 73, 34, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.role-workflow-detail-modal__version-time {
+  color: rgba(79, 43, 19, 0.8);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.role-workflow-detail-modal__version-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.role-workflow-detail-modal__version-actions .desktop-console-panel__action {
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.role-workflow-detail-modal__actions {
+  margin-top: 10px;
+}
+
+.platform-modal.staff-delete-modal {
+  width: min(460px, calc(100vw - 32px));
+  min-width: min(320px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  height: auto;
+  min-height: 0;
+  max-height: min(72vh, 420px);
+  padding: 16px 16px 14px;
+  overflow: auto;
+  resize: none;
+  border-radius: 20px;
+}
+
+.staff-delete-modal__body {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.staff-delete-modal__body p {
+  margin: 0;
+  color: rgba(79, 43, 19, 0.88);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.staff-delete-modal__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(79, 43, 19, 0.9);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.staff-delete-modal__option input {
+  width: 16px;
+  height: 16px;
+}
+
+.staff-delete-modal__body small {
+  color: rgba(94, 60, 35, 0.72);
+  font-size: 11px;
+}
+
+.staff-delete-modal .platform-modal__header {
+  margin-bottom: 12px;
+}
+
+.staff-delete-modal .platform-modal__header strong {
+  font-size: 17px;
+}
+
+.staff-delete-modal .platform-modal__header p {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.staff-delete-modal .platform-modal__actions {
+  justify-content: flex-end;
+}
+
+.staff-delete-modal .platform-modal__actions .desktop-console-panel__action {
+  min-width: 92px;
+}
+
+.staff-delete-modal .platform-form-error {
+  margin: 0;
+}
+
+.skill-market-layout {
+  display: block;
+  overflow: auto;
+  padding-right: 4px;
+  padding-bottom: 28px;
+}
+
+.skill-market-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.skill-market-section__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skill-market-category-row {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 3px;
+}
+
+.skill-market-category-card {
+  flex: 0 0 122px;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 11px 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(137, 84, 42, 0.14);
+  background: rgba(255, 255, 255, 0.72);
+  color: rgba(69, 42, 23, 0.88);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.skill-market-category-card:hover {
+  transform: translateY(-2px);
+}
+
+.skill-market-category-card.active {
+  border-color: rgba(137, 84, 42, 0.34);
+  background: linear-gradient(145deg, rgba(255, 229, 203, 0.85), rgba(255, 245, 232, 0.9));
+  color: #4d2913;
+}
+
+.skill-market-category-card--top {
+  border-color: rgba(230, 70, 70, 0.44);
+}
+
+.skill-market-category-card--top.active {
+  border-color: rgba(230, 70, 70, 0.62);
+  background: linear-gradient(145deg, rgba(255, 228, 228, 0.9), rgba(255, 243, 239, 0.92));
+}
+
+.skill-market-category-card__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(137, 84, 42, 0.16);
+  background: rgba(255, 255, 255, 0.86);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.skill-market-category-card strong {
+  font-size: 13px;
+  line-height: 1.1;
+}
+
+.skill-market-category-card small {
+  font-size: 11px;
+  color: rgba(99, 61, 34, 0.62);
+}
+
+.skill-market-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.skill-market-toolbar__search {
+  flex: 1;
+  min-width: 220px;
+}
+
+.skill-market-toolbar__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(73, 46, 27, 0.78);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.skill-market-toolbar__select {
+  min-width: 118px;
+  height: 36px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(121, 73, 34, 0.22);
+  background: rgba(255, 255, 255, 0.9);
+  color: rgba(66, 41, 24, 0.88);
+}
+
+.skill-market-toolbar__refresh {
+  height: 36px;
+  padding: 0 12px;
+}
+
+.skill-market-summary {
+  margin: 0;
+  color: rgba(84, 52, 30, 0.72);
+  font-size: 12px;
+}
+
+.skill-market-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skill-market-pagination__button,
+.skill-market-pagination__page {
+  min-width: 36px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(121, 73, 34, 0.18);
+  background: rgba(255, 255, 255, 0.84);
+  color: rgba(78, 49, 29, 0.88);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.skill-market-pagination__button:disabled,
+.skill-market-pagination__page:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.skill-market-pagination__page.active {
+  border-color: rgba(137, 84, 42, 0.4);
+  background: linear-gradient(145deg, rgba(255, 229, 203, 0.86), rgba(255, 245, 232, 0.9));
+  color: #4d2913;
+}
+
+.skill-market-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.skill-market-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(121, 73, 34, 0.14);
+  background: rgba(255, 255, 255, 0.68);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 8px 18px rgba(99, 59, 25, 0.08);
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.skill-market-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(121, 73, 34, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.84),
+    0 12px 22px rgba(99, 59, 25, 0.14);
+}
+
+.skill-market-card__head {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.skill-market-card__avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(137, 84, 42, 0.2);
+  background: linear-gradient(145deg, rgba(255, 236, 214, 0.95), rgba(255, 247, 238, 0.92));
+  color: #a75a23;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.skill-market-card__title strong {
+  display: block;
+  font-size: 17px;
+  line-height: 1.2;
+  color: #432311;
+}
+
+.skill-market-card__title p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.36;
+  color: rgba(78, 49, 29, 0.72);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.skill-market-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skill-market-card__chips span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(121, 73, 34, 0.14);
+  background: rgba(255, 255, 255, 0.75);
+  color: rgba(66, 41, 24, 0.72);
+  font-size: 10px;
+}
+
+.skill-market-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: rgba(86, 54, 31, 0.76);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.skill-market-copyright {
+  margin: 2px 0 0;
+  text-align: right;
+  font-size: 11px;
+  color: rgba(108, 69, 40, 0.58);
+}
+
+.skill-market-copyright__link {
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.skill-market-copyright__link:hover {
+  color: rgba(108, 69, 40, 0.82);
+}
+
+.skill-market-detail-modal {
+  width: min(760px, calc(100vw - 28px));
+  max-height: min(86vh, 780px);
+}
+
+.skill-market-detail-modal__header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(121, 73, 34, 0.12);
+}
+
+.skill-market-detail-modal__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.skill-market-detail-modal__avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(137, 84, 42, 0.2);
+  background: linear-gradient(145deg, rgba(255, 236, 214, 0.95), rgba(255, 247, 238, 0.92));
+  color: #a75a23;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.skill-market-detail-modal__identity p {
+  margin: 4px 0 0;
+  color: rgba(102, 63, 37, 0.62);
+  font-size: 12px;
+}
+
+.skill-market-detail-modal__body {
+  display: grid;
+  gap: 14px;
+}
+
+.skill-market-detail-modal__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.skill-market-detail-modal__chips span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(121, 73, 34, 0.14);
+  background: rgba(255, 255, 255, 0.8);
+  color: rgba(66, 41, 24, 0.78);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.skill-market-detail-modal__description {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.68;
+  color: rgba(68, 43, 25, 0.86);
+}
+
+.skill-market-detail-modal__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.skill-market-detail-modal__stat {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(121, 73, 34, 0.14);
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.skill-market-detail-modal__stat span {
+  font-size: 12px;
+  color: rgba(85, 53, 31, 0.68);
+}
+
+.skill-market-detail-modal__stat strong {
+  font-size: 26px;
+  line-height: 1.1;
+  color: #432311;
+}
+
+.skill-market-detail-modal__source {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(104, 64, 36, 0.66);
+}
+
+.skill-market-detail-modal__actions {
+  margin-top: 10px;
 }
 
 .desktop-console-body--split {
@@ -1544,6 +2294,11 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
   background: rgba(238, 252, 244, 0.9);
 }
 
+.lobster-install-wizard__runtime-summary.is-checking {
+  border-color: rgba(191, 124, 74, 0.24);
+  background: rgba(255, 247, 237, 0.9);
+}
+
 .lobster-install-wizard__runtime-summary.is-blocked {
   border-color: rgba(198, 71, 57, 0.3);
   background: rgba(255, 244, 242, 0.9);
@@ -1603,6 +2358,14 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 
 .lobster-install-wizard__check-item.is-warning .lobster-install-wizard__check-title span {
   color: #fbbf24;
+}
+
+.lobster-install-wizard__check-item.is-checking {
+  border-color: rgba(191, 124, 74, 0.24);
+}
+
+.lobster-install-wizard__check-item.is-checking .lobster-install-wizard__check-title span {
+  color: #b7723b;
 }
 
 .lobster-install-wizard__check-item.is-failed {
@@ -1681,6 +2444,116 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
   border-color: rgba(191, 124, 74, 0.56);
 }
 
+.lobster-install-wizard__provider-select-wrap {
+  position: relative;
+}
+
+.lobster-install-wizard__provider-select {
+  appearance: none;
+  padding-left: 38px !important;
+  padding-right: 34px !important;
+  cursor: pointer;
+}
+
+.lobster-install-wizard__provider-select-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-size: 15px;
+}
+
+.lobster-install-wizard__provider-select-caret {
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translateY(-60%);
+  pointer-events: none;
+}
+
+.lobster-install-wizard__provider-select-caret::before {
+  content: "";
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid rgba(121, 73, 34, 0.72);
+  border-bottom: 1.5px solid rgba(121, 73, 34, 0.72);
+  transform: rotate(45deg);
+}
+
+.lobster-install-wizard__protocol-toggle {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.lobster-install-wizard__protocol-option {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 8px;
+  border: 1px solid rgba(121, 73, 34, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #4f2b13;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.lobster-install-wizard__protocol-option.is-active {
+  border-color: rgba(191, 124, 74, 0.56);
+  box-shadow: 0 0 0 2px rgba(191, 124, 74, 0.18);
+  background: rgba(255, 240, 224, 0.92);
+}
+
+.lobster-provider-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.lobster-provider-picker__group {
+  display: grid;
+  gap: 8px;
+}
+
+.lobster-provider-picker__title {
+  margin: 0;
+  color: rgba(79, 43, 19, 0.76);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lobster-provider-picker__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lobster-provider-picker__option {
+  padding: 7px 10px;
+  border: 1px solid rgba(121, 73, 34, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #4f2b13;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.lobster-provider-picker__option.is-active {
+  border-color: rgba(191, 124, 74, 0.56);
+  background: rgba(255, 240, 224, 0.92);
+}
+
 .lobster-install-wizard__field-hint {
   color: rgba(94, 60, 35, 0.68);
   font-size: 12px;
@@ -1735,30 +2608,30 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 }
 
 .platform-modal.lobster-install-wizard-modal.lobster-install-wizard-modal--step3 {
-  height: auto;
-  min-height: 0;
+  height: min(80vh, 700px);
+  min-height: min(560px, calc(100vh - 48px));
   max-height: min(90vh, 780px);
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .platform-modal.lobster-install-wizard-modal.lobster-install-wizard-modal--step3 .lobster-install-wizard__panel {
-  height: auto;
-  overflow: visible;
+  height: 100%;
+  overflow: hidden;
 }
 
 .platform-modal.lobster-install-wizard-modal.lobster-install-wizard-modal--step3 .lobster-install-wizard__provider {
-  grid-template-rows: auto;
-  height: auto;
-  overflow: visible;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  overflow: hidden;
 }
 
 .platform-modal.lobster-install-wizard-modal.lobster-install-wizard-modal--step3 .lobster-install-wizard__provider-panel {
-  padding: 0;
+  padding: 0 4px 8px 0;
   border: none;
   border-radius: 0;
   background: transparent;
-  overflow: visible;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .platform-modal.lobster-install-wizard-modal .detail-code {
@@ -2082,12 +2955,18 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 }
 
 .lobster-install-wizard__actions {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  justify-self: stretch;
   margin-top: 0;
-  padding-top: 4px;
+  padding: 10px 0 2px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
+  border-top: 1px solid rgba(121, 73, 34, 0.12);
+  background: rgba(255, 250, 244, 0.96);
 }
 
 .lobster-install-wizard__actions .desktop-console-panel__action {
@@ -2099,7 +2978,11 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 .lobster-install-wizard__actions .desktop-console-panel__action--ghost {
   background: rgba(121, 73, 34, 0.1);
   color: #744922;
-  justify-self: flex-start;
+  justify-self: start;
+}
+
+.lobster-install-wizard__actions .desktop-console-panel__action:not(.desktop-console-panel__action--ghost) {
+  justify-self: end;
 }
 
 .lobster-install-wizard__skip {
@@ -2121,6 +3004,7 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 
 .lobster-install-wizard__actions-spacer {
   display: block;
+  width: 100%;
 }
 
 @keyframes lobster-spin {
@@ -4325,8 +5209,8 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 
 .channels-config-header h3 {
   margin: 0;
-  color: #2f1f14;
-  font-size: clamp(28px, 3vw, 40px);
+  color: #4f2b13;
+  font-size: clamp(22px, 2.2vw, 30px);
   font-family: "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
   font-weight: 500;
   letter-spacing: -0.01em;
@@ -4388,8 +5272,8 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 
 .configured-channel-card__title strong {
   display: block;
-  color: #2b1a10;
-  font-size: 26px;
+  color: #4f2b13;
+  font-size: 20px;
   line-height: 1.1;
 }
 
@@ -4422,8 +5306,8 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 }
 
 .configured-channel-account-row__name {
-  color: #382215;
-  font-size: 20px;
+  color: rgba(72, 44, 25, 0.82);
+  font-size: 17px;
   line-height: 1.2;
 }
 
@@ -4436,7 +5320,7 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 }
 
 .configured-channel-account-row__binding span {
-  color: rgba(76, 48, 27, 0.8);
+  color: rgba(86, 54, 31, 0.76);
   font-size: 12px;
   font-weight: 600;
 }
@@ -4448,7 +5332,7 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
   border: 1px solid rgba(121, 73, 34, 0.2);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.9);
-  color: #2f2016;
+  color: #4d2913;
   font-size: 12px;
 }
 
@@ -4465,12 +5349,12 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 
 .channel-group h4 {
   margin: 0;
-  color: #2d1c11;
-  font-size: clamp(26px, 3.2vw, 38px);
-  font-family: "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
-  font-weight: 400;
-  line-height: 1.1;
-  letter-spacing: -0.01em;
+  color: rgba(79, 43, 19, 0.9);
+  font-size: clamp(18px, 1.7vw, 24px);
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0;
 }
 
 .channel-grid {
@@ -4551,15 +5435,16 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 }
 
 .channel-card__title-row strong {
-  color: #2b1a10;
-  font-size: 21px;
-  line-height: 1.1;
+  color: rgba(79, 43, 19, 0.88);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .channel-card__content p {
   margin: 0;
-  color: rgba(94, 60, 35, 0.74);
-  font-size: 15px;
+  color: rgba(86, 54, 31, 0.72);
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -4603,15 +5488,18 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 }
 
 .channel-config-modal .platform-modal__header strong {
-  font-size: 38px;
-  font-weight: 700;
-  line-height: 1.03;
-  letter-spacing: 0.01em;
+  color: #4f2b13;
+  font-size: clamp(20px, 1.9vw, 28px);
+  font-weight: 650;
+  line-height: 1.12;
+  letter-spacing: 0;
 }
 
 .channel-config-modal .platform-modal__header p {
   margin-top: 8px;
-  font-size: 15px;
+  color: rgba(94, 60, 35, 0.72);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .channel-config-modal .platform-modal__close {
@@ -4629,11 +5517,11 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
   display: grid;
   gap: 10px;
   padding: 14px;
-  border: 1px solid rgba(157, 170, 198, 0.42);
+  border: 1px solid rgba(140, 84, 40, 0.22);
   border-radius: 14px;
   background:
-    linear-gradient(180deg, rgba(249, 251, 255, 0.96), rgba(238, 243, 251, 0.92)),
-    radial-gradient(circle at top right, rgba(191, 214, 255, 0.2), transparent 44%);
+    linear-gradient(180deg, rgba(255, 251, 246, 0.98), rgba(251, 244, 235, 0.94)),
+    radial-gradient(circle at top right, rgba(255, 222, 190, 0.24), transparent 46%);
 }
 
 .channel-config-guide__head {
@@ -4645,15 +5533,16 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 
 .channel-config-guide__head h4 {
   margin: 0;
-  color: var(--app-modal-title);
-  font-size: 20px;
-  line-height: 1.1;
+  color: #5b3318;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .channel-config-guide__head p {
   margin: 5px 0 0;
-  color: var(--app-modal-subtitle);
-  font-size: 14px;
+  color: rgba(94, 60, 35, 0.74);
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -4664,10 +5553,10 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
   flex-shrink: 0;
   min-height: 30px;
   padding: 0 12px;
-  border: 1px solid rgba(132, 149, 184, 0.44);
+  border: 1px solid rgba(140, 84, 40, 0.28);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.68);
-  color: rgba(62, 78, 106, 0.92);
+  background: rgba(255, 248, 240, 0.92);
+  color: rgba(95, 52, 24, 0.9);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -4678,17 +5567,17 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 }
 
 .channel-config-guide__docs:hover {
-  border-color: rgba(102, 130, 184, 0.68);
-  background: rgba(255, 255, 255, 0.86);
-  color: rgba(42, 66, 111, 0.98);
+  border-color: rgba(140, 84, 40, 0.42);
+  background: rgba(255, 243, 228, 0.98);
+  color: #4f2b13;
 }
 
 .channel-config-guide__steps {
   margin: 0;
   padding-left: 20px;
-  color: rgba(62, 78, 106, 0.9);
-  font-size: 14px;
-  line-height: 1.55;
+  color: rgba(86, 54, 31, 0.78);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .channel-config-guide__steps li + li {
@@ -4697,7 +5586,7 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 
 .channel-config-guide__fallback {
   margin: 0;
-  color: rgba(78, 96, 126, 0.9);
+  color: rgba(94, 60, 35, 0.78);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -4711,9 +5600,9 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: var(--app-modal-title);
+  color: rgba(79, 43, 19, 0.88);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .channel-config-field__required {
@@ -4751,7 +5640,7 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 .channel-config-field__secret-toggle:focus,
 .channel-config-guide__docs:focus {
   outline: none;
-  box-shadow: 0 0 0 2px rgba(61, 113, 208, 0.2);
+  box-shadow: 0 0 0 2px rgba(191, 124, 74, 0.2);
 }
 
 .channel-config-field__secret-toggle {
@@ -4773,18 +5662,19 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 }
 
 .channel-config-field__secret-toggle:hover {
-  border-color: rgba(102, 130, 184, 0.68);
+  border-color: rgba(140, 84, 40, 0.42);
   color: var(--app-modal-title);
+  background: rgba(255, 246, 236, 0.92);
 }
 
 .channel-config-field__hint {
-  color: var(--app-modal-subtitle);
+  color: rgba(94, 60, 35, 0.68);
   font-size: 12px;
   line-height: 1.45;
 }
 
 .channel-config-field__env {
-  color: rgba(85, 101, 130, 0.9);
+  color: rgba(108, 69, 40, 0.72);
   font-size: 12px;
   line-height: 1.3;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -4804,17 +5694,17 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 
 .channel-config-modal__submit {
   min-width: 136px;
-  border: 1px solid rgba(52, 105, 214, 0.62);
-  background: linear-gradient(180deg, #3e74dc, #2f5fbc);
-  color: #f4f8ff;
+  border: 1px solid rgba(122, 72, 34, 0.32);
+  background: linear-gradient(135deg, #7a4822, #d0884c);
+  color: #fff8ef;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    0 10px 18px rgba(48, 92, 177, 0.24);
+    0 10px 18px rgba(122, 72, 34, 0.22);
 }
 
 .channel-config-modal__submit:hover:not(:disabled) {
-  border-color: rgba(45, 96, 201, 0.9);
-  background: linear-gradient(180deg, #3a6fd3, #2855ab);
+  border-color: rgba(122, 72, 34, 0.46);
+  background: linear-gradient(135deg, #6f4120, #c57e43);
 }
 
 .channel-config-modal__submit:disabled {
@@ -4922,6 +5812,7 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
 }
 
 .staff-brief-card {
+  position: relative;
   display: grid;
   gap: 10px;
   padding: 12px 14px;
@@ -4935,11 +5826,41 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
     0 12px 24px rgba(122, 72, 34, 0.05);
 }
 
+.staff-brief-card__delete {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(160, 92, 43, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 248, 241, 0.92);
+  color: #8a4b1f;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+}
+
+.staff-brief-card__delete svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.staff-brief-card__delete:hover {
+  border-color: rgba(179, 85, 46, 0.45);
+  background: rgba(255, 241, 229, 0.98);
+  color: #9f3e2a;
+}
+
 .staff-brief-head {
   display: grid;
   grid-template-columns: 84px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
+  padding-right: 34px;
 }
 
 .staff-avatar {
@@ -5485,6 +6406,31 @@ html[data-app-theme-resolved="dark"] .tasks-editor__grid textarea:focus {
   background: rgba(27, 18, 12, 0.22);
   backdrop-filter: blur(8px);
   pointer-events: auto;
+}
+
+.lobster-install-wizard-backdrop {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lobster-install-wizard-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.lobster-install-wizard-backdrop .lobster-install-wizard-modal {
+  opacity: 0;
+  transform: translateY(8px) scale(0.992);
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+
+.lobster-install-wizard-backdrop.is-open .lobster-install-wizard-modal {
+  opacity: 1;
+  transform: none;
+}
+
+.desktop-pet-stage--windows .platform-modal-backdrop {
+  backdrop-filter: none;
 }
 
 .platform-modal {
@@ -6239,10 +7185,51 @@ html[data-app-theme-resolved="dark"] .system-settings-footer {
   color: rgba(66, 41, 24, 0.55);
 }
 
-.openclaw-skills-sections {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+.openclaw-skill-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  width: fit-content;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid rgba(121, 73, 34, 0.16);
+  background: rgba(121, 73, 34, 0.08);
+}
+
+.openclaw-skill-switch__button {
+  border: none;
+  background: transparent;
+  color: rgba(66, 41, 24, 0.72);
+  border-radius: 9px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.openclaw-skill-switch__button:hover {
+  color: rgba(66, 41, 24, 0.9);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.openclaw-skill-switch__button.is-active {
+  color: #3d2415;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 4px rgba(122, 72, 34, 0.14);
+}
+
+.openclaw-skill-switch__button em {
+  font-style: normal;
+  font-size: 11px;
+  color: rgba(66, 41, 24, 0.56);
+}
+
+.openclaw-skill-switch__button.is-active em {
+  color: rgba(28, 134, 89, 0.92);
 }
 
 .openclaw-skills-section {
@@ -6357,6 +7344,30 @@ html[data-app-theme-resolved="dark"] .system-settings-footer {
 
 .platform-form input:focus,
 .platform-form select:focus {
+  border-color: rgba(140, 84, 40, 0.44);
+  box-shadow: 0 0 0 3px rgba(191, 124, 74, 0.14);
+}
+
+.platform-protocol-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.platform-protocol-toggle__option {
+  width: 100%;
+  padding: 12px 10px;
+  border: 1px solid rgba(121, 73, 34, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #382215;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+  text-align: center;
+}
+
+.platform-protocol-toggle__option.is-active {
   border-color: rgba(140, 84, 40, 0.44);
   box-shadow: 0 0 0 3px rgba(191, 124, 74, 0.14);
 }
@@ -7383,6 +8394,8 @@ html[data-app-theme-resolved="dark"] .failure-card,
 html[data-app-theme-resolved="dark"] .mini-log-card,
 html[data-app-theme-resolved="dark"] .bindings-config-card,
 html[data-app-theme-resolved="dark"] .staff-brief-card,
+html[data-app-theme-resolved="dark"] .role-workflow-division,
+html[data-app-theme-resolved="dark"] .role-workflow-card,
 html[data-app-theme-resolved="dark"] .ptask-card,
 html[data-app-theme-resolved="dark"] .openclaw-skill-card,
 html[data-app-theme-resolved="dark"] .openclaw-tool-card {
@@ -7431,6 +8444,9 @@ html[data-app-theme-resolved="dark"] .desktop-metric-card strong,
 html[data-app-theme-resolved="dark"] .platform-card strong,
 html[data-app-theme-resolved="dark"] .preset-card strong,
 html[data-app-theme-resolved="dark"] .staff-brief-identity strong,
+html[data-app-theme-resolved="dark"] .role-workflow-division__header h4,
+html[data-app-theme-resolved="dark"] .role-workflow-group h5,
+html[data-app-theme-resolved="dark"] .role-workflow-card strong,
 html[data-app-theme-resolved="dark"] .bindings-config-card h4,
 html[data-app-theme-resolved="dark"] .ptask-card__title-row strong,
 html[data-app-theme-resolved="dark"] .openclaw-skill-card__head strong {
@@ -7452,6 +8468,9 @@ html[data-app-theme-resolved="dark"] .staff-brief-row dd,
 html[data-app-theme-resolved="dark"] .staff-markdown-output blockquote,
 html[data-app-theme-resolved="dark"] .bindings-config-card p,
 html[data-app-theme-resolved="dark"] .bindings-config-field span,
+html[data-app-theme-resolved="dark"] .role-workflow-summary,
+html[data-app-theme-resolved="dark"] .role-workflow-division__header span,
+html[data-app-theme-resolved="dark"] .role-workflow-card p,
 html[data-app-theme-resolved="dark"] .ptask-toggle,
 html[data-app-theme-resolved="dark"] .ptask-meta-item span,
 html[data-app-theme-resolved="dark"] .ptask-meta-item strong,
@@ -7463,6 +8482,66 @@ html[data-app-theme-resolved="dark"] .openclaw-tools-category__title,
 html[data-app-theme-resolved="dark"] .openclaw-skill-card__path,
 html[data-app-theme-resolved="dark"] .empty-state {
   color: rgba(205, 218, 242, 0.8);
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-card:hover {
+  border-color: rgba(152, 176, 223, 0.56);
+  box-shadow: 0 8px 18px rgba(6, 11, 18, 0.3);
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__field > span,
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__header p {
+  color: rgba(202, 216, 243, 0.8);
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__notice--success {
+  border-color: rgba(99, 189, 136, 0.42);
+  background: rgba(31, 76, 53, 0.4);
+  color: rgba(198, 242, 219, 0.96);
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__notice--error {
+  border-color: rgba(216, 114, 114, 0.42);
+  background: rgba(92, 36, 36, 0.42);
+  color: rgba(255, 208, 208, 0.96);
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__editor {
+  border-color: rgba(114, 133, 171, 0.42);
+  background: rgba(27, 35, 51, 0.9);
+  color: #eff4ff;
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__name-input {
+  border-color: rgba(114, 133, 171, 0.42);
+  background: rgba(27, 35, 51, 0.9);
+  color: #eff4ff;
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__name-input:focus {
+  border-color: rgba(160, 183, 228, 0.7);
+  box-shadow: 0 0 0 3px rgba(126, 148, 191, 0.24);
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__editor:focus {
+  border-color: rgba(160, 183, 228, 0.7);
+  box-shadow: 0 0 0 3px rgba(126, 148, 191, 0.24);
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__versions {
+  border-color: rgba(120, 140, 180, 0.34);
+  background: rgba(28, 35, 51, 0.54);
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__versions-header strong,
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__versions-empty,
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__version-time {
+  color: rgba(205, 218, 242, 0.88);
+}
+
+html[data-app-theme-resolved="dark"] .role-workflow-detail-modal__version-item {
+  border-color: rgba(120, 140, 180, 0.26);
+  background: rgba(24, 31, 46, 0.72);
 }
 
 html[data-app-theme-resolved="dark"] .platform-card span,
@@ -7485,6 +8564,27 @@ html[data-app-theme-resolved="dark"] .section-block__link--danger {
 
 html[data-app-theme-resolved="dark"] .staff-brief-row {
   border-top-color: rgba(118, 138, 176, 0.2);
+}
+
+html[data-app-theme-resolved="dark"] .staff-brief-card__delete {
+  border-color: rgba(121, 143, 184, 0.32);
+  background: rgba(33, 42, 61, 0.9);
+  color: rgba(205, 218, 242, 0.9);
+}
+
+html[data-app-theme-resolved="dark"] .staff-brief-card__delete:hover {
+  border-color: rgba(227, 129, 129, 0.45);
+  background: rgba(80, 40, 49, 0.9);
+  color: rgba(255, 210, 210, 0.96);
+}
+
+html[data-app-theme-resolved="dark"] .staff-delete-modal__body p,
+html[data-app-theme-resolved="dark"] .staff-delete-modal__option {
+  color: rgba(205, 218, 242, 0.9);
+}
+
+html[data-app-theme-resolved="dark"] .staff-delete-modal__body small {
+  color: rgba(181, 199, 231, 0.76);
 }
 
 html[data-app-theme-resolved="dark"] .staff-markdown-output:not(.is-expanded)::after {
@@ -7605,10 +8705,65 @@ html[data-app-theme-resolved="dark"] .openclaw-tools-control__select:focus {
   box-shadow: 0 0 0 3px rgba(126, 148, 191, 0.24);
 }
 
+html[data-app-theme-resolved="dark"] .platform-protocol-toggle__option,
+html[data-app-theme-resolved="dark"] .lobster-provider-picker__option,
+html[data-app-theme-resolved="dark"] .lobster-install-wizard__protocol-option {
+  border-color: rgba(110, 129, 165, 0.56);
+  background: rgba(23, 29, 42, 0.92);
+  color: #edf2ff;
+}
+
+html[data-app-theme-resolved="dark"] .platform-protocol-toggle__option.is-active,
+html[data-app-theme-resolved="dark"] .lobster-provider-picker__option.is-active,
+html[data-app-theme-resolved="dark"] .lobster-install-wizard__protocol-option.is-active {
+  border-color: rgba(153, 176, 224, 0.72);
+  box-shadow: 0 0 0 3px rgba(126, 148, 191, 0.24);
+}
+
+html[data-app-theme-resolved="dark"] .lobster-provider-picker__title {
+  color: rgba(206, 218, 242, 0.8);
+}
+
+html[data-app-theme-resolved="dark"] .lobster-install-wizard__provider-select-caret::before {
+  border-right-color: rgba(225, 234, 252, 0.72);
+  border-bottom-color: rgba(225, 234, 252, 0.72);
+}
+
+html[data-app-theme-resolved="dark"] .lobster-install-wizard__provider-select-icon {
+  color: rgba(237, 242, 255, 0.9);
+}
+
 html[data-app-theme-resolved="dark"] .openclaw-list-panel__count {
   color: rgba(222, 231, 249, 0.86);
   background: rgba(120, 142, 183, 0.2);
   border-color: rgba(128, 149, 189, 0.36);
+}
+
+html[data-app-theme-resolved="dark"] .openclaw-skill-switch {
+  background: rgba(106, 125, 162, 0.24);
+  border-color: rgba(128, 149, 189, 0.36);
+}
+
+html[data-app-theme-resolved="dark"] .openclaw-skill-switch__button {
+  color: rgba(204, 217, 242, 0.74);
+}
+
+html[data-app-theme-resolved="dark"] .openclaw-skill-switch__button:hover {
+  background: rgba(57, 68, 95, 0.76);
+  color: #f0f5ff;
+}
+
+html[data-app-theme-resolved="dark"] .openclaw-skill-switch__button.is-active {
+  background: rgba(90, 106, 140, 0.86);
+  color: #f3f8ff;
+}
+
+html[data-app-theme-resolved="dark"] .openclaw-skill-switch__button em {
+  color: rgba(171, 188, 217, 0.74);
+}
+
+html[data-app-theme-resolved="dark"] .openclaw-skill-switch__button.is-active em {
+  color: #b8f0d7;
 }
 
 html[data-app-theme-resolved="dark"] .openclaw-tool-card__id {
@@ -7784,13 +8939,13 @@ html[data-app-theme-resolved="dark"] .channel-card__icon-shell img {
 
 html[data-app-theme-resolved="dark"] .channel-card__title-row strong {
   color: #f5f9ff;
-  font-size: 20px;
+  font-size: 16px;
   line-height: 1.02;
 }
 
 html[data-app-theme-resolved="dark"] .channel-card__content p {
   color: rgba(219, 229, 246, 0.86);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.38;
 }
 
@@ -7888,6 +9043,148 @@ html[data-app-theme-resolved="dark"] .channel-config-modal__submit:hover:not(:di
   background: linear-gradient(180deg, #457ce3, #3565c2);
 }
 
+html[data-app-theme-resolved="dark"] .skill-market-section__header p,
+html[data-app-theme-resolved="dark"] .skill-market-summary {
+  color: rgba(202, 216, 243, 0.8);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-category-card {
+  border-color: rgba(125, 145, 187, 0.36);
+  background: rgba(27, 35, 51, 0.86);
+  color: rgba(226, 236, 252, 0.92);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-category-card.active {
+  border-color: rgba(155, 177, 224, 0.62);
+  background: linear-gradient(145deg, rgba(84, 107, 154, 0.32), rgba(38, 49, 72, 0.92));
+  color: #f2f7ff;
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-category-card--top {
+  border-color: rgba(221, 113, 113, 0.56);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-category-card--top.active {
+  border-color: rgba(234, 124, 124, 0.74);
+  background: linear-gradient(145deg, rgba(128, 60, 70, 0.44), rgba(58, 36, 43, 0.92));
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-category-card__icon {
+  border-color: rgba(131, 153, 198, 0.42);
+  background: rgba(33, 42, 61, 0.94);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-category-card small {
+  color: rgba(191, 206, 235, 0.76);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-toolbar__sort {
+  color: rgba(202, 216, 243, 0.82);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-toolbar__select {
+  border-color: rgba(112, 131, 168, 0.58);
+  background: rgba(24, 31, 45, 0.92);
+  color: #eaf1ff;
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-pagination__button,
+html[data-app-theme-resolved="dark"] .skill-market-pagination__page {
+  border-color: rgba(118, 138, 176, 0.42);
+  background: rgba(29, 37, 54, 0.9);
+  color: rgba(213, 224, 248, 0.9);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-pagination__page.active {
+  border-color: rgba(155, 179, 228, 0.62);
+  background: linear-gradient(145deg, rgba(84, 107, 154, 0.36), rgba(42, 54, 78, 0.94));
+  color: #f4f8ff;
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-card {
+  border-color: rgba(125, 145, 187, 0.3);
+  background:
+    radial-gradient(circle at top right, rgba(87, 113, 163, 0.24), transparent 46%),
+    linear-gradient(180deg, rgba(24, 31, 46, 0.94), rgba(18, 24, 36, 0.94));
+  box-shadow:
+    inset 0 1px 0 rgba(148, 170, 215, 0.16),
+    0 10px 22px rgba(6, 10, 18, 0.24);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-card:hover {
+  border-color: rgba(155, 179, 228, 0.58);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-card__avatar {
+  border-color: rgba(134, 156, 199, 0.4);
+  background: linear-gradient(145deg, rgba(70, 91, 131, 0.82), rgba(43, 54, 77, 0.92));
+  color: #ffd2ae;
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-card__title strong {
+  color: #f4f8ff;
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-card__title p {
+  color: rgba(205, 218, 242, 0.8);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-card__chips span {
+  border-color: rgba(120, 140, 177, 0.4);
+  background: rgba(31, 40, 58, 0.88);
+  color: rgba(208, 222, 246, 0.84);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-card__meta {
+  color: rgba(203, 218, 244, 0.84);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-copyright {
+  color: rgba(188, 203, 231, 0.7);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-copyright__link:hover {
+  color: rgba(221, 232, 252, 0.92);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-detail-modal__header {
+  border-bottom-color: rgba(118, 138, 176, 0.28);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-detail-modal__avatar {
+  border-color: rgba(134, 156, 199, 0.4);
+  background: linear-gradient(145deg, rgba(70, 91, 131, 0.82), rgba(43, 54, 77, 0.92));
+  color: #ffd2ae;
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-detail-modal__identity p,
+html[data-app-theme-resolved="dark"] .skill-market-detail-modal__source {
+  color: rgba(191, 207, 236, 0.72);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-detail-modal__chips span {
+  border-color: rgba(120, 140, 177, 0.4);
+  background: rgba(31, 40, 58, 0.88);
+  color: rgba(208, 222, 246, 0.84);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-detail-modal__description {
+  color: rgba(221, 231, 250, 0.86);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-detail-modal__stat {
+  border-color: rgba(118, 138, 176, 0.3);
+  background: rgba(29, 37, 54, 0.9);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-detail-modal__stat span {
+  color: rgba(187, 203, 231, 0.76);
+}
+
+html[data-app-theme-resolved="dark"] .skill-market-detail-modal__stat strong {
+  color: #f4f8ff;
+}
+
 .desktop-console-panel__resize-handle {
   position: absolute;
   right: 10px;
@@ -7970,6 +9267,10 @@ html[data-app-theme-resolved="dark"] .channel-config-modal__submit:hover:not(:di
     padding: 12px;
   }
 
+  .lobster-install-wizard__protocol-toggle {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .lobster-install-wizard__provider-save {
     width: 100%;
   }
@@ -8033,6 +9334,7 @@ html[data-app-theme-resolved="dark"] .channel-config-modal__submit:hover:not(:di
   .overview-metrics-grid,
   .overview-status-grid,
   .channel-grid,
+  .skill-market-grid,
   .lobster-action-grid,
   .bindings-config-grid,
   .management-form-grid,
@@ -8062,6 +9364,20 @@ html[data-app-theme-resolved="dark"] .channel-config-modal__submit:hover:not(:di
   .channels-config-header {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .role-workflow-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .role-workflow-search {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+
+  .role-workflow-grid {
+    grid-template-columns: 1fr;
   }
 
   .configured-channel-card__head {
@@ -8101,7 +9417,7 @@ html[data-app-theme-resolved="dark"] .channel-config-modal__submit:hover:not(:di
   }
 
   .channel-card__title-row strong {
-    font-size: 18px;
+    font-size: 16px;
   }
 
   .channel-card__content p {
@@ -8117,7 +9433,7 @@ html[data-app-theme-resolved="dark"] .channel-config-modal__submit:hover:not(:di
   }
 
   .channel-config-modal .platform-modal__header strong {
-    font-size: 30px;
+    font-size: 24px;
   }
 
   .channel-config-guide {
@@ -8178,6 +9494,52 @@ html[data-app-theme-resolved="dark"] .channel-config-modal__submit:hover:not(:di
   .ptask-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .skill-market-section__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .skill-market-category-card {
+    flex-basis: 106px;
+    min-width: 106px;
+    padding: 10px 8px;
+  }
+
+  .skill-market-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .skill-market-pagination {
+    justify-content: center;
+  }
+
+  .skill-market-pagination__button,
+  .skill-market-pagination__page {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .skill-market-toolbar__sort {
+    justify-content: space-between;
+  }
+
+  .skill-market-toolbar__select {
+    width: 100%;
+  }
+
+  .skill-market-toolbar__refresh {
+    width: 100%;
+  }
+
+  .skill-market-copyright {
+    text-align: center;
+  }
+
+  .skill-market-detail-modal__stats {
+    grid-template-columns: 1fr;
   }
 
   .ptask-tabs {
