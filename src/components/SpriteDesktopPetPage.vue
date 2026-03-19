@@ -465,9 +465,19 @@ type GatewayMonitorState = {
   checkedUrl?: string | null;
   detail?: string | null;
   latencyMs?: number | null;
+  gatewayPort?: number | null;
 };
 
-type LobsterActionId = "install" | "restart_gateway" | "auto_fix" | "backup" | "restore" | "upgrade";
+type LobsterActionId =
+  | "install"
+  | "restart_gateway"
+  | "start_gateway"
+  | "pause_gateway"
+  | "auto_fix"
+  | "backup"
+  | "restore"
+  | "upgrade";
+type LobsterRuntimeTone = "online" | "offline" | "checking" | "unconfigured" | "unsupported";
 
 type LobsterBackupItem = {
   name: string;
@@ -539,14 +549,20 @@ const LOBSTER_INSTALL_CHECK_BLUEPRINT: Array<Pick<LobsterInstallCheckItem, "id" 
   { id: "runtime", title: "Bundled OpenClaw 运行时" },
   { id: "nodejs", title: "Node.js 执行器" },
   { id: "openclaw-cli", title: "OpenClaw CLI 可执行性" },
-  { id: "state-layout", title: "OpenClaw 状态目录" },
-  { id: "plugins", title: "Bundled 插件镜像" },
-  { id: "skills", title: "预装 Skills 资源" },
-  { id: "config", title: "OpenClaw 配置目录" }
+  { id: "official-onboard", title: "官方静默安装命令" }
 ];
 
 type LobsterInstallWizardStep = 1 | 2 | 3 | 4 | 5;
 type LobsterInstallComponentStatus = "pending" | "installing" | "installed" | "failed";
+type LobsterWizardLogLevel = "info" | "success" | "warning" | "error";
+type LobsterWizardLogItem = {
+  id: string;
+  createdAt: number;
+  step: LobsterInstallWizardStep;
+  level: LobsterWizardLogLevel;
+  message: string;
+  detail?: string;
+};
 
 type LobsterProviderOption = {
   id: string;
@@ -756,6 +772,8 @@ const PET_BIND_CODE_STORAGE_KEY = "keai.desktop-pet.binding.code";
 const BOUND_PETS_STORAGE_KEY = "keai.desktop-pet.binding.peers";
 const PLATFORM_PROXY_ENABLED_STORAGE_KEY = "keai.desktop-pet.platform-proxy-enabled";
 const PLATFORM_DIRECT_BASEURL_STORAGE_KEY = "keai.desktop-pet.openclaw.platform-direct-baseurl";
+const LOBSTER_INSTALL_WIZARD_AUTOSTARTED_STORAGE_KEY = "keai.desktop-pet.lobster-wizard-autostarted";
+const LOBSTER_WIZARD_LOG_LIMIT = 120;
 const OPENCLAW_PROVIDER_DIRECT_BASEURL_PRESETS: Record<string, string> = {
   "coding-plan": "https://coding.dashscope.aliyuncs.com/v1"
 };
@@ -1005,7 +1023,7 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "context.platforms": "代理配置",
     "context.channels": "消息频道",
     "context.bindings": "宠物绑定",
-    "context.lobster": "龙虾配置",
+    "context.lobster": "龙虾管理",
     "context.logs": "日志分析",
     "context.subscription": "订阅推荐",
     "context.system": "系统设置",
@@ -1019,11 +1037,13 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.bindings": "宠物绑定",
     "console.section.tasks": "任务管理",
     "lobster.action.install.title": "龙虾安装",
-    "lobster.action.install.description": "参考 ClawPet 引导安装流程，优先检测环境，再执行安装。",
+    "lobster.action.install.description": "使用 OpenClaw 官方静默安装，并强制校验后台守护进程（关闭 ClawPet 也不影响 OpenClaw 运行）。",
     "lobster.action.install.button": "开始安装",
     "lobster.action.restart_gateway.title": "重启网关",
-    "lobster.action.restart_gateway.description": "优先执行 `openclaw gateway restart`，失败时自动回退 stop/start。",
+    "lobster.action.restart_gateway.description": "仅执行 `openclaw gateway restart --json` 重启网关。",
     "lobster.action.restart_gateway.button": "立即重启",
+    "lobster.action.start_gateway.title": "启动网关",
+    "lobster.action.pause_gateway.title": "暂停网关",
     "lobster.action.auto_fix.title": "自动修复",
     "lobster.action.auto_fix.description": "执行 `openclaw doctor --fix --yes --non-interactive` 自动修复常见问题。",
     "lobster.action.auto_fix.button": "开始修复",
@@ -1098,8 +1118,14 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "wizard.provider.skip": "跳过设置",
     "wizard.provider.skip_done": "已跳过 AI 提供商设置，可继续下一步。",
     "wizard.provider.key_tip": "您的 API 密钥仅保存在本地机器。",
+    "wizard.logs.title": "排查日志",
+    "wizard.logs.empty": "还没有日志。点击“验证并保存”或“下一步”后会记录详细过程。",
+    "wizard.logs.copy": "复制日志",
+    "wizard.logs.copied": "安装向导日志已复制。",
     "wizard.installing.title": "安装必要组件",
     "wizard.installing.subtitle": "正在设置 AI 助手所需的工具",
+    "wizard.installing.dispatching": "正在启动后台安装任务...",
+    "wizard.installing.dispatching_hint": "已进入第 4 步，安装在后台进行，请勿关闭窗口。",
     "wizard.installing.progress": "进度",
     "wizard.installing.wait": "这可能需要一点时间...",
     "wizard.installing.status.pending": "等待中",
@@ -1165,7 +1191,7 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "context.platforms": "Proxy Config",
     "context.channels": "Channels",
     "context.bindings": "Pet Binding",
-    "context.lobster": "Lobster Config",
+    "context.lobster": "Lobster Management",
     "context.logs": "Log Analysis",
     "context.subscription": "Subscription Tips",
     "context.system": "System Settings",
@@ -1179,11 +1205,13 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.bindings": "Bindings",
     "console.section.tasks": "Tasks",
     "lobster.action.install.title": "Install Lobster",
-    "lobster.action.install.description": "Follow the ClawPet guided flow: check environment first, then install.",
+    "lobster.action.install.description": "Use official silent onboarding and require background daemon verification (OpenClaw keeps running after ClawPet is closed).",
     "lobster.action.install.button": "Start Install",
     "lobster.action.restart_gateway.title": "Restart Gateway",
-    "lobster.action.restart_gateway.description": "Run `openclaw gateway restart`; fallback to stop/start if needed.",
+    "lobster.action.restart_gateway.description": "Restart gateway using `openclaw gateway restart --json` only.",
     "lobster.action.restart_gateway.button": "Restart Now",
+    "lobster.action.start_gateway.title": "Start Gateway",
+    "lobster.action.pause_gateway.title": "Pause Gateway",
     "lobster.action.auto_fix.title": "Auto Fix",
     "lobster.action.auto_fix.description": "Run `openclaw doctor --fix --yes --non-interactive` to fix common issues.",
     "lobster.action.auto_fix.button": "Start Fix",
@@ -1258,8 +1286,14 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "wizard.provider.skip": "Skip Setup",
     "wizard.provider.skip_done": "AI provider setup skipped. You can continue.",
     "wizard.provider.key_tip": "API keys are stored locally only.",
+    "wizard.logs.title": "Troubleshooting Logs",
+    "wizard.logs.empty": "No logs yet. Actions in this wizard will be recorded here.",
+    "wizard.logs.copy": "Copy Logs",
+    "wizard.logs.copied": "Wizard logs copied.",
     "wizard.installing.title": "Installing Essential Components",
     "wizard.installing.subtitle": "Setting up the tools required by your AI assistant",
+    "wizard.installing.dispatching": "Starting background installation task...",
+    "wizard.installing.dispatching_hint": "You are now on step 4. Installation is running in the background.",
     "wizard.installing.progress": "Progress",
     "wizard.installing.wait": "This may take a little while...",
     "wizard.installing.status.pending": "Pending",
@@ -1325,7 +1359,7 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "context.platforms": "プロキシ設定",
     "context.channels": "メッセージチャンネル",
     "context.bindings": "ペット連携",
-    "context.lobster": "ロブスター設定",
+    "context.lobster": "ロブスター管理",
     "context.logs": "ログ分析",
     "context.subscription": "購読ガイド",
     "context.system": "システム設定",
@@ -1339,11 +1373,13 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.bindings": "連携",
     "console.section.tasks": "タスク",
     "lobster.action.install.title": "ロブスターをインストール",
-    "lobster.action.install.description": "ClawPet のガイド手順で、先に環境確認してからインストールします。",
+    "lobster.action.install.description": "公式サイレントインストール後、バックグラウンド常駐デーモンを必ず検証します（ClawPet を閉じても OpenClaw は継続動作）。",
     "lobster.action.install.button": "インストール開始",
     "lobster.action.restart_gateway.title": "ゲートウェイ再起動",
-    "lobster.action.restart_gateway.description": "`openclaw gateway restart` を優先し、失敗時は stop/start にフォールバックします。",
+    "lobster.action.restart_gateway.description": "`openclaw gateway restart --json` のみでゲートウェイを再起動します。",
     "lobster.action.restart_gateway.button": "今すぐ再起動",
+    "lobster.action.start_gateway.title": "ゲートウェイ起動",
+    "lobster.action.pause_gateway.title": "ゲートウェイ停止",
     "lobster.action.auto_fix.title": "自動修復",
     "lobster.action.auto_fix.description": "`openclaw doctor --fix --yes --non-interactive` を実行して一般的な問題を修復します。",
     "lobster.action.auto_fix.button": "修復開始",
@@ -1418,8 +1454,14 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "wizard.provider.skip": "設定をスキップ",
     "wizard.provider.skip_done": "AI プロバイダー設定をスキップしました。次へ進めます。",
     "wizard.provider.key_tip": "API キーはローカル端末にのみ保存されます。",
+    "wizard.logs.title": "トラブルシュートログ",
+    "wizard.logs.empty": "まだログがありません。このウィザードの操作はここに記録されます。",
+    "wizard.logs.copy": "ログをコピー",
+    "wizard.logs.copied": "ウィザードログをコピーしました。",
     "wizard.installing.title": "必要コンポーネントをインストール",
     "wizard.installing.subtitle": "AI アシスタントに必要なツールをセットアップ中です",
+    "wizard.installing.dispatching": "バックグラウンドのインストールタスクを開始しています...",
+    "wizard.installing.dispatching_hint": "ステップ 4 に進みました。インストールはバックグラウンドで実行中です。",
     "wizard.installing.progress": "進捗",
     "wizard.installing.wait": "少し時間がかかる場合があります...",
     "wizard.installing.status.pending": "待機中",
@@ -1713,12 +1755,15 @@ const gatewayMonitor = ref<GatewayMonitorState>({
   status: "checking",
   checkedUrl: null,
   detail: null,
-  latencyMs: null
+  latencyMs: null,
+  gatewayPort: null
 });
 const lobsterSnapshot = ref<LobsterSnapshotResponse | null>(null);
 const lobsterActionResult = ref<LobsterActionResult | null>(null);
 const lobsterActionRunning = ref<LobsterActionId | null>(null);
 const selectedLobsterBackupPath = ref<string | null>(null);
+const isLobsterDashboardRefreshing = ref(false);
+const isLobsterControlUiOpening = ref(false);
 const isLobsterInstallWizardPrimed = ref(false);
 const isLobsterInstallWizardOpen = ref(false);
 const lobsterInstallWizardStep = ref<LobsterInstallWizardStep>(1);
@@ -1726,8 +1771,10 @@ const lobsterInstallGuide = ref<LobsterInstallGuideResponse | null>(null);
 const lobsterInstallGuideLoading = ref(false);
 const lobsterInstallRuntimeLogs = ref("");
 const lobsterInstallRunning = ref(false);
+const lobsterInstallDispatching = ref(false);
 const lobsterInstallFinishedResult = ref<LobsterActionResult | null>(null);
 const lobsterInstallProgressValue = ref(0);
+const lobsterInstallCurrentComponentIndex = ref(-1);
 const lobsterInstallRiskAccepted = ref(false);
 const appLocale = ref<AppLocale>(normalizeAppLocale(safeLocalStorageGetItem(APP_LOCALE_STORAGE_KEY)));
 const appTheme = ref<AppTheme>(normalizeAppTheme(safeLocalStorageGetItem(APP_THEME_STORAGE_KEY)));
@@ -1743,6 +1790,7 @@ const lobsterProviderForm = ref(createPlatformDraft());
 const lobsterProviderConfigured = ref(false);
 const lobsterProviderSaving = ref(false);
 const lobsterProviderShowKey = ref(false);
+const lobsterWizardLogs = ref<LobsterWizardLogItem[]>([]);
 const chatPlacement = ref({
   mode: "auto" as "auto" | "manual",
   x: 0,
@@ -2160,33 +2208,38 @@ const consoleSections = computed<Array<{ id: ConsoleSection; label: string }>>((
   { id: "bindings", label: tr("console.section.bindings") },
   { id: "tasks", label: tr("console.section.tasks") }
 ]);
-const lobsterActionCards = computed<Array<{ id: LobsterActionId; title: string; description: string; buttonLabel: string; danger?: boolean }>>(() => [
+const lobsterActionCards = computed<Array<{ id: LobsterActionId; icon: string; title: string; description: string; buttonLabel: string; danger?: boolean }>>(() => [
   {
     id: "install",
+    icon: "🦞",
     title: tr("lobster.action.install.title"),
     description: tr("lobster.action.install.description"),
     buttonLabel: tr("lobster.action.install.button")
   },
   {
     id: "restart_gateway",
+    icon: "🔄",
     title: tr("lobster.action.restart_gateway.title"),
     description: tr("lobster.action.restart_gateway.description"),
     buttonLabel: tr("lobster.action.restart_gateway.button")
   },
   {
     id: "auto_fix",
+    icon: "🛠",
     title: tr("lobster.action.auto_fix.title"),
     description: tr("lobster.action.auto_fix.description"),
     buttonLabel: tr("lobster.action.auto_fix.button")
   },
   {
     id: "backup",
+    icon: "💾",
     title: tr("lobster.action.backup.title"),
     description: tr("lobster.action.backup.description"),
     buttonLabel: tr("lobster.action.backup.button")
   },
   {
     id: "restore",
+    icon: "📂",
     title: tr("lobster.action.restore.title"),
     description: tr("lobster.action.restore.description"),
     buttonLabel: tr("lobster.action.restore.button"),
@@ -2194,11 +2247,115 @@ const lobsterActionCards = computed<Array<{ id: LobsterActionId; title: string; 
   },
   {
     id: "upgrade",
+    icon: "⬆",
     title: tr("lobster.action.upgrade.title"),
     description: tr("lobster.action.upgrade.description"),
     buttonLabel: tr("lobster.action.upgrade.button")
   }
 ]);
+const lobsterRuntimeStatus = computed<{ tone: LobsterRuntimeTone; icon: string; label: string; detail: string }>(() => {
+  const snapshot = lobsterSnapshot.value;
+  if (!snapshot?.openclawInstalled) {
+    return {
+      tone: "offline",
+      icon: "⛔",
+      label: "未安装",
+      detail: "未检测到 OpenClaw，可先执行“龙虾安装”。"
+    };
+  }
+
+  const status = gatewayMonitor.value.status;
+  if (status === "online") {
+    const latency = typeof gatewayMonitor.value.latencyMs === "number" ? `，延迟 ${gatewayMonitor.value.latencyMs} ms` : "";
+    return {
+      tone: "online",
+      icon: "🟢",
+      label: "运行中",
+      detail: `OpenClaw 网关已连通${latency}。`.trim()
+    };
+  }
+
+  if (status === "checking") {
+    return {
+      tone: "checking",
+      icon: "🟡",
+      label: "检测中",
+      detail: "正在探测 OpenClaw 网关状态，请稍候。"
+    };
+  }
+
+  if (status === "unconfigured") {
+    return {
+      tone: "unconfigured",
+      icon: "🟠",
+      label: "待配置",
+      detail: gatewayMonitor.value.detail || "网关尚未完成配置，请先完成引导。"
+    };
+  }
+
+  if (status === "unsupported") {
+    return {
+      tone: "unsupported",
+      icon: "⚪",
+      label: "不可检测",
+      detail: gatewayMonitor.value.detail || "当前环境暂不支持网关探测。"
+    };
+  }
+
+  return {
+    tone: "offline",
+    icon: "🔴",
+    label: "未运行",
+    detail: gatewayMonitor.value.detail || "OpenClaw 网关未运行，可尝试执行“重启网关”。"
+  };
+});
+function resolveGatewayPortLabel(monitor: GatewayMonitorState) {
+  if (typeof monitor.gatewayPort === "number" && Number.isInteger(monitor.gatewayPort) && monitor.gatewayPort > 0) {
+    return String(monitor.gatewayPort);
+  }
+
+  const checkedUrl = monitor.checkedUrl?.trim();
+  if (!checkedUrl) {
+    return "未知";
+  }
+
+  try {
+    const parsed = new URL(checkedUrl);
+    const port =
+      parsed.port.trim() === ""
+        ? parsed.protocol === "http:"
+          ? 80
+          : parsed.protocol === "https:"
+            ? 443
+            : NaN
+        : Number.parseInt(parsed.port, 10);
+    if (Number.isInteger(port) && port > 0) {
+      return String(port);
+    }
+  } catch {
+    return "未知";
+  }
+
+  return "未知";
+}
+const lobsterGatewayPortSummary = computed(() => resolveGatewayPortLabel(gatewayMonitor.value));
+const lobsterVersionSummary = computed(() => {
+  const snapshot = lobsterSnapshot.value;
+  if (!snapshot?.openclawInstalled) {
+    return "未安装";
+  }
+  return snapshot.openclawVersion ? `v${snapshot.openclawVersion}` : "已安装（版本未知）";
+});
+const lobsterBackupSummary = computed(() => `${lobsterSnapshot.value?.backups?.length ?? 0} 个备份`);
+const lobsterBackupMeta = computed(() => {
+  const latestBackup = lobsterSnapshot.value?.backups?.[0];
+  if (!latestBackup) {
+    return "暂无备份，可先执行“龙虾备份”。";
+  }
+  return `最近备份：${latestBackup.name} · ${formatTime(latestBackup.createdAtMs)}`;
+});
+const lobsterHomeSummary = computed(() => lobsterSnapshot.value?.openclawHome || "~/.openclaw");
+const lobsterBackupDirSummary = computed(() => lobsterSnapshot.value?.backupDir || "备份目录待检测");
 const lobsterInstallWizardSteps = computed<Array<{ id: LobsterInstallWizardStep; title: string; description: string }>>(() => [
   { id: 1, title: tr("wizard.step.1.title"), description: tr("wizard.step.1.description") },
   { id: 2, title: tr("wizard.step.2.title"), description: tr("wizard.step.2.description") },
@@ -2233,21 +2390,37 @@ const lobsterInstallComponentItems = computed<Array<{ id: string; name: string; 
     description: tr("wizard.installing.component.terminal.description")
   }
 ]);
-const lobsterInstallComponentStatus = computed<LobsterInstallComponentStatus>(() => {
+const lobsterInstallComponentStates = computed(() => {
+  const items = lobsterInstallComponentItems.value;
+  const activeIndex = lobsterInstallCurrentComponentIndex.value;
+
   if (lobsterInstallRunning.value) {
-    return "installing";
+    return items.map((item, index) => ({
+      ...item,
+      status: (index < activeIndex ? "installed" : index === activeIndex ? "installing" : "pending") as LobsterInstallComponentStatus
+    }));
   }
-  if (!lobsterInstallFinishedResult.value) {
-    return "pending";
+
+  if (lobsterInstallFinishedResult.value?.success) {
+    return items.map((item) => ({
+      ...item,
+      status: "installed" as LobsterInstallComponentStatus
+    }));
   }
-  return lobsterInstallFinishedResult.value.success ? "installed" : "failed";
-});
-const lobsterInstallComponentStates = computed(() =>
-  lobsterInstallComponentItems.value.map((item) => ({
+
+  if (lobsterInstallFinishedResult.value && !lobsterInstallFinishedResult.value.success && activeIndex >= 0) {
+    return items.map((item, index) => ({
+      ...item,
+      status: (index < activeIndex ? "installed" : index === activeIndex ? "failed" : "pending") as LobsterInstallComponentStatus
+    }));
+  }
+
+  return items.map((item) => ({
     ...item,
-    status: lobsterInstallComponentStatus.value
-  }))
-);
+    status: "pending" as LobsterInstallComponentStatus
+  }));
+});
+const lobsterInstallBusy = computed(() => lobsterInstallRunning.value || lobsterInstallDispatching.value);
 const lobsterInstallProgressDisplay = computed(() => {
   if (lobsterInstallFinishedResult.value) {
     return 100;
@@ -2524,6 +2697,19 @@ const lobsterProviderCanSave = computed(() =>
   lobsterProviderForm.value.model.trim().length > 0 &&
   (!lobsterProviderRequiresApiKey.value || lobsterProviderForm.value.apiKey.trim().length > 0)
 );
+const lobsterWizardLogsPlainText = computed(() => {
+  if (!lobsterWizardLogs.value.length) {
+    return tr("wizard.logs.empty");
+  }
+  return lobsterWizardLogs.value
+    .slice()
+    .reverse()
+    .map((item) => {
+      const head = `[${formatLobsterWizardLogTime(item.createdAt)}][Step ${item.step}][${item.level.toUpperCase()}] ${item.message}`;
+      return item.detail ? `${head}\n${item.detail}` : head;
+    })
+    .join("\n\n");
+});
 const lobsterInstallStepTitle = computed(
   () => lobsterInstallWizardSteps.value.find((item) => item.id === lobsterInstallWizardStep.value)?.title ?? tr("wizard.step.1.title")
 );
@@ -2935,6 +3121,10 @@ const consolePanelStyle = computed(() => {
       ? Math.min(Math.max(minHeight, panelPlacement.value.height), availableHeight)
       : defaultHeight;
   const margin = 16;
+  const centeredAutoPosition = {
+    left: Math.min(Math.max(margin, (viewportWidth - panelWidth) / 2), Math.max(margin, viewportWidth - panelWidth - margin)),
+    top: Math.min(Math.max(margin, (viewportHeight - panelHeight) / 2), Math.max(margin, viewportHeight - panelHeight - margin))
+  };
   const gap = 18;
   const petClearance = 18;
   const petCenterX = petPosition.value.x + viewportSize.value / 2;
@@ -2975,14 +3165,15 @@ const consolePanelStyle = computed(() => {
       const candidateDistance = Math.hypot(candidateCenterX - petCenterX, candidateCenterY - petCenterY);
       return candidateDistance > bestDistance ? candidate : best;
     });
+  const autoPosition = activePanelMode.value === "console" ? centeredAutoPosition : bestAutoPosition;
   const left =
     panelPlacement.value.mode === "manual"
       ? Math.min(Math.max(16, panelPlacement.value.x), Math.max(16, viewportWidth - panelWidth - 16))
-      : bestAutoPosition.left;
+      : autoPosition.left;
   const top =
     panelPlacement.value.mode === "manual"
       ? Math.min(Math.max(16, panelPlacement.value.y), Math.max(16, viewportHeight - panelHeight - 16))
-      : bestAutoPosition.top;
+      : autoPosition.top;
   const progress = panelMotionValue.value;
   const originX = "center";
 
@@ -3874,6 +4065,34 @@ function safeJson(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+function toErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  if (typeof error === "string") {
+    const trimmed = error.trim();
+    return trimmed || fallback;
+  }
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const candidates = [record.message, record.error, record.detail, record.reason];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+    try {
+      const text = JSON.stringify(error);
+      if (text && text !== "{}") {
+        return text;
+      }
+    } catch {
+      // Ignore stringify errors.
+    }
+  }
+  return fallback;
 }
 
 function extractAudioPath(text: string) {
@@ -5682,8 +5901,8 @@ function openLobsterConfig() {
     startPanelAnimation();
   }
 
-  statusText.value = "龙虾配置已打开，可执行安装、重启、修复、备份、恢复和升级。";
-  void refreshLobsterSnapshot();
+  statusText.value = "龙虾管理已打开，可执行安装、重启、修复、备份、恢复和升级。";
+  void refreshLobsterDashboard();
   applyBaseAnimation();
 }
 
@@ -5752,7 +5971,15 @@ function queueIdleAction() {
   }, autoplayDelayMs);
 }
 
-function clampPetPosition(nextX: number, nextY: number) {
+function clampPetPosition(
+  nextX: number,
+  nextY: number,
+  options: { allowOverflow?: boolean } = {}
+) {
+  if (options.allowOverflow) {
+    return { x: nextX, y: nextY };
+  }
+
   const bounds = stage.value?.getBoundingClientRect();
 
   if (!bounds) {
@@ -5766,6 +5993,36 @@ function clampPetPosition(nextX: number, nextY: number) {
     x: Math.min(Math.max(0, nextX), maxX),
     y: Math.min(Math.max(0, nextY), maxY)
   };
+}
+
+function dockPetToViewportEdge(
+  position: { x: number; y: number },
+  pointerClientX: number,
+  pointerClientY: number
+) {
+  const bounds = stage.value?.getBoundingClientRect();
+  if (!bounds) {
+    return position;
+  }
+
+  const edgeThreshold = 4;
+  const maxX = Math.max(0, bounds.width - viewportSize.value);
+  const maxY = Math.max(0, bounds.height - viewportSize.value);
+  const docked = { ...position };
+
+  if (pointerClientX <= edgeThreshold) {
+    docked.x = 0;
+  } else if (pointerClientX >= bounds.width - edgeThreshold) {
+    docked.x = maxX;
+  }
+
+  if (pointerClientY <= edgeThreshold) {
+    docked.y = 0;
+  } else if (pointerClientY >= bounds.height - edgeThreshold) {
+    docked.y = maxY;
+  }
+
+  return docked;
 }
 
 function centerPet() {
@@ -5829,7 +6086,13 @@ async function handlePointerDown(event: PointerEvent) {
   if (availableMonitors.length === 0) {
     await loadAvailableMonitors();
   }
-  currentMonitorIndex = getMonitorIndexAtScreenPoint(event.screenX, event.screenY);
+  currentMonitorIndex = getMonitorIndexAtScreenPoint(event.screenX, event.screenY, currentMonitorIndex);
+  const invoke = getTauriApi()?.core?.invoke;
+  if (invoke && availableMonitors.length > 0) {
+    void invoke("move_window_to_monitor", { index: currentMonitorIndex }).catch(() => {
+      // 当前屏幕窗口尺寸校正失败时，仍允许继续拖拽
+    });
+  }
   pendingDragOffset = null;
 
   dragPointerId = event.pointerId;
@@ -5844,7 +6107,7 @@ async function handlePointerDown(event: PointerEvent) {
   petEl.setPointerCapture(event.pointerId);
   noteInteraction();
   wakeThenAnimate("act_cute_rotation", "act_cute_rotation");
-  statusText.value = "拖着我走吧，我会老老实实待在舞台里。";
+  statusText.value = "拖着我走吧，跨屏移动也能紧跟你。";
 }
 
 async function handlePointerMove(event: PointerEvent) {
@@ -5855,7 +6118,8 @@ async function handlePointerMove(event: PointerEvent) {
   if (pendingDragOffset) {
     const nextX = event.clientX - pendingDragOffset.x;
     const nextY = event.clientY - pendingDragOffset.y;
-    petPosition.value = clampPetPosition(nextX, nextY);
+    const clampedPosition = clampPetPosition(nextX, nextY, { allowOverflow: true });
+    petPosition.value = clampedPosition;
     dragStart = {
       x: event.clientX,
       y: event.clientY,
@@ -5867,7 +6131,7 @@ async function handlePointerMove(event: PointerEvent) {
     return;
   }
 
-  const monitorIndex = getMonitorIndexAtScreenPoint(event.screenX, event.screenY);
+  const monitorIndex = getMonitorIndexAtScreenPoint(event.screenX, event.screenY, currentMonitorIndex);
   if (
     availableMonitors.length > 1 &&
     monitorIndex !== currentMonitorIndex
@@ -5895,7 +6159,8 @@ async function handlePointerMove(event: PointerEvent) {
   const dy = event.clientY - dragStart.y;
 
   dragDistance.value = Math.hypot(dx, dy);
-  petPosition.value = clampPetPosition(nextX, nextY);
+  const clampedPosition = clampPetPosition(nextX, nextY, { allowOverflow: true });
+  petPosition.value = clampedPosition;
   noteInteraction();
 }
 
@@ -5909,6 +6174,8 @@ function finishDrag(event?: PointerEvent) {
   }
 
   pendingDragOffset = null;
+  const clampedPosition = clampPetPosition(petPosition.value.x, petPosition.value.y);
+  petPosition.value = event ? dockPetToViewportEdge(clampedPosition, event.clientX, event.clientY) : clampedPosition;
   isDragging.value = false;
   dragPointerId = null;
   noteInteraction();
@@ -5998,8 +6265,8 @@ async function loadAvailableMonitors(): Promise<void> {
   }
 }
 
-/** 返回包含 (screenX, screenY) 的显示器索引，未找到返回 0 */
-function getMonitorIndexAtScreenPoint(screenX: number, screenY: number): number {
+/** 返回包含 (screenX, screenY) 的显示器索引，未找到时返回 fallbackIndex */
+function getMonitorIndexAtScreenPoint(screenX: number, screenY: number, fallbackIndex = 0): number {
   for (let i = 0; i < availableMonitors.length; i++) {
     const m = availableMonitors[i];
     const [px, py] = m.position;
@@ -6008,7 +6275,7 @@ function getMonitorIndexAtScreenPoint(screenX: number, screenY: number): number 
       return i;
     }
   }
-  return 0;
+  return fallbackIndex;
 }
 
 async function openCodingPlanPlatform(url: string) {
@@ -6329,7 +6596,8 @@ async function refreshGatewayMonitor() {
       status: "unsupported",
       checkedUrl: null,
       detail: "当前运行环境不支持网关探测。",
-      latencyMs: null
+      latencyMs: null,
+      gatewayPort: null
     };
     return;
   }
@@ -6352,14 +6620,16 @@ async function refreshGatewayMonitor() {
           : "offline",
       checkedUrl: typeof result.checkedUrl === "string" ? result.checkedUrl : null,
       detail: typeof result.detail === "string" ? result.detail : null,
-      latencyMs: typeof result.latencyMs === "number" ? result.latencyMs : null
+      latencyMs: typeof result.latencyMs === "number" ? result.latencyMs : null,
+      gatewayPort: typeof result.gatewayPort === "number" ? result.gatewayPort : null
     };
   } catch (error) {
     gatewayMonitor.value = {
       status: "offline",
       checkedUrl: null,
       detail: error instanceof Error ? error.message : "网关状态检查失败。",
-      latencyMs: null
+      latencyMs: null,
+      gatewayPort: null
     };
   }
 }
@@ -6367,6 +6637,8 @@ async function refreshGatewayMonitor() {
 function getLobsterActionTitle(action: LobsterActionId | string) {
   if (action === "install") return tr("lobster.action.install.title");
   if (action === "restart_gateway") return tr("lobster.action.restart_gateway.title");
+  if (action === "start_gateway") return tr("lobster.action.start_gateway.title");
+  if (action === "pause_gateway") return tr("lobster.action.pause_gateway.title");
   if (action === "auto_fix") return tr("lobster.action.auto_fix.title");
   if (action === "backup") return tr("lobster.action.backup.title");
   if (action === "restore") return tr("lobster.action.restore.title");
@@ -6451,6 +6723,36 @@ function ensureLobsterInstallWizardPrimed() {
     return;
   }
   isLobsterInstallWizardPrimed.value = true;
+}
+
+function formatLobsterWizardLogTime(timestamp: number) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "--:--:--";
+  }
+  return date.toLocaleTimeString([], { hour12: false });
+}
+
+function appendLobsterWizardLog(level: LobsterWizardLogLevel, message: string, detail = "") {
+  const normalizedMessage = message.trim();
+  if (!normalizedMessage) {
+    return;
+  }
+  const normalizedDetail = detail.trim();
+  const now = Date.now();
+  const nextItem: LobsterWizardLogItem = {
+    id: `lobster-log-${now}-${Math.random().toString(16).slice(2, 8)}`,
+    createdAt: now,
+    step: lobsterInstallWizardStep.value,
+    level,
+    message: normalizedMessage,
+    detail: normalizedDetail || undefined
+  };
+  lobsterWizardLogs.value = [nextItem, ...lobsterWizardLogs.value].slice(0, LOBSTER_WIZARD_LOG_LIMIT);
+}
+
+function clearLobsterWizardLogs() {
+  lobsterWizardLogs.value = [];
 }
 
 function getLobsterProviderOptionByDraft(draft: Pick<PlatformDraft, "name" | "protocol" | "baseUrl" | "pathPrefix">) {
@@ -6593,11 +6895,12 @@ function openLobsterProviderDocs() {
 }
 
 function handleLobsterProviderSkip() {
-  if (lobsterInstallWizardStep.value !== 3 || lobsterInstallRunning.value || lobsterProviderSaving.value) {
+  if (lobsterInstallWizardStep.value !== 3 || lobsterInstallBusy.value || lobsterProviderSaving.value) {
     return;
   }
   lobsterProviderConfigured.value = true;
   statusText.value = tr("wizard.provider.skip_done");
+  appendLobsterWizardLog("warning", "已跳过 AI 提供商验证，直接继续后续安装。");
 }
 
 async function saveLobsterProviderFromWizard() {
@@ -6616,9 +6919,15 @@ async function saveLobsterProviderFromWizard() {
     const nextPathPrefix = normalizePathPrefix(lobsterProviderForm.value.pathPrefix);
     const nextModel = lobsterProviderForm.value.model.trim();
     const providerId = resolveLobsterProviderIdForOpenClaw();
+    appendLobsterWizardLog(
+      "info",
+      `开始保存提供商配置：${nextName || providerId}`,
+      `providerId=${providerId}\nprotocol=${nextProtocol}\napi=${nextApiKind}\nbaseUrl=${nextBaseUrl}\nmodel=${nextModel}\npathPrefix=${nextPathPrefix}`
+    );
     const selectedOption = lobsterEffectiveProviderOption.value;
     if (selectedOption?.requiresApiKey !== false && !nextApiKey) {
       statusText.value = "当前提供商需要 API 密钥，请先填写。";
+      appendLobsterWizardLog("warning", "保存失败：缺少 API 密钥。");
       return;
     }
 
@@ -6662,20 +6971,23 @@ async function saveLobsterProviderFromWizard() {
 
     lobsterProviderConfigured.value = true;
     statusText.value = `AI 提供商「${nextName}」已写入 openclaw.json。`;
+    appendLobsterWizardLog("success", `提供商配置已保存：${nextName || providerId}`);
   } catch (error) {
     lobsterProviderConfigured.value = false;
-    statusText.value = error instanceof Error ? error.message : "写入 openclaw.json 失败。";
+    const detail = toErrorMessage(error, "写入 openclaw.json 失败。");
+    statusText.value = detail;
+    appendLobsterWizardLog("error", "写入 openclaw.json 失败。", detail);
   } finally {
     lobsterProviderSaving.value = false;
   }
 }
 
-async function refreshLobsterSnapshot() {
+async function refreshLobsterSnapshot(): Promise<LobsterSnapshotResponse | null> {
   const tauriApi = getTauriApi();
   const invoke = tauriApi?.core?.invoke;
   if (!invoke) {
     lobsterSnapshot.value = null;
-    return;
+    return null;
   }
 
   try {
@@ -6683,11 +6995,44 @@ async function refreshLobsterSnapshot() {
     lobsterSnapshot.value = result;
     const paths = new Set((result.backups ?? []).map((item) => item.path));
     if (selectedLobsterBackupPath.value && paths.has(selectedLobsterBackupPath.value)) {
-      return;
+      return result;
     }
     selectedLobsterBackupPath.value = result.backups?.[0]?.path ?? null;
+    return result;
   } catch (error) {
-    statusText.value = error instanceof Error ? error.message : "读取龙虾状态失败。";
+    statusText.value = toErrorMessage(error, "读取龙虾状态失败。");
+    return null;
+  }
+}
+
+async function refreshLobsterDashboard() {
+  if (isLobsterDashboardRefreshing.value) {
+    return;
+  }
+  isLobsterDashboardRefreshing.value = true;
+  try {
+    await Promise.all([refreshLobsterSnapshot(), refreshGatewayMonitor()]);
+  } finally {
+    isLobsterDashboardRefreshing.value = false;
+  }
+}
+
+async function openLobsterControlUi() {
+  const invoke = getTauriApi()?.core?.invoke;
+  if (!invoke || isLobsterControlUiOpening.value) {
+    return;
+  }
+
+  isLobsterControlUiOpening.value = true;
+  try {
+    const openedUrl = (await invoke("build_openclaw_control_ui_url")) as string;
+    await invoke("open_external_url", { url: openedUrl });
+    statusText.value = openedUrl ? `已打开 OpenClaw 网页端：${openedUrl}` : "已打开 OpenClaw 网页端。";
+    await refreshGatewayMonitor();
+  } catch (error) {
+    statusText.value = toErrorMessage(error, "打开 OpenClaw 网页端失败。");
+  } finally {
+    isLobsterControlUiOpening.value = false;
   }
 }
 
@@ -6696,6 +7041,7 @@ async function refreshLobsterInstallGuide() {
   const invoke = getTauriApi()?.core?.invoke;
   lobsterInstallGuide.value = createPendingLobsterInstallGuide();
   lobsterInstallGuideLoading.value = true;
+  appendLobsterWizardLog("info", "开始执行环境检查。");
 
   const applyGuideWithProgress = async (guide: LobsterInstallGuideResponse) => {
     const normalized = normalizeLobsterInstallGuideResponse(guide);
@@ -6747,14 +7093,27 @@ async function refreshLobsterInstallGuide() {
 
   try {
     if (!invoke) {
-      await applyGuideWithProgress(buildErrorGuide("当前环境不支持安装检查，请在桌面端执行。"));
+      const detail = "当前环境不支持安装检查，请在桌面端执行。";
+      await applyGuideWithProgress(buildErrorGuide(detail));
+      appendLobsterWizardLog("error", "环境检查不可用。", detail);
       return;
     }
 
     const guide = (await invoke("load_lobster_install_guide")) as LobsterInstallGuideResponse;
     await applyGuideWithProgress(guide);
+    if (guide.ready) {
+      appendLobsterWizardLog("success", "环境检查通过，可进入下一步。");
+    } else {
+      const failedChecks = guide.checks
+        .filter((item) => item.status === "failed")
+        .map((item) => `${item.title}: ${item.detail}`)
+        .join("\n");
+      appendLobsterWizardLog("warning", "环境检查未通过，请先修复后继续。", failedChecks);
+    }
   } catch (error) {
-    await applyGuideWithProgress(buildErrorGuide(error instanceof Error ? error.message : "加载安装检查失败。"));
+    const detail = toErrorMessage(error, "加载安装检查失败。");
+    await applyGuideWithProgress(buildErrorGuide(detail));
+    appendLobsterWizardLog("error", "加载环境检查失败。", detail);
   } finally {
     if (requestToken === lobsterInstallGuideRefreshToken) {
       lobsterInstallGuideLoading.value = false;
@@ -6765,12 +7124,18 @@ async function refreshLobsterInstallGuide() {
 function startLobsterInstallProgress() {
   window.clearInterval(lobsterInstallProgressTimer);
   lobsterInstallProgressValue.value = 10;
+  lobsterInstallCurrentComponentIndex.value = 0;
   lobsterInstallProgressTimer = window.setInterval(() => {
     if (!lobsterInstallRunning.value) {
       return;
     }
     const nextValue = lobsterInstallProgressValue.value + 3 + Math.floor(Math.random() * 5);
     lobsterInstallProgressValue.value = Math.min(92, nextValue);
+    const componentCount = lobsterInstallComponentItems.value.length;
+    if (componentCount > 0) {
+      const nextIndex = Math.min(componentCount - 1, Math.floor((lobsterInstallProgressValue.value / 100) * componentCount));
+      lobsterInstallCurrentComponentIndex.value = Math.max(0, nextIndex);
+    }
   }, 420);
 }
 
@@ -6782,15 +7147,19 @@ function openLobsterInstallWizard() {
   ensureLobsterInstallWizardPrimed();
   isLobsterInstallWizardOpen.value = true;
   lobsterInstallWizardStep.value = 1;
+  clearLobsterWizardLogs();
   lobsterInstallRiskAccepted.value = false;
   lobsterInstallRuntimeLogs.value = "";
   lobsterInstallFinishedResult.value = null;
   lobsterInstallRunning.value = false;
+  lobsterInstallDispatching.value = false;
   lobsterInstallProgressValue.value = 0;
+  lobsterInstallCurrentComponentIndex.value = -1;
   stopLobsterInstallProgress();
   lobsterInstallGuide.value = null;
   lobsterProviderShowKey.value = false;
   statusText.value = "已进入龙虾安装引导。";
+  appendLobsterWizardLog("info", "已进入安装向导。");
   void syncCursorPassThrough();
 
   // Defer heavier form initialization to the next frame so the modal appears instantly.
@@ -6800,41 +7169,88 @@ function openLobsterInstallWizard() {
 }
 
 function closeLobsterInstallWizard() {
-  if (lobsterInstallRunning.value) {
+  if (lobsterInstallBusy.value) {
     return;
   }
   stopLobsterInstallProgress();
   isLobsterInstallWizardOpen.value = false;
 }
 
+async function autoOpenLobsterInstallWizardForFirstLaunch() {
+  if (isConsoleWindowMode) {
+    return;
+  }
+  if (safeLocalStorageGetItem(LOBSTER_INSTALL_WIZARD_AUTOSTARTED_STORAGE_KEY) === "1") {
+    return;
+  }
+  safeLocalStorageSetItem(LOBSTER_INSTALL_WIZARD_AUTOSTARTED_STORAGE_KEY, "1");
+
+  openLobsterInstallWizard();
+  appendLobsterWizardLog("info", "首次启动，自动打开安装向导。");
+  const snapshot = await refreshLobsterSnapshot();
+  if (!snapshot?.openclawInstalled || !isLobsterInstallWizardOpen.value) {
+    return;
+  }
+
+  const versionLabel = snapshot.openclawVersion ? `（版本 ${snapshot.openclawVersion}）` : "";
+  const confirmed = window.confirm(`检测到当前设备已安装 OpenClaw${versionLabel}，是否继续安装？`);
+  if (!confirmed) {
+    appendLobsterWizardLog("warning", "检测到已安装 OpenClaw，用户选择不继续安装。");
+    statusText.value = "检测到 OpenClaw 已安装，已跳过安装引导。";
+    closeLobsterInstallWizard();
+    return;
+  }
+
+  appendLobsterWizardLog("info", "检测到已安装 OpenClaw，用户选择继续安装。");
+  statusText.value = "检测到 OpenClaw 已安装，你可以继续安装或直接关闭向导。";
+}
+
 async function startLobsterInstallFromWizard() {
   const tauriApi = getTauriApi();
   const invoke = tauriApi?.core?.invoke;
   if (!invoke || lobsterInstallRunning.value || lobsterActionRunning.value) {
+    lobsterInstallDispatching.value = false;
+    appendLobsterWizardLog("error", "无法启动安装流程：当前环境不支持或已有任务正在运行。");
     return;
   }
 
+  lobsterInstallDispatching.value = false;
   lobsterInstallRunning.value = true;
   lobsterActionRunning.value = "install";
   lobsterInstallRuntimeLogs.value = "";
   lobsterInstallFinishedResult.value = null;
   startLobsterInstallProgress();
+  appendLobsterWizardLog("info", "开始执行官方静默安装命令。");
 
   try {
     const result = (await invoke("run_lobster_action", { action: "install" })) as LobsterActionResult;
     lobsterActionResult.value = result;
     lobsterInstallFinishedResult.value = result;
     lobsterInstallProgressValue.value = 100;
+    lobsterInstallCurrentComponentIndex.value = lobsterInstallComponentItems.value.length - 1;
     lobsterInstallRuntimeLogs.value = [result.command, result.stdout, result.stderr].filter(Boolean).join("\n\n").trim();
     statusText.value = result.success ? "龙虾安装执行完成。" : `龙虾安装执行失败：${result.detail}`;
+    appendLobsterWizardLog(
+      result.success ? "success" : "error",
+      result.success ? "官方静默安装执行完成。" : "官方静默安装执行失败。",
+      [result.command, result.detail, result.stderr].filter(Boolean).join("\n")
+    );
     await new Promise((resolve) => window.setTimeout(resolve, 220));
     await refreshLobsterSnapshot();
     await refreshGatewayMonitor();
+    if (result.success) {
+      try {
+        const openedUrl = (await invoke("open_openclaw_control_ui")) as string;
+        statusText.value = openedUrl ? `龙虾安装执行完成，已打开 OpenClaw 控制台：${openedUrl}` : "龙虾安装执行完成，已打开 OpenClaw 控制台。";
+      } catch {
+        // Ignore auto-open failure; user can still open dashboard manually.
+      }
+    }
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "龙虾安装执行失败。";
+    const detail = toErrorMessage(error, "龙虾安装执行失败。");
     lobsterInstallFinishedResult.value = {
       action: "install",
-      command: "npm install -g openclaw@latest",
+      command: "openclaw onboard --non-interactive",
       success: false,
       detail,
       exitCode: null,
@@ -6844,11 +7260,16 @@ async function startLobsterInstallFromWizard() {
       backupPath: null
     };
     lobsterInstallProgressValue.value = 100;
+    if (lobsterInstallCurrentComponentIndex.value < 0) {
+      lobsterInstallCurrentComponentIndex.value = 0;
+    }
     lobsterInstallRuntimeLogs.value = detail;
     statusText.value = detail;
+    appendLobsterWizardLog("error", "安装命令调用失败。", detail);
     await new Promise((resolve) => window.setTimeout(resolve, 220));
   } finally {
     stopLobsterInstallProgress();
+    lobsterInstallDispatching.value = false;
     lobsterActionRunning.value = null;
     lobsterInstallRunning.value = false;
     lobsterInstallWizardStep.value = 5;
@@ -6858,6 +7279,7 @@ async function startLobsterInstallFromWizard() {
 async function handleLobsterInstallWizardNext() {
   if (lobsterInstallWizardStep.value === 1) {
     lobsterInstallWizardStep.value = 2;
+    appendLobsterWizardLog("info", "进入第 2 步：环境检查。");
     if (!lobsterInstallGuide.value) {
       await refreshLobsterInstallGuide();
     }
@@ -6867,15 +7289,23 @@ async function handleLobsterInstallWizardNext() {
   if (lobsterInstallWizardStep.value === 2) {
     if (!lobsterInstallGuide.value?.ready) {
       statusText.value = "请先完成环境检查，再进入下一步。";
+      appendLobsterWizardLog("warning", "环境检查未通过，无法进入下一步。");
       return;
     }
     lobsterInstallWizardStep.value = 3;
+    appendLobsterWizardLog("info", "进入第 3 步：配置 AI 提供商。");
     return;
   }
 
   if (lobsterInstallWizardStep.value === 3) {
     lobsterInstallWizardStep.value = 4;
-    await startLobsterInstallFromWizard();
+    lobsterInstallDispatching.value = true;
+    statusText.value = "已进入第 4 步，正在后台启动官方静默安装...";
+    appendLobsterWizardLog("info", "进入第 4 步：开始安装组件。");
+    await nextTick();
+    window.setTimeout(() => {
+      void startLobsterInstallFromWizard();
+    }, 0);
     return;
   }
 
@@ -6885,7 +7315,7 @@ async function handleLobsterInstallWizardNext() {
 }
 
 function handleLobsterInstallWizardBack() {
-  if (lobsterInstallRunning.value) {
+  if (lobsterInstallBusy.value) {
     return;
   }
   if (lobsterInstallWizardStep.value > 1 && lobsterInstallWizardStep.value < 5) {
@@ -6929,8 +7359,15 @@ async function runLobsterAction(action: LobsterActionId) {
       ? `${getLobsterActionTitle(action)}执行完成。`
       : `${getLobsterActionTitle(action)}执行失败：${result.detail}`;
     await refreshLobsterSnapshot();
+    if (result.success && (action === "restart_gateway" || action === "start_gateway")) {
+      try {
+        await invoke("open_openclaw_control_ui");
+      } catch {
+        // Ignore auto-open failure.
+      }
+    }
   } catch (error) {
-    statusText.value = error instanceof Error ? error.message : `${getLobsterActionTitle(action)}执行失败。`;
+    statusText.value = toErrorMessage(error, `${getLobsterActionTitle(action)}执行失败。`);
   } finally {
     lobsterActionRunning.value = null;
   }
@@ -7047,6 +7484,7 @@ function unbindSystemThemeListener() {
 }
 
 function openSystemSettings() {
+  hideContextMenu();
   // 打开时用当前真实值初始化草稿
   systemSettingsPreviewBaseLocale.value = appLocale.value;
   systemSettingsPreviewBaseTheme.value = appTheme.value;
@@ -7195,10 +7633,16 @@ function handleEscape(event: KeyboardEvent) {
 
 function handleFocus() {
   isWindowActive.value = true;
+  if (!isConsoleWindowMode) {
+    void applyAlwaysOnTop(petAlwaysOnTop.value);
+  }
 }
 
 function handleBlur() {
   isWindowActive.value = false;
+  if (isConsoleOpen.value && !isConsoleWindowMode) {
+    void applyAlwaysOnTop(false);
+  }
 }
 
 function handleVisibilityChange() {
@@ -7210,6 +7654,7 @@ function handleVisibilityChange() {
 
 function handleContextMenu(event: MouseEvent) {
   event.preventDefault();
+  void setWindowIgnoreCursorEvents(false);
   const initialPosition = clampContextMenuPosition(
     event.clientX,
     event.clientY,
@@ -7233,36 +7678,16 @@ function handleWindowPointerDown(event: PointerEvent) {
     lastSelectInteractionAt = performance.now();
   }
 
-  if (activeRoleWorkflowBase.value && event.target instanceof HTMLElement && event.target.closest(".role-workflow-detail-modal")) {
+  if (!contextMenu.value.visible) {
     return;
   }
 
-  if (staffDeleteTargetMember.value && event.target instanceof HTMLElement && event.target.closest(".staff-delete-modal")) {
+  if (!(event.target instanceof Element)) {
+    hideContextMenu();
     return;
   }
 
-  if (isLobsterInstallWizardOpen.value && event.target instanceof HTMLElement && event.target.closest(".lobster-install-wizard-modal")) {
-    return;
-  }
-
-  if (activeSkillMarketDetail.value && event.target instanceof HTMLElement && event.target.closest(".skill-market-detail-modal")) {
-    return;
-  }
-
-  if (activeRecentOutputMember.value && event.target instanceof HTMLElement && event.target.closest(".recent-output-modal")) {
-    return;
-  }
-
-  if (sessionOverlayLog.value && event.target instanceof HTMLElement && event.target.closest(".session-log-overlay")) {
-    return;
-  }
-
-  if (
-    !(event.target instanceof HTMLElement) ||
-    (!event.target.closest(".desktop-context-menu") &&
-      !event.target.closest(".desktop-console-panel") &&
-      !event.target.closest(".desktop-chat-window"))
-  ) {
+  if (!event.target.closest(".desktop-context-menu")) {
     hideContextMenu();
   }
 }
@@ -7435,7 +7860,6 @@ async function submitChat() {
     return;
   }
 
-  const platform = activePlatform.value;
   const pendingId = createMessageId("assistant");
   const conversationHistory = [...openClawMessages.value];
   const agent = activeChatAgent.value;
@@ -7450,20 +7874,16 @@ async function submitChat() {
       content: userContent
     }
   ];
-  const effectivePlatform = !agent ? platform : null;
   const agentId = agent?.agentId ?? null;
-  const requestEndpoint = effectivePlatform ? buildPlatformRequestEndpoint(effectivePlatform) : null;
-  const endpoint = agentId ? `openclaw://agent/${agentId}` : (requestEndpoint ?? "openclaw://default");
-  const protocol: PlatformProtocol = effectivePlatform?.protocol ?? "openai";
+  const endpoint = agentId ? `openclaw://agent/${agentId}` : "openclaw://default";
+  const protocol: PlatformProtocol = "openai";
   const payload = { messages };
   const requestBody = safeJson(payload);
-  const requestHeaders = buildRequestHeaders(protocol, effectivePlatform?.apiKey);
-  const baseUrl = agentId
-    ? `openclaw://agent/${agentId}`
-    : (effectivePlatform ? getPlatformDisplayBaseUrl(effectivePlatform) : "openclaw://default");
-  const path = agentId ? "" : (effectivePlatform ? normalizeApiPath(effectivePlatform.apiPath) : "");
-  const platformId = agentId ? `openclaw-agent-${agentId}` : (effectivePlatform?.id ?? "openclaw-default");
-  const platformName = agent ? `OpenClaw / ${stripRoleLabel(agent.displayName)}` : (effectivePlatform?.name ?? "OpenClaw 默认通道");
+  const requestHeaders = buildRequestHeaders(protocol, undefined);
+  const baseUrl = endpoint;
+  const path = "";
+  const platformId = agentId ? `openclaw-agent-${agentId}` : "openclaw-default";
+  const platformName = agent ? `OpenClaw / ${stripRoleLabel(agent.displayName)}` : openClawDefaultPlatformName;
   const startedAt = performance.now();
   const startedAtMs = Date.now();
 
@@ -7492,13 +7912,7 @@ async function submitChat() {
   scrollMessagesToBottom();
 
   try {
-    const response = await sendOpenClawChat(messages, {
-      agentId: agentId ?? null,
-      endpoint: agentId ? null : requestEndpoint,
-      apiKey: agentId ? null : (effectivePlatform?.apiKey ?? null),
-      model: agentId ? null : (effectivePlatform?.model ?? null),
-      protocol
-    });
+    const response = await sendOpenClawChat(messages, agentId ? { agentId } : {});
     const completedAt = performance.now();
     const duration = Math.round(completedAt - startedAt);
     const promptTokens = response.usage?.promptTokens ?? estimateTokenCount(requestBody);
@@ -8909,9 +9323,16 @@ async function syncCursorPassThrough() {
     isChannelConfigModalOpen.value ||
     isSystemSettingsOpen.value;
 
-  if (isDragging.value || contextMenu.value.visible || isAnyModalOpen) {
+  if (isDragging.value || isAnyModalOpen) {
     await setWindowIgnoreCursorEvents(false);
     if (isAnyModalOpen) return;
+  }
+
+  // 右键菜单打开时，整个窗口都必须可点击，
+  // 否则菜单外区域会被穿透到底层应用，导致无法触发关闭。
+  if (contextMenu.value.visible) {
+    await setWindowIgnoreCursorEvents(false);
+    return;
   }
 
   // Windows fallback: while console is open, keep the whole window interactive.
@@ -9733,6 +10154,10 @@ onMounted(async () => {
     });
   }
 
+  if (!isConsoleWindowMode) {
+    void autoOpenLobsterInstallWizardForFirstLaunch();
+  }
+
   const listen = getTauriApi()?.event?.listen;
   if (listen && isConsoleWindowMode) {
     try {
@@ -10168,8 +10593,8 @@ onBeforeUnmount(() => {
         </div>
         <div v-else-if="activePanelMode === 'lobster'">
           <p class="desktop-console-panel__eyebrow">ClawPet Command Deck</p>
-          <strong>龙虾配置</strong>
-          <p class="desktop-console-panel__intro">包含龙虾安装、网关重启、自动修复、备份恢复与版本升级。</p>
+          <strong>龙虾管理</strong>
+          <p class="desktop-console-panel__intro">包含 OpenClaw 运行状态、龙虾安装、网关重启、自动修复、备份恢复与版本升级。</p>
         </div>
         <div v-else>
           <p class="desktop-console-panel__eyebrow">ClawPet Command Deck</p>
@@ -10182,7 +10607,7 @@ onBeforeUnmount(() => {
             type="button"
             @click="openLobsterConfig()"
           >
-            龙虾配置
+            龙虾管理
           </button>
           <button
             v-if="activePanelMode === 'console'"
@@ -10222,7 +10647,7 @@ onBeforeUnmount(() => {
             type="button"
             @click="openLobsterConfig()"
           >
-            龙虾配置
+            龙虾管理
           </button>
           <button
             v-if="activePanelMode === 'subscriptions' || activePanelMode === 'lobster'"
@@ -10775,30 +11200,73 @@ onBeforeUnmount(() => {
       <div v-else-if="activePanelMode === 'lobster'" class="desktop-console-body desktop-console-body--overview lobster-console">
         <section class="section-block overview-section lobster-operations">
           <div class="lobster-toolbar">
-            <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshLobsterSnapshot()">
-              刷新状态
-            </button>
+            <div class="lobster-runtime-banner" :class="`is-${lobsterRuntimeStatus.tone}`">
+              <span class="lobster-runtime-banner__icon" aria-hidden="true">{{ lobsterRuntimeStatus.icon }}</span>
+              <div class="lobster-runtime-banner__copy">
+                <strong>OpenClaw 运行状态：{{ lobsterRuntimeStatus.label }} · 网关端口：{{ lobsterGatewayPortSummary }}</strong>
+                <p>{{ lobsterRuntimeStatus.detail }}</p>
+              </div>
+            </div>
+            <div class="lobster-toolbar__controls">
+              <button
+                class="desktop-console-panel__action desktop-console-panel__action--ghost"
+                type="button"
+                :disabled="isLobsterControlUiOpening || lobsterActionRunning !== null"
+                @click="openLobsterControlUi()"
+              >
+                <span class="lobster-toolbar__btn-icon" aria-hidden="true">↗</span>
+                <span>{{ isLobsterControlUiOpening ? "打开中..." : "打开网页端" }}</span>
+              </button>
+              <button
+                class="desktop-console-panel__action desktop-console-panel__action--ghost"
+                type="button"
+                :disabled="lobsterActionRunning !== null || gatewayMonitor.status === 'online'"
+                @click="runLobsterAction('start_gateway')"
+              >
+                <span class="lobster-toolbar__btn-icon" aria-hidden="true">▶</span>
+                <span>{{ lobsterActionRunning === "start_gateway" ? "启动中..." : "启动" }}</span>
+              </button>
+              <button
+                class="desktop-console-panel__action desktop-console-panel__action--ghost"
+                type="button"
+                :disabled="lobsterActionRunning !== null || gatewayMonitor.status !== 'online'"
+                @click="runLobsterAction('pause_gateway')"
+              >
+                <span class="lobster-toolbar__btn-icon" aria-hidden="true">⏸</span>
+                <span>{{ lobsterActionRunning === "pause_gateway" ? "暂停中..." : "暂停" }}</span>
+              </button>
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="refreshLobsterDashboard()">
+                <span class="lobster-toolbar__btn-icon lobster-toolbar__refresh-icon" :class="{ 'is-spinning': isLobsterDashboardRefreshing }" aria-hidden="true">⟳</span>
+                <span>{{ isLobsterDashboardRefreshing ? "刷新中..." : "刷新状态" }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="lobster-runtime-grid">
+            <article class="lobster-runtime-card">
+              <span>🧬 OpenClaw 版本</span>
+              <strong>{{ lobsterVersionSummary }}</strong>
+            </article>
+            <article class="lobster-runtime-card">
+              <span>🗂 备份状态</span>
+              <strong>{{ lobsterBackupSummary }}</strong>
+              <p>{{ lobsterBackupMeta }}</p>
+            </article>
+            <article class="lobster-runtime-card">
+              <span>📁 目录信息</span>
+              <strong class="lobster-runtime-card__path">{{ lobsterHomeSummary }}</strong>
+              <p class="lobster-runtime-card__path">{{ lobsterBackupDirSummary }}</p>
+            </article>
           </div>
 
           <div class="lobster-action-grid">
             <article v-for="item in lobsterActionCards" :key="item.id" class="lobster-action-card">
               <div class="lobster-action-card__header">
-                <strong>{{ item.title }}</strong>
-                <p>{{ item.description }}</p>
+                <div class="lobster-action-card__title-row">
+                  <span class="lobster-action-card__icon" aria-hidden="true">{{ item.icon }}</span>
+                  <strong>{{ item.title }}</strong>
+                </div>
               </div>
-
-              <label v-if="item.id === 'restore'" class="lobster-restore-picker">
-                <span>恢复目标备份</span>
-                <select v-model="selectedLobsterBackupPath">
-                  <option :value="null">自动选择最近备份</option>
-                  <option v-for="backup in lobsterSnapshot?.backups ?? []" :key="backup.path" :value="backup.path">
-                    {{ backup.name }} · {{ formatTime(backup.createdAtMs) }} · {{ formatFileSize(backup.sizeBytes) }}
-                  </option>
-                </select>
-              </label>
-              <p v-if="item.id === 'restore' && !(lobsterSnapshot?.backups?.length)" class="lobster-action-card__hint">
-                暂无可恢复备份，请先执行“龙虾备份”。
-              </p>
 
               <button
                 class="desktop-console-panel__action"
@@ -10821,6 +11289,42 @@ onBeforeUnmount(() => {
               </p>
             </article>
           </div>
+
+          <section class="lobster-restore-list-wrap">
+            <div class="lobster-restore-list__header">
+              <strong>恢复目标备份</strong>
+              <small>该选择仅在执行“备份恢复”时生效</small>
+            </div>
+            <ul class="lobster-restore-list" role="listbox" aria-label="恢复目标备份">
+              <li>
+                <button
+                  class="lobster-restore-list__item"
+                  :class="{ 'is-active': selectedLobsterBackupPath === null }"
+                  type="button"
+                  :aria-pressed="selectedLobsterBackupPath === null"
+                  @click="selectedLobsterBackupPath = null"
+                >
+                  <span class="lobster-restore-list__title">自动选择最近备份</span>
+                  <span class="lobster-restore-list__meta">按时间自动使用最新备份</span>
+                </button>
+              </li>
+              <li v-for="backup in lobsterSnapshot?.backups ?? []" :key="backup.path">
+                <button
+                  class="lobster-restore-list__item"
+                  :class="{ 'is-active': selectedLobsterBackupPath === backup.path }"
+                  type="button"
+                  :aria-pressed="selectedLobsterBackupPath === backup.path"
+                  @click="selectedLobsterBackupPath = backup.path"
+                >
+                  <span class="lobster-restore-list__title">{{ backup.name }}</span>
+                  <span class="lobster-restore-list__meta">{{ formatTime(backup.createdAtMs) }} · {{ formatFileSize(backup.sizeBytes) }}</span>
+                </button>
+              </li>
+            </ul>
+            <p v-if="!(lobsterSnapshot?.backups?.length)" class="lobster-action-card__hint lobster-action-card__hint--global">
+              暂无可恢复备份，恢复操作将不可用。建议先执行“龙虾备份”。
+            </p>
+          </section>
         </section>
       </div>
 
@@ -12290,7 +12794,7 @@ onBeforeUnmount(() => {
           class="platform-modal__close lobster-install-wizard__close"
           type="button"
           aria-label="关闭"
-          :disabled="lobsterInstallRunning"
+          :disabled="lobsterInstallBusy"
           @click.stop="closeLobsterInstallWizard"
         >
           ×
@@ -12557,6 +13061,22 @@ onBeforeUnmount(() => {
                   }}
                 </button>
                 <small class="lobster-install-wizard__provider-tip">{{ tr("wizard.provider.key_tip") }}</small>
+
+                <section class="lobster-install-wizard__logs lobster-install-wizard__field--span2" aria-live="polite">
+                  <div class="lobster-install-wizard__logs-head">
+                    <strong>{{ tr("wizard.logs.title") }}</strong>
+                    <button
+                      class="desktop-console-panel__action desktop-console-panel__action--ghost"
+                      type="button"
+                      :disabled="lobsterWizardLogs.length === 0"
+                      @click="copyText(lobsterWizardLogsPlainText, tr('wizard.logs.copied'))"
+                    >
+                      {{ tr("wizard.logs.copy") }}
+                    </button>
+                  </div>
+                  <pre v-if="lobsterWizardLogs.length" class="lobster-install-wizard__logs-body">{{ lobsterWizardLogsPlainText }}</pre>
+                  <p v-else class="lobster-install-wizard__logs-empty">{{ tr("wizard.logs.empty") }}</p>
+                </section>
               </div>
             </div>
           </template>
@@ -12568,6 +13088,9 @@ onBeforeUnmount(() => {
                 <h4>{{ tr("wizard.installing.title") }}</h4>
                 <p>{{ tr("wizard.installing.subtitle") }}</p>
               </div>
+              <p v-if="lobsterInstallDispatching" class="lobster-install-wizard__installing-dispatching">
+                {{ tr("wizard.installing.dispatching") }}
+              </p>
 
               <div class="lobster-install-wizard__installing-progress">
                 <div class="lobster-install-wizard__installing-progress-head">
@@ -12598,7 +13121,9 @@ onBeforeUnmount(() => {
                 </article>
               </div>
 
-              <small class="lobster-install-wizard__installing-wait">{{ tr("wizard.installing.wait") }}</small>
+              <small class="lobster-install-wizard__installing-wait">
+                {{ lobsterInstallDispatching ? tr("wizard.installing.dispatching_hint") : tr("wizard.installing.wait") }}
+              </small>
             </div>
           </template>
 
@@ -12651,7 +13176,7 @@ onBeforeUnmount(() => {
           <button
             class="desktop-console-panel__action desktop-console-panel__action--ghost"
             type="button"
-            :disabled="lobsterInstallRunning"
+            :disabled="lobsterInstallBusy"
             @click="(lobsterInstallWizardStep === 1 || lobsterInstallWizardStep === 5) ? closeLobsterInstallWizard() : handleLobsterInstallWizardBack()"
           >
             {{ lobsterInstallWizardStep === 1 ? tr("wizard.button.cancel") : tr("wizard.button.back") }}
@@ -12660,7 +13185,7 @@ onBeforeUnmount(() => {
             v-if="lobsterInstallWizardStep === 3"
             class="lobster-install-wizard__skip"
             type="button"
-            :disabled="lobsterInstallRunning || lobsterProviderSaving"
+            :disabled="lobsterInstallBusy || lobsterProviderSaving"
             @click="handleLobsterProviderSkip()"
           >
             {{ tr("wizard.provider.skip") }}
@@ -12669,7 +13194,7 @@ onBeforeUnmount(() => {
           <button
             class="desktop-console-panel__action"
             type="button"
-            :disabled="lobsterInstallRunning || lobsterInstallGuideLoading || !lobsterInstallCanGoNext"
+            :disabled="lobsterInstallBusy || lobsterInstallGuideLoading || !lobsterInstallCanGoNext"
             @click="handleLobsterInstallWizardNext()"
           >
             {{
@@ -13126,11 +13651,8 @@ onBeforeUnmount(() => {
     >
       <button class="desktop-context-menu__item" type="button" @click="openChatPanel()">{{ tr("context.chat") }}</button>
       <button class="desktop-context-menu__item" type="button" @click="openConsole('platforms')">{{ tr("context.platforms") }}</button>
-      <button class="desktop-context-menu__item" type="button" @click="openConsole('channels')">{{ tr("context.channels") }}</button>
-      <button class="desktop-context-menu__item" type="button" @click="openConsole('bindings')">{{ tr("context.bindings") }}</button>
       <button class="desktop-context-menu__item" type="button" @click="openLobsterConfig()">{{ tr("context.lobster") }}</button>
       <button class="desktop-context-menu__item" type="button" @click="openLogAnalysis('timeline')">{{ tr("context.logs") }}</button>
-      <button class="desktop-context-menu__item" type="button" @click="openSubscriptionRecommendations()">{{ tr("context.subscription") }}</button>
       <button class="desktop-context-menu__item" type="button" @click="openSystemSettings()">{{ tr("context.system") }}</button>
       <button class="desktop-context-menu__item desktop-context-menu__item--danger" type="button" @click="handleQuitClick">
         {{ tr("context.quit") }}
