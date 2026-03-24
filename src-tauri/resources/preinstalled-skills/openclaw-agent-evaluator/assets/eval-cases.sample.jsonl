@@ -1,0 +1,7 @@
+{"id":"frontmatter_required","severity":"BLOCKER","must_contain":["^---\\n","name:","description:"],"must_not_contain":[],"note":"frontmatter 和关键字段必须存在"}
+{"id":"sections_required","severity":"BLOCKER","must_contain":["## .*核心使命","## .*必须遵守","## .*工作流程","## .*成功指标"],"must_not_contain":[],"note":"关键章节必须存在"}
+{"id":"subskills_section","severity":"HIGH","must_contain":["## .*子技能分工"],"must_not_contain":[],"note":"应定义子技能分工章节"}
+{"id":"workspace_contract_section","severity":"HIGH","must_contain":["## .*工作区文件约定"],"must_not_contain":[],"note":"应定义工作区文件约定章节"}
+{"id":"no_placeholders","severity":"BLOCKER","must_contain":[],"must_not_contain":["\\{\\{.+?\\}\\}","\\[TODO"],"note":"禁止未替换占位符"}
+{"id":"has_prohibition","severity":"HIGH","must_contain":["禁止|不要|不得"],"must_not_contain":[],"note":"应存在禁止规则"}
+{"id":"quant_metrics","severity":"HIGH","must_contain":["\\d|%|>=|<=|>|<"],"must_not_contain":[],"note":"应包含可量化指标"}

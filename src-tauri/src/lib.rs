@@ -135,6 +135,20 @@ struct LobsterInstallGuideResponse {
     checks: Vec<LobsterInstallCheckItem>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreinstalledSkillManifestItem {
+    slug: String,
+    #[serde(default)]
+    auto_enable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreinstalledSkillManifest {
+    #[serde(default)]
+    skills: Vec<PreinstalledSkillManifestItem>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StaffMemberSnapshot {
@@ -5654,6 +5668,172 @@ fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> 
     Ok(())
 }
 
+
+fn resolve_preinstalled_skills_dir() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    for root in resolve_resource_root_candidates() {
+        candidates.push(root.join("preinstalled-skills"));
+        candidates.push(root.join("resources").join("preinstalled-skills"));
+    }
+
+    candidates.into_iter().find(|path| path.is_dir())
+}
+
+fn load_preinstalled_skill_auto_enable_map(
+    source_root: &Path,
+) -> std::collections::HashMap<String, bool> {
+    let manifest_path = source_root.join("preinstalled-manifest.json");
+    let raw = match std::fs::read_to_string(&manifest_path) {
+        Ok(value) => value,
+        Err(_) => return std::collections::HashMap::new(),
+    };
+    let parsed = match serde_json::from_str::<PreinstalledSkillManifest>(&raw) {
+        Ok(value) => value,
+        Err(_) => return std::collections::HashMap::new(),
+    };
+
+    parsed
+        .skills
+        .into_iter()
+        .filter_map(|item| {
+            let slug = item.slug.trim().to_ascii_lowercase();
+            if slug.is_empty() {
+                None
+            } else {
+                Some((slug, item.auto_enable))
+            }
+        })
+        .collect()
+}
+
+fn sync_preinstalled_skills_to_openclaw_home() -> Result<String, String> {
+    let source_root = resolve_preinstalled_skills_dir()
+        .ok_or_else(|| "未找到 preinstalled-skills 目录，无法同步预置技能。".to_string())?;
+    let target_root = resolve_openclaw_home_path().join("skills");
+    std::fs::create_dir_all(&target_root).map_err(|error| {
+        format!(
+            "创建 OpenClaw 技能目录失败（{}）：{error}",
+            target_root.display()
+        )
+    })?;
+
+    let auto_enable_map = load_preinstalled_skill_auto_enable_map(&source_root);
+    let source_entries = std::fs::read_dir(&source_root)
+        .map_err(|error| format!("读取预置技能目录失败（{}）：{error}", source_root.display()))?;
+
+    let mut synced_slugs = Vec::<String>::new();
+    for entry in source_entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let slug = entry.file_name().to_string_lossy().trim().to_string();
+        if slug.is_empty() || slug.starts_with('.') {
+            continue;
+        }
+
+        let source_skill_dir = entry.path();
+        if !source_skill_dir.join("SKILL.md").exists() {
+            continue;
+        }
+
+        let target_skill_dir = target_root.join(&slug);
+        copy_directory_recursive(&source_skill_dir, &target_skill_dir)?;
+        synced_slugs.push(slug);
+    }
+
+    if synced_slugs.is_empty() {
+        return Ok(format!(
+            "未发现可同步的预置技能目录（{}）。",
+            source_root.display()
+        ));
+    }
+
+    let config_path = resolve_openclaw_config_path();
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("创建配置目录失败（{}）：{error}", parent.display()))?;
+    }
+
+    let mut parsed = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)
+            .map_err(|error| format!("读取配置失败（{}）：{error}", config_path.display()))?;
+        if raw.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({}))
+        }
+    } else {
+        serde_json::json!({})
+    };
+    if !parsed.is_object() {
+        parsed = serde_json::json!({});
+    }
+
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象，无法同步技能。")?;
+    let skills = root
+        .entry("skills")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("openclaw.json 的 skills 字段不是对象。")?;
+    let entries = skills
+        .entry("entries")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("openclaw.json 的 skills.entries 字段不是对象。")?;
+
+    let mut auto_enabled_count = 0usize;
+    for slug in &synced_slugs {
+        let auto_enable = auto_enable_map
+            .get(&slug.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(true);
+        if !auto_enable {
+            continue;
+        }
+
+        let entry = entries
+            .entry(slug.to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let has_explicit_enabled = entry.get("enabled").and_then(Value::as_bool).is_some();
+        if !has_explicit_enabled {
+            *entry = serde_json::json!({ "enabled": true });
+            auto_enabled_count += 1;
+        }
+    }
+
+    write_openclaw_config_value(&config_path, &parsed)?;
+
+    synced_slugs.sort();
+    let preview = if synced_slugs.len() <= 6 {
+        synced_slugs.join(", ")
+    } else {
+        format!(
+            "{}, 等 {} 项",
+            synced_slugs
+                .iter()
+                .take(6)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ") ,
+            synced_slugs.len()
+        )
+    };
+
+    Ok(format!(
+        "已同步 {} 个预置技能到 {}，按默认策略自动启用 {} 项（{}）。",
+        synced_slugs.len(),
+        target_root.display(),
+        auto_enabled_count,
+        preview
+    ))
+}
+
 fn collect_lobster_backups() -> Vec<LobsterBackupItem> {
     let backup_root = resolve_lobster_backup_root();
     let Ok(entries) = std::fs::read_dir(&backup_root) else {
@@ -7101,12 +7281,29 @@ fn run_lobster_install_action() -> LobsterActionResult {
             ));
             notes.push(format!("gateway_daemon_detail={}", gateway_daemon.detail));
 
+            let preinstalled_skill_sync = if official_onboard.success {
+                match sync_preinstalled_skills_to_openclaw_home() {
+                    Ok(detail) => (true, detail),
+                    Err(error) => (false, error),
+                }
+            } else {
+                (
+                    false,
+                    "已跳过预置技能同步，因为官方静默安装失败。".to_string(),
+                )
+            };
+            notes.push(format!(
+                "preinstalled_skills: success={}, detail={}",
+                preinstalled_skill_sync.0, preinstalled_skill_sync.1
+            ));
+
             let (installed, version, _, detail) = detect_openclaw_installation();
             let chat_endpoint_ready = official_onboard.success && endpoint_config.any_success();
             let success = installed
                 && official_onboard.success
                 && chat_endpoint_ready
-                && gateway_daemon.success;
+                && gateway_daemon.success
+                && preinstalled_skill_sync.0;
             let official_warning = if official_onboard.success {
                 if official_onboard.degraded {
                     format!(" 官方静默安装提示：{}", official_onboard.detail)
@@ -7130,6 +7327,16 @@ fn run_lobster_install_action() -> LobsterActionResult {
             };
             let chat_endpoint_note = if official_onboard.success {
                 format!(" 聊天端点配置：{}", endpoint_config.detail())
+            } else {
+                String::new()
+            };
+            let preinstalled_skill_warning = if preinstalled_skill_sync.0 {
+                String::new()
+            } else {
+                format!(" 预置技能同步提示：{}", preinstalled_skill_sync.1)
+            };
+            let preinstalled_skill_note = if preinstalled_skill_sync.0 {
+                format!(" 预置技能同步：{}", preinstalled_skill_sync.1)
             } else {
                 String::new()
             };
@@ -7178,7 +7385,7 @@ fn run_lobster_install_action() -> LobsterActionResult {
                 success,
                 detail: if success {
                     format!(
-                        "OpenClaw 官方静默安装完成。{}{}{}{}{}",
+                        "OpenClaw 官方静默安装完成。{}{}{}{}{}{}",
                         version
                             .map(|value| format!("当前版本：{value}。"))
                             .unwrap_or_default(),
@@ -7189,16 +7396,18 @@ fn run_lobster_install_action() -> LobsterActionResult {
                         },
                         official_warning,
                         chat_endpoint_note,
+                        preinstalled_skill_note,
                         daemon_warning
                     )
                 } else {
                     format!(
-                        "OpenClaw 官方静默安装后仍未就绪：{detail} 官方静默安装结果：{} 聊天端点配置结果：{} 后台守护进程校验结果：{}{}{}",
+                        "OpenClaw 官方静默安装后仍未就绪：{detail} 官方静默安装结果：{} 聊天端点配置结果：{} 后台守护进程校验结果：{}{}{}{}",
                         official_onboard.detail,
                         endpoint_config.detail(),
                         gateway_daemon.detail,
                         official_warning,
-                        chat_endpoint_warning
+                        chat_endpoint_warning,
+                        preinstalled_skill_warning
                     )
                 },
                 exit_code: if success {
@@ -7288,12 +7497,29 @@ fn run_lobster_upgrade_action() -> LobsterActionResult {
             ));
             notes.push(format!("gateway_daemon_detail={}", gateway_daemon.detail));
 
+            let preinstalled_skill_sync = if official_onboard.success {
+                match sync_preinstalled_skills_to_openclaw_home() {
+                    Ok(detail) => (true, detail),
+                    Err(error) => (false, error),
+                }
+            } else {
+                (
+                    false,
+                    "已跳过预置技能同步，因为官方静默安装失败。".to_string(),
+                )
+            };
+            notes.push(format!(
+                "preinstalled_skills: success={}, detail={}",
+                preinstalled_skill_sync.0, preinstalled_skill_sync.1
+            ));
+
             let (installed, version, _, detail) = detect_openclaw_installation();
             let chat_endpoint_ready = official_onboard.success && endpoint_config.any_success();
             let success = installed
                 && official_onboard.success
                 && chat_endpoint_ready
-                && gateway_daemon.success;
+                && gateway_daemon.success
+                && preinstalled_skill_sync.0;
             let official_warning = if official_onboard.success {
                 if official_onboard.degraded {
                     format!(" 官方静默安装提示：{}", official_onboard.detail)
@@ -7317,6 +7543,16 @@ fn run_lobster_upgrade_action() -> LobsterActionResult {
             };
             let chat_endpoint_note = if official_onboard.success {
                 format!(" 聊天端点配置：{}", endpoint_config.detail())
+            } else {
+                String::new()
+            };
+            let preinstalled_skill_warning = if preinstalled_skill_sync.0 {
+                String::new()
+            } else {
+                format!(" 预置技能同步提示：{}", preinstalled_skill_sync.1)
+            };
+            let preinstalled_skill_note = if preinstalled_skill_sync.0 {
+                format!(" 预置技能同步：{}", preinstalled_skill_sync.1)
             } else {
                 String::new()
             };
@@ -7365,7 +7601,7 @@ fn run_lobster_upgrade_action() -> LobsterActionResult {
                 success,
                 detail: if success {
                     format!(
-                        "OpenClaw 官方静默升级完成。{}{}{}{}{}",
+                        "OpenClaw 官方静默升级完成。{}{}{}{}{}{}",
                         version
                             .map(|value| format!("当前版本：{value}。"))
                             .unwrap_or_default(),
@@ -7376,16 +7612,18 @@ fn run_lobster_upgrade_action() -> LobsterActionResult {
                         },
                         official_warning,
                         chat_endpoint_note,
+                        preinstalled_skill_note,
                         daemon_warning
                     )
                 } else {
                     format!(
-                        "OpenClaw 官方静默升级后仍未就绪：{detail} 官方静默安装结果：{} 聊天端点配置结果：{} 后台守护进程校验结果：{}{}{}",
+                        "OpenClaw 官方静默升级后仍未就绪：{detail} 官方静默安装结果：{} 聊天端点配置结果：{} 后台守护进程校验结果：{}{}{}{}",
                         official_onboard.detail,
                         endpoint_config.detail(),
                         gateway_daemon.detail,
                         official_warning,
-                        chat_endpoint_warning
+                        chat_endpoint_warning,
+                        preinstalled_skill_warning
                     )
                 },
                 exit_code: if success {

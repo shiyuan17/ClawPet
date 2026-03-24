@@ -225,6 +225,9 @@ type ChatAttachment = {
   dataUrl: string;
 };
 
+type ChatMessageKind = "default" | "runtime_tool";
+type ChatToolStatus = "running" | "done" | "error";
+
 type ChatMessage = {
   id: string;
   role: "assistant" | "user" | "system";
@@ -232,6 +235,9 @@ type ChatMessage = {
   status: "pending" | "done" | "error";
   createdAt?: number;
   attachments?: ChatAttachment[];
+  kind?: ChatMessageKind;
+  toolName?: string;
+  toolStatus?: ChatToolStatus;
 };
 
 type BoundPetAgentCapability = {
@@ -545,6 +551,28 @@ type RoleWorkflowInstallNotice = {
   text: string;
 };
 
+type RoleWorkflowActionNotice = {
+  tone: "success" | "error";
+  text: string;
+};
+
+type RoleWorkflowBase = {
+  role: AgencyRosterRole;
+  divisionTitleZh: string;
+  divisionTitleEn: string;
+  groupTitleZh: string | null;
+  groupTitleEn: string | null;
+};
+
+type RoleWorkflowCustomRole = {
+  id: string;
+  nameZh: string;
+  nameEn: string;
+  workflowZh: string;
+  sourcePath: string;
+  createdAt: number;
+};
+
 const LOBSTER_INSTALL_CHECK_BLUEPRINT: Array<Pick<LobsterInstallCheckItem, "id" | "title">> = [
   { id: "runtime", title: "Bundled OpenClaw 运行时" },
   { id: "nodejs", title: "Node.js 执行器" },
@@ -825,6 +853,8 @@ const activeLogAnalysisView = ref<LogAnalysisView>("timeline");
 const isSending = ref(false);
 const chatInput = ref("");
 const chatMessages = ref<ChatMessage[]>(createDefaultChatMessages());
+const runtimeToolSyncContext = ref<{ pendingMessageId: string; startedAtMs: number; runtimeAgentId: string | null } | null>(null);
+const expandedRuntimeToolMessages = ref<Record<string, boolean>>({});
 const chatAttachments = ref<ChatAttachment[]>([]);
 const isDragOver = ref(false);
 const fileInputRef = ref<HTMLInputElement | null>(null);
@@ -841,6 +871,7 @@ const platformDirectBaseUrlMap = ref<Record<string, string>>(loadPlatformDirectB
 const staffMembers = ref<StaffMemberSnapshot[]>([]);
 const roleWorkflowKeyword = ref("");
 const roleWorkflowOverrides = ref<Record<string, RoleWorkflowOverride>>(loadRoleWorkflowOverrides());
+const roleWorkflowCustomRoles = ref<RoleWorkflowCustomRole[]>(loadRoleWorkflowCustomRoles());
 const roleWorkflowDetailRoleId = ref<string | null>(null);
 const roleWorkflowDetailDraft = ref<RoleWorkflowDetailDraft>({ contentZh: "" });
 const roleWorkflowDetailOriginalContent = ref("");
@@ -848,6 +879,9 @@ const roleWorkflowNameZhDraft = ref("");
 const roleWorkflowNameZhOriginal = ref("");
 const isRoleWorkflowInstalling = ref(false);
 const roleWorkflowInstallNotice = ref<RoleWorkflowInstallNotice | null>(null);
+const roleWorkflowActionNotice = ref<RoleWorkflowActionNotice | null>(null);
+const roleWorkflowCustomDraftBase = ref<RoleWorkflowBase | null>(null);
+const roleWorkflowDeleteTargetRoleId = ref<string | null>(null);
 const staffDeleteTargetMember = ref<StaffMemberSnapshot | null>(null);
 const staffDeleteRemoveFiles = ref(false);
 const isStaffDeleting = ref(false);
@@ -902,6 +936,29 @@ const PET_SIZE_MAP: Record<PetSizeLevel, number> = { small: 180, medium: 280, la
 const CONTEXT_MENU_VIEWPORT_MARGIN = 8;
 const CONTEXT_MENU_FALLBACK_WIDTH = 208;
 const CONTEXT_MENU_FALLBACK_HEIGHT = 224;
+const ROLE_WORKFLOW_CUSTOM_ROLES_STORAGE_KEY = "keai.desktop-pet.role-workflow-custom-roles";
+const ROLE_WORKFLOW_CUSTOM_ROLE_ID_PREFIX = "custom-role-";
+const ROLE_WORKFLOW_CUSTOM_DRAFT_ID_PREFIX = "__custom-role-draft__-";
+const ROLE_WORKFLOW_CUSTOM_TEMPLATE = `## 你的身份与记忆
+
+- **角色**：新角色
+- **定位**：请描述该角色在团队中的定位与边界
+
+## 工作目标
+
+- 目标 1：
+- 目标 2：
+
+## 协作方式
+
+- 与谁协作：
+- 如何交接：
+
+## 约束与规则
+
+- 必须遵守：
+- 明确禁止：`;
+const ROLE_WORKFLOW_INSTALL_PROMPT_PREFIX = "请根据以下角色信息创建 agent:";
 const agencyRosterDivisions = loadAgencyRosterZh();
 
 function getSafeLocalStorage(): Storage | null {
@@ -1010,6 +1067,55 @@ function persistRoleWorkflowOverrides() {
   safeLocalStorageSetItem("keai.desktop-pet.role-workflow-overrides", JSON.stringify(roleWorkflowOverrides.value));
 }
 
+function normalizeRoleWorkflowCustomRole(raw: unknown): RoleWorkflowCustomRole | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const candidate = raw as Record<string, unknown>;
+  const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+  const nameZh = typeof candidate.nameZh === "string" ? candidate.nameZh.trim() : "";
+  const nameEn = typeof candidate.nameEn === "string" ? candidate.nameEn.trim() : "Custom Role";
+  const workflowZh = typeof candidate.workflowZh === "string" ? candidate.workflowZh.trim() : "手动新增的自定义角色";
+  const sourcePath = typeof candidate.sourcePath === "string" ? candidate.sourcePath.trim() : "";
+  const createdAt = typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
+    ? Math.floor(candidate.createdAt)
+    : 0;
+  if (!id || !nameZh || !sourcePath || !createdAt) {
+    return null;
+  }
+  return {
+    id,
+    nameZh,
+    nameEn: nameEn || "Custom Role",
+    workflowZh: workflowZh || "手动新增的自定义角色",
+    sourcePath,
+    createdAt
+  };
+}
+
+function loadRoleWorkflowCustomRoles() {
+  const raw = safeLocalStorageGetItem(ROLE_WORKFLOW_CUSTOM_ROLES_STORAGE_KEY);
+  if (!raw) {
+    return [] as RoleWorkflowCustomRole[];
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [] as RoleWorkflowCustomRole[];
+    }
+    return parsed
+      .map(normalizeRoleWorkflowCustomRole)
+      .filter((role): role is RoleWorkflowCustomRole => Boolean(role))
+      .sort((left, right) => right.createdAt - left.createdAt);
+  } catch {
+    return [] as RoleWorkflowCustomRole[];
+  }
+}
+
+function persistRoleWorkflowCustomRoles() {
+  safeLocalStorageSetItem(ROLE_WORKFLOW_CUSTOM_ROLES_STORAGE_KEY, JSON.stringify(roleWorkflowCustomRoles.value));
+}
+
 const APP_LOCALE_STORAGE_KEY = "keai.desktop-pet.locale";
 const APP_LOCALE_OPTIONS: AppLocale[] = ["zh-CN", "en-US", "ja-JP"];
 const APP_THEME_STORAGE_KEY = "keai.desktop-pet.theme";
@@ -1031,7 +1137,7 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.overview": "总览",
     "console.section.platforms": "代理配置",
     "console.section.staff": "员工管理",
-    "console.section.role_workflow": "角色工作流",
+    "console.section.role_workflow": "员工招募",
     "console.section.skill_market": "技能市场",
     "console.section.channels": "消息频道",
     "console.section.bindings": "宠物绑定",
@@ -1199,7 +1305,7 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.overview": "Overview",
     "console.section.platforms": "Proxy Config",
     "console.section.staff": "Staff",
-    "console.section.role_workflow": "Role Workflows",
+    "console.section.role_workflow": "Recruitment Market",
     "console.section.skill_market": "Skill Market",
     "console.section.channels": "Channels",
     "console.section.bindings": "Bindings",
@@ -1367,7 +1473,7 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.overview": "概要",
     "console.section.platforms": "プロキシ設定",
     "console.section.staff": "スタッフ",
-    "console.section.role_workflow": "ロールワークフロー",
+    "console.section.role_workflow": "採用マーケット",
     "console.section.skill_market": "スキルマーケット",
     "console.section.channels": "メッセージチャンネル",
     "console.section.bindings": "連携",
@@ -2093,19 +2199,10 @@ const skillMarketSummaryText = computed(() => {
   return `分类：${category} · 展示 ${displayed} / ${total} · 第 ${skillMarketPage.value}/${skillMarketCurrentTotalPages.value} 页`;
 });
 const roleWorkflowNormalizedKeyword = computed(() => roleWorkflowKeyword.value.trim().toLowerCase());
-const roleWorkflowTotalCount = computed(() => agencyRosterDivisions.reduce((sum, division) => sum + division.count, 0));
+const roleWorkflowLibraryTotalCount = computed(() => agencyRosterDivisions.reduce((sum, division) => sum + division.count, 0));
 const roleWorkflowRoleIndex = computed(
   () =>
-    new Map<
-      string,
-      {
-        role: AgencyRosterRole;
-        divisionTitleZh: string;
-        divisionTitleEn: string;
-        groupTitleZh: string | null;
-        groupTitleEn: string | null;
-      }
-    >(
+    new Map<string, RoleWorkflowBase>(
       agencyRosterDivisions.flatMap((division) =>
         division.groups.flatMap((group) =>
           group.roles.map((role) => [
@@ -2122,11 +2219,69 @@ const roleWorkflowRoleIndex = computed(
       )
     )
 );
-const activeRoleWorkflowBase = computed(() => {
-  if (!roleWorkflowDetailRoleId.value) {
+const roleWorkflowCustomRoleIndex = computed(
+  () =>
+    new Map<string, RoleWorkflowBase>(
+      roleWorkflowCustomRoles.value.map((role) => [
+        role.id,
+        {
+          role,
+          divisionTitleZh: "我创建的角色",
+          divisionTitleEn: "My Roles",
+          groupTitleZh: "自定义",
+          groupTitleEn: "Custom"
+        }
+      ])
+    )
+);
+const roleWorkflowCustomVisibleRoles = computed(() => {
+  const keyword = roleWorkflowNormalizedKeyword.value;
+  return roleWorkflowCustomRoles.value
+    .map((role) => {
+      const override = roleWorkflowOverrides.value[role.id];
+      return {
+        ...role,
+        nameZh: override?.nameZh ?? role.nameZh,
+        workflowZh: override?.workflowZh ?? role.workflowZh
+      };
+    })
+    .filter((role) => {
+      if (!keyword) {
+        return true;
+      }
+      const searchBlob = [role.nameZh, role.nameEn, role.workflowZh, role.sourcePath].join(" ").toLowerCase();
+      return searchBlob.includes(keyword);
+    });
+});
+const roleWorkflowDeleteTargetRole = computed(() => {
+  if (!roleWorkflowDeleteTargetRoleId.value) {
     return null;
   }
-  return roleWorkflowRoleIndex.value.get(roleWorkflowDetailRoleId.value) ?? null;
+  return roleWorkflowCustomRoles.value.find((role) => role.id === roleWorkflowDeleteTargetRoleId.value) ?? null;
+});
+const activeRoleWorkflowBase = computed(() => {
+  const activeRoleId = roleWorkflowDetailRoleId.value;
+  if (!activeRoleId) {
+    return null;
+  }
+  if (activeRoleId.startsWith(ROLE_WORKFLOW_CUSTOM_DRAFT_ID_PREFIX)) {
+    return roleWorkflowCustomDraftBase.value;
+  }
+  const customRole = roleWorkflowCustomRoleIndex.value.get(activeRoleId);
+  if (customRole) {
+    return customRole;
+  }
+  return roleWorkflowRoleIndex.value.get(activeRoleId) ?? null;
+});
+const isRoleWorkflowCustomRole = computed(() => {
+  const activeRoleId = roleWorkflowDetailRoleId.value;
+  if (!activeRoleId) {
+    return false;
+  }
+  if (activeRoleId.startsWith(ROLE_WORKFLOW_CUSTOM_DRAFT_ID_PREFIX)) {
+    return true;
+  }
+  return roleWorkflowCustomRoleIndex.value.has(activeRoleId);
 });
 const activeRoleWorkflowOverride = computed(() => {
   if (!roleWorkflowDetailRoleId.value) {
@@ -2145,6 +2300,16 @@ const isRoleWorkflowDraftChanged = computed(() => {
     roleWorkflowDetailDraft.value.contentZh !== roleWorkflowDetailOriginalContent.value ||
     roleWorkflowNameZhDraft.value.trim() !== roleWorkflowNameZhOriginal.value.trim()
   );
+});
+const canSaveRoleWorkflowDraft = computed(() => {
+  const activeRoleId = roleWorkflowDetailRoleId.value;
+  if (!activeRoleId) {
+    return false;
+  }
+  if (activeRoleId.startsWith(ROLE_WORKFLOW_CUSTOM_DRAFT_ID_PREFIX)) {
+    return true;
+  }
+  return isRoleWorkflowDraftChanged.value;
 });
 const roleWorkflowDivisions = computed(() => {
   const keyword = roleWorkflowNormalizedKeyword.value;
@@ -2195,9 +2360,11 @@ const roleWorkflowDivisions = computed(() => {
     })
     .filter((division) => division.count > 0);
 });
-const roleWorkflowVisibleCount = computed(() =>
+const roleWorkflowLibraryVisibleCount = computed(() =>
   roleWorkflowDivisions.value.reduce((sum, division) => sum + division.count, 0)
 );
+const roleWorkflowTotalCount = computed(() => roleWorkflowLibraryTotalCount.value + roleWorkflowCustomRoles.value.length);
+const roleWorkflowVisibleCount = computed(() => roleWorkflowLibraryVisibleCount.value + roleWorkflowCustomVisibleRoles.value.length);
 const consoleSections = computed<Array<{ id: ConsoleSection; label: string }>>(() => [
   { id: "overview", label: tr("console.section.overview") },
   { id: "platforms", label: tr("console.section.platforms") },
@@ -2985,7 +3152,7 @@ const chatHeaderTitle = computed(() => {
 });
 const openClawMessages = computed<OpenClawMessage[]>(() =>
   chatMessages.value
-    .filter((message) => message.status !== "pending" && message.role !== "system")
+    .filter((message) => message.status !== "pending" && message.role !== "system" && !message.toolName && !message.id.startsWith("runtime-tool-"))
     .map((message) => ({
       role: message.role,
       content: message.text
@@ -3915,6 +4082,7 @@ let staffSnapshotPollTimer = 0;
 let lobsterInstallProgressTimer = 0;
 let lobsterInstallGuideRefreshToken = 0;
 let runtimeLogFollowTimer = 0;
+let roleWorkflowActionNoticeTimer = 0;
 let runtimeLogRefreshTask: Promise<RequestLog[]> | null = null;
 let runtimeLogLastFingerprint = "";
 let runtimeLogFollowActiveUntil = 0;
@@ -3929,6 +4097,22 @@ const staffSnapshotPollIntervalMs = 3000;
 const runtimeLogFollowWindowMs = 4000;
 let systemThemeMediaQuery: MediaQueryList | null = null;
 let systemThemeMediaListener: ((event: MediaQueryListEvent) => void) | null = null;
+
+function clearRoleWorkflowActionNoticeTimer() {
+  if (roleWorkflowActionNoticeTimer) {
+    window.clearTimeout(roleWorkflowActionNoticeTimer);
+    roleWorkflowActionNoticeTimer = 0;
+  }
+}
+
+function showRoleWorkflowActionNotice(notice: RoleWorkflowActionNotice, durationMs = 2600) {
+  roleWorkflowActionNotice.value = notice;
+  clearRoleWorkflowActionNoticeTimer();
+  roleWorkflowActionNoticeTimer = window.setTimeout(() => {
+    roleWorkflowActionNotice.value = null;
+    roleWorkflowActionNoticeTimer = 0;
+  }, durationMs);
+}
 
 type TauriWindowApi = {
   label?: string;
@@ -4193,37 +4377,122 @@ function stopVoicePlayback() {
   activeVoiceMessageId.value = null;
 }
 
+function normalizeRuntimeToolName(log: RequestLog) {
+  if (!log.method.startsWith("TOOL:")) {
+    return "tool";
+  }
+  const raw = log.method.slice("TOOL:".length).trim();
+  return raw || "tool";
+}
+
+function getRuntimeToolMessageSourceText(log: RequestLog) {
+  const text = (log.streamSummary?.trim() || log.responseBody?.trim() || log.error?.trim() || "").trim();
+  if (text) {
+    return text;
+  }
+  const requestBody = log.requestBody?.trim();
+  if (requestBody) {
+    return `参数：${requestBody}`;
+  }
+  return "工具执行完成。";
+}
+
 function buildRuntimeToolMessage(log: RequestLog): ChatMessage {
-  const text = (log.streamSummary?.trim() || log.responseBody?.trim() || "").trim();
+  const text = getRuntimeToolMessageSourceText(log);
+  const toolStatus: ChatToolStatus = isFailedLog(log) ? "error" : "done";
+  const hasAudioPayload = Boolean(extractAudioPath(text));
   return {
     id: `runtime-tool-${log.id}`,
     role: "assistant",
     text,
-    status: "done",
-    createdAt: log.createdAt
+    status: toolStatus === "error" ? "error" : "done",
+    createdAt: log.createdAt,
+    kind: hasAudioPayload ? "default" : "runtime_tool",
+    toolName: normalizeRuntimeToolName(log),
+    toolStatus
   };
 }
 
-function insertRuntimeToolMessages(beforeMessageId: string, logs: RequestLog[], afterMs: number) {
+function insertRuntimeToolMessages(beforeMessageId: string, logs: RequestLog[], afterMs: number, runtimeAgentId: string | null = null) {
   const pendingIndex = chatMessages.value.findIndex((message) => message.id === beforeMessageId);
   if (pendingIndex < 0) {
-    return;
+    return 0;
   }
 
   const toolMessages = logs
     .filter((log) => log.platformId.startsWith("openclaw-runtime-"))
+    .filter((log) => !runtimeAgentId || log.platformId === `openclaw-runtime-${runtimeAgentId}`)
     .filter((log) => log.method.startsWith("TOOL:"))
     .filter((log) => log.createdAt >= afterMs)
     .filter((log) => !chatMessages.value.some((message) => message.id === `runtime-tool-${log.id}`))
-    .filter((log) => Boolean(extractAudioPath(log.streamSummary || log.responseBody || "")))
     .sort((left, right) => left.createdAt - right.createdAt)
     .map(buildRuntimeToolMessage);
 
   if (!toolMessages.length) {
-    return;
+    return 0;
   }
 
   chatMessages.value.splice(pendingIndex, 0, ...toolMessages);
+  return toolMessages.length;
+}
+
+function isRuntimeToolMessage(message: ChatMessage) {
+  return message.kind === "runtime_tool";
+}
+
+function resolveRuntimeToolStatus(message: ChatMessage): ChatToolStatus {
+  if (message.toolStatus === "running" || message.toolStatus === "done" || message.toolStatus === "error") {
+    return message.toolStatus;
+  }
+  if (message.status === "pending") {
+    return "running";
+  }
+  if (message.status === "error") {
+    return "error";
+  }
+  return "done";
+}
+
+function getRuntimeToolStatusLabel(message: ChatMessage) {
+  const status = resolveRuntimeToolStatus(message);
+  if (status === "running") {
+    return "加载中";
+  }
+  if (status === "error") {
+    return "失败";
+  }
+  return "完成";
+}
+
+function getRuntimeToolStatusClass(message: ChatMessage) {
+  const status = resolveRuntimeToolStatus(message);
+  if (status === "running") {
+    return "is-running";
+  }
+  if (status === "error") {
+    return "is-error";
+  }
+  return "is-done";
+}
+
+function getRuntimeToolLabel(message: ChatMessage) {
+  return message.toolName?.trim() || "tool";
+}
+
+function getRuntimeToolMessageDetail(message: ChatMessage) {
+  return message.text.trim();
+}
+
+function isRuntimeToolMessageExpanded(messageId: string) {
+  return Boolean(expandedRuntimeToolMessages.value[messageId]);
+}
+
+function toggleRuntimeToolMessageExpanded(messageId: string) {
+  const current = expandedRuntimeToolMessages.value[messageId];
+  expandedRuntimeToolMessages.value = {
+    ...expandedRuntimeToolMessages.value,
+    [messageId]: !current
+  };
 }
 
 async function handleAudioMessageClick(message: ChatMessage) {
@@ -4281,6 +4550,13 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
     return null;
   }
 
+  const kind: ChatMessageKind = message.kind === "runtime_tool" ? "runtime_tool" : "default";
+  const toolName = typeof message.toolName === "string" && message.toolName.trim() ? message.toolName.trim() : undefined;
+  const toolStatus: ChatToolStatus | undefined =
+    message.toolStatus === "running" || message.toolStatus === "done" || message.toolStatus === "error"
+      ? message.toolStatus
+      : undefined;
+
   return {
     id: message.id,
     role,
@@ -4288,7 +4564,10 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
     status,
     createdAt: typeof message.createdAt === "number" && Number.isFinite(message.createdAt)
       ? message.createdAt
-      : undefined
+      : undefined,
+    kind,
+    toolName,
+    toolStatus
   };
 }
 
@@ -4562,6 +4841,8 @@ function switchChatAgent(agentId: string | null) {
   activeChatAgentId.value = agentId;
   const cached = agentChatHistories.value[agentId ?? "__main__"];
   chatMessages.value = cached && cached.length > 0 ? [...cached] : loadChatHistory(agentId);
+  runtimeToolSyncContext.value = null;
+  expandedRuntimeToolMessages.value = {};
   currentSessionId.value = loadStoredSessionId(agentId);
   chatInput.value = "";
   chatAttachments.value = [];
@@ -5535,6 +5816,7 @@ async function openRoleWorkflowDetail(roleId: string) {
   if (!found) {
     return;
   }
+  roleWorkflowCustomDraftBase.value = null;
   roleWorkflowInstallNotice.value = null;
   const requestToken = ++roleWorkflowDetailRequestToken;
   const override = roleWorkflowOverrides.value[roleId];
@@ -5565,6 +5847,64 @@ async function openRoleWorkflowDetail(roleId: string) {
   void syncCursorPassThrough();
 }
 
+function openCustomRoleWorkflowDetail(roleId: string) {
+  const found = roleWorkflowCustomRoleIndex.value.get(roleId);
+  if (!found) {
+    return;
+  }
+  roleWorkflowCustomDraftBase.value = null;
+  roleWorkflowDetailRequestToken += 1;
+  roleWorkflowInstallNotice.value = null;
+  roleWorkflowDetailRoleId.value = roleId;
+  const override = roleWorkflowOverrides.value[roleId];
+  const draftContent = override?.detailContentZh?.trim() ? override.detailContentZh : ROLE_WORKFLOW_CUSTOM_TEMPLATE;
+  const draftNameZh = override?.nameZh?.trim() || found.role.nameZh;
+  roleWorkflowDetailOriginalContent.value = draftContent;
+  roleWorkflowDetailDraft.value = {
+    contentZh: draftContent
+  };
+  roleWorkflowNameZhOriginal.value = draftNameZh;
+  roleWorkflowNameZhDraft.value = draftNameZh;
+  statusText.value = `已打开 ${draftNameZh}（自定义角色）。`;
+  void syncCursorPassThrough();
+}
+
+function createRoleWorkflowCustomRoleId() {
+  return `${ROLE_WORKFLOW_CUSTOM_ROLE_ID_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function openRoleWorkflowCreateModal() {
+  const draftRoleId = `${ROLE_WORKFLOW_CUSTOM_DRAFT_ID_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const nextIndex = roleWorkflowCustomRoles.value.length + 1;
+  const draftRoleName = `新角色 ${nextIndex}`;
+  roleWorkflowCustomDraftBase.value = {
+    role: {
+      id: draftRoleId,
+      nameZh: draftRoleName,
+      nameEn: "Custom Role",
+      workflowZh: "手动新增的自定义角色",
+      sourcePath: `zh/custom/${draftRoleId}.md`
+    },
+    divisionTitleZh: "我创建的角色",
+    divisionTitleEn: "My Roles",
+    groupTitleZh: "自定义",
+    groupTitleEn: "Custom"
+  };
+  roleWorkflowDetailRequestToken += 1;
+  roleWorkflowInstallNotice.value = null;
+  roleWorkflowActionNotice.value = null;
+  clearRoleWorkflowActionNoticeTimer();
+  roleWorkflowDetailRoleId.value = draftRoleId;
+  roleWorkflowDetailOriginalContent.value = ROLE_WORKFLOW_CUSTOM_TEMPLATE;
+  roleWorkflowDetailDraft.value = {
+    contentZh: ROLE_WORKFLOW_CUSTOM_TEMPLATE
+  };
+  roleWorkflowNameZhOriginal.value = draftRoleName;
+  roleWorkflowNameZhDraft.value = draftRoleName;
+  statusText.value = "请填写角色内容，点击“保存”后会加入我创建的角色列表。";
+  void syncCursorPassThrough();
+}
+
 function closeRoleWorkflowDetail() {
   roleWorkflowDetailRequestToken += 1;
   roleWorkflowDetailRoleId.value = null;
@@ -5573,6 +5913,9 @@ function closeRoleWorkflowDetail() {
   roleWorkflowNameZhDraft.value = "";
   roleWorkflowNameZhOriginal.value = "";
   roleWorkflowInstallNotice.value = null;
+  roleWorkflowActionNotice.value = null;
+  clearRoleWorkflowActionNoticeTimer();
+  roleWorkflowCustomDraftBase.value = null;
   void syncCursorPassThrough();
 }
 
@@ -5589,15 +5932,45 @@ function saveRoleWorkflowDetail() {
 
   const nextContent = roleWorkflowDetailDraft.value.contentZh;
   const nextNameZh = roleWorkflowNameZhDraft.value.trim() || found.role.nameZh;
+  const isCustomDraft = activeId.startsWith(ROLE_WORKFLOW_CUSTOM_DRAFT_ID_PREFIX);
   const current = roleWorkflowOverrides.value[activeId] ?? {};
-  const nextVersions = [
-    {
-      id: createRoleWorkflowVersionId(),
-      contentZh: nextContent,
-      savedAt: Date.now()
-    },
-    ...(current.detailVersions ?? [])
-  ].slice(0, 3);
+  const nextVersions = isRoleWorkflowCustomRole.value
+    ? (current.detailVersions ?? [])
+    : [
+      {
+        id: createRoleWorkflowVersionId(),
+        contentZh: nextContent,
+        savedAt: Date.now()
+      },
+      ...(current.detailVersions ?? [])
+    ].slice(0, 3);
+
+  if (isCustomDraft) {
+    const customRoleId = createRoleWorkflowCustomRoleId();
+    const savedCustomRole: RoleWorkflowCustomRole = {
+      id: customRoleId,
+      nameZh: nextNameZh,
+      nameEn: "Custom Role",
+      workflowZh: "手动新增的自定义角色",
+      sourcePath: `zh/custom/${customRoleId}.md`,
+      createdAt: Date.now()
+    };
+    roleWorkflowCustomRoles.value = [savedCustomRole, ...roleWorkflowCustomRoles.value];
+    persistRoleWorkflowCustomRoles();
+    roleWorkflowOverrides.value = {
+      ...roleWorkflowOverrides.value,
+      [customRoleId]: {
+        ...(roleWorkflowOverrides.value[customRoleId] ?? {}),
+        nameZh: nextNameZh,
+        detailContentZh: nextContent
+      }
+    };
+    persistRoleWorkflowOverrides();
+    closeRoleWorkflowDetail();
+    showRoleWorkflowActionNotice({ tone: "success", text: `${nextNameZh} 保存成功。` });
+    statusText.value = `${nextNameZh} 保存成功并已加入我创建的角色列表。`;
+    return;
+  }
 
   roleWorkflowOverrides.value = {
     ...roleWorkflowOverrides.value,
@@ -5611,8 +5984,26 @@ function saveRoleWorkflowDetail() {
   roleWorkflowDetailOriginalContent.value = nextContent;
   roleWorkflowNameZhOriginal.value = nextNameZh;
   roleWorkflowNameZhDraft.value = nextNameZh;
+  if (roleWorkflowCustomRoleIndex.value.has(activeId)) {
+    roleWorkflowCustomRoles.value = roleWorkflowCustomRoles.value.map((role) =>
+      role.id === activeId
+        ? {
+          ...role,
+          nameZh: nextNameZh
+        }
+        : role
+    );
+    persistRoleWorkflowCustomRoles();
+  }
   persistRoleWorkflowOverrides();
-  statusText.value = `${nextNameZh} 详情已保存（当前保留 ${nextVersions.length} 个版本）。`;
+  closeRoleWorkflowDetail();
+  showRoleWorkflowActionNotice({
+    tone: "success",
+    text: `${nextNameZh} 保存成功。`
+  });
+  statusText.value = isRoleWorkflowCustomRole.value
+    ? `${nextNameZh} 保存成功并已关闭弹窗。`
+    : `${nextNameZh} 详情已保存（当前保留 ${nextVersions.length} 个版本），弹窗已关闭。`;
 }
 
 function restoreRoleWorkflowOriginalContent() {
@@ -5672,6 +6063,42 @@ function deleteRoleWorkflowSavedVersion(versionId: string) {
   statusText.value = `${found.role.nameZh} 的历史版本已删除。`;
 }
 
+function requestDeleteCustomRoleWorkflowRole(roleId: string) {
+  const target = roleWorkflowCustomRoles.value.find((role) => role.id === roleId);
+  if (!target) {
+    return;
+  }
+  roleWorkflowDeleteTargetRoleId.value = roleId;
+}
+
+function closeDeleteCustomRoleWorkflowRole() {
+  roleWorkflowDeleteTargetRoleId.value = null;
+}
+
+function confirmDeleteCustomRoleWorkflowRole() {
+  const target = roleWorkflowDeleteTargetRole.value;
+  if (!target) {
+    return;
+  }
+  const roleId = target.id;
+
+  roleWorkflowCustomRoles.value = roleWorkflowCustomRoles.value.filter((role) => role.id !== roleId);
+  persistRoleWorkflowCustomRoles();
+
+  if (roleWorkflowOverrides.value[roleId]) {
+    const { [roleId]: _, ...rest } = roleWorkflowOverrides.value;
+    roleWorkflowOverrides.value = rest;
+    persistRoleWorkflowOverrides();
+  }
+
+  if (roleWorkflowDetailRoleId.value === roleId) {
+    closeRoleWorkflowDetail();
+  }
+  closeDeleteCustomRoleWorkflowRole();
+  showRoleWorkflowActionNotice({ tone: "success", text: `${target.nameZh} 已删除。` });
+  statusText.value = `${target.nameZh} 已从我创建的角色中删除。`;
+}
+
 function buildInstallableRoleAgentId(sourcePath: string) {
   const base = sourcePath
     .replace(/\.md$/i, "")
@@ -5691,6 +6118,21 @@ function resolveInstalledRoleWorkspaceDir(installResult: string, normalizedAgent
     return normalizedPath;
   }
   return `~/.openclaw/workspace-${normalizedAgentId}`;
+}
+
+function buildRoleWorkflowInstallPrompt(roleName: string, sourcePath: string, detailMarkdown: string) {
+  const normalizedRoleName = roleName.trim() || "未命名角色";
+  const normalizedSourcePath = sourcePath.trim() || "unknown";
+  const normalizedDetail = detailMarkdown.trim();
+
+  return [
+    ROLE_WORKFLOW_INSTALL_PROMPT_PREFIX,
+    "若已安装 openclaw-agent-factory 等角色创建 skill，请优先调用对应 skill 完成创建。",
+    `角色名称：${normalizedRoleName}`,
+    `来源：${normalizedSourcePath}`,
+    "详情内容：",
+    normalizedDetail
+  ].join("\n");
 }
 
 async function installRoleWorkflowRole() {
@@ -5723,8 +6165,19 @@ async function installRoleWorkflowRole() {
     })) as string;
     const roleName = selectedNameZh || found.role.nameZh || found.role.nameEn || agentId;
     const workspaceDir = resolveInstalledRoleWorkspaceDir(result ?? "", agentId);
-    const successMessage = `角色已安装，\n角色名称：${roleName}\n配置文件目录：${workspaceDir}`;
+    const openclawPrompt = buildRoleWorkflowInstallPrompt(roleName, found.role.sourcePath, markdown);
+    let openclawDispatchSummary = "已将角色详情发送到 OpenClaw。";
+    try {
+      await sendOpenClawChat([{ role: "user", content: openclawPrompt }]);
+    } catch (dispatchError) {
+      openclawDispatchSummary = `角色已安装，但发送角色详情到 OpenClaw 失败：${
+        dispatchError instanceof Error ? dispatchError.message : "未知错误"
+      }`;
+    }
+
+    const successMessage = `角色已安装，\n角色名称：${roleName}\n配置文件目录：${workspaceDir}\n${openclawDispatchSummary}`;
     roleWorkflowInstallNotice.value = { tone: "success", text: successMessage };
+    statusText.value = openclawDispatchSummary;
     await refreshStaffSnapshot();
   } catch (error) {
     roleWorkflowInstallNotice.value = {
@@ -5790,7 +6243,7 @@ function getConsoleSectionTitle(section: ConsoleSection) {
   if (section === "overview") return "总览";
   if (section === "platforms") return "代理配置";
   if (section === "staff") return "员工管理";
-  if (section === "role-workflow") return "角色工作流";
+  if (section === "role-workflow") return "员工招募";
   if (section === "skill-market") return "技能市场";
   if (section === "channels") return "消息频道";
   if (section === "bindings") return "宠物绑定";
@@ -5837,7 +6290,7 @@ async function openConsole(section: ConsoleSection) {
     void refreshOpenClawSkillSnapshot();
     void refreshOpenClawSkillsList();
   } else if (section === "role-workflow") {
-    statusText.value = "角色工作流已展开，按 The Agency Roster 分类查看全量角色。";
+    statusText.value = "员工招募已展开，可在我创建的角色和角色库中筛选并招募角色。";
   } else if (section === "skill-market") {
     statusText.value = "技能市场已展开，可按分类浏览并快速查看热门技能。";
     void refreshSkillMarket();
@@ -7902,6 +8355,11 @@ async function submitChat() {
     status: "pending",
     createdAt: Date.now()
   });
+  runtimeToolSyncContext.value = {
+    pendingMessageId: pendingId,
+    startedAtMs,
+    runtimeAgentId: agentId
+  };
   chatInput.value = "";
   chatAttachments.value = [];
   isSending.value = true;
@@ -7918,8 +8376,6 @@ async function submitChat() {
     const promptTokens = response.usage?.promptTokens ?? estimateTokenCount(requestBody);
     const completionTokens = response.usage?.completionTokens ?? estimateTokenCount(response.text);
     const totalTokens = response.usage?.totalTokens ?? promptTokens + completionTokens;
-    const runtimeLogs = await refreshOpenClawMessageLogs();
-    insertRuntimeToolMessages(pendingId, runtimeLogs, startedAtMs);
     const pendingMessage = chatMessages.value.find((message) => message.id === pendingId);
     if (pendingMessage) {
       pendingMessage.text = response.text;
@@ -7988,6 +8444,24 @@ async function submitChat() {
     statusText.value = "这次没有连上目标平台，我已经把失败原因记到日志里了。";
     openLogAnalysis("failures");
   } finally {
+    const syncContext = runtimeToolSyncContext.value;
+    if (syncContext) {
+      try {
+        const runtimeLogs = await refreshOpenClawMessageLogs();
+        const inserted = insertRuntimeToolMessages(
+          syncContext.pendingMessageId,
+          runtimeLogs,
+          syncContext.startedAtMs,
+          syncContext.runtimeAgentId
+        );
+        if (inserted > 0) {
+          startBubbleAnimation();
+        }
+      } catch {
+        // Ignore runtime log refresh errors in chat completion flow.
+      }
+    }
+    runtimeToolSyncContext.value = null;
     isSending.value = false;
     applyBaseAnimation();
     startBubbleAnimation();
@@ -9271,6 +9745,8 @@ function handleSetActivePlatform(platformId: string) {
 function handleNewConversation() {
   currentSessionId.value = createSessionId();
   chatMessages.value = createDefaultChatMessages();
+  runtimeToolSyncContext.value = null;
+  expandedRuntimeToolMessages.value = {};
   chatInput.value = "";
   chatAttachments.value = [];
   persistChatHistory(activeChatAgentId.value);
@@ -9925,6 +10401,27 @@ watch(chatInput, () => {
   applyBaseAnimation();
 });
 
+watch(
+  runtimeRequestLogs,
+  (logs) => {
+    const syncContext = runtimeToolSyncContext.value;
+    if (!syncContext) {
+      return;
+    }
+    const inserted = insertRuntimeToolMessages(
+      syncContext.pendingMessageId,
+      logs,
+      syncContext.startedAtMs,
+      syncContext.runtimeAgentId
+    );
+    if (inserted > 0) {
+      startBubbleAnimation();
+      scrollMessagesToBottom();
+    }
+  },
+  { deep: false }
+);
+
 watch(draftAppLocale, (nextLocale) => {
   if (!isSystemSettingsOpen.value) {
     return;
@@ -10270,6 +10767,7 @@ onBeforeUnmount(() => {
   window.cancelAnimationFrame(bubbleAnimationFrame);
   window.clearTimeout(idleTimer);
   window.clearTimeout(runtimeLogFollowTimer);
+  clearRoleWorkflowActionNoticeTimer();
   window.clearInterval(cursorPassThroughTimer);
   window.clearInterval(gatewayMonitorTimer);
   window.clearInterval(runtimeLogTimer);
@@ -10406,63 +10904,92 @@ onBeforeUnmount(() => {
               :class="[
                 `chat-message--${message.role}`,
                 `chat-message--${message.status}`,
-                { 'chat-message--audio': isAudioMessage(message) }
+                { 'chat-message--audio': isAudioMessage(message), 'chat-message--tool': isRuntimeToolMessage(message) }
               ]"
               :style="getBubbleStyle(index)"
             >
-              <div
-                v-if="message.role !== 'user' && message.role !== 'system'"
-                class="chat-message__avatar"
-                aria-hidden="true"
-              >
-                <svg viewBox="0 0 20 20">
-                  <path d="M10 2.8l1.5 3.3 3.4 1.5-3.4 1.5L10 12.4 8.5 9.1 5 7.6l3.5-1.5z" />
-                </svg>
-              </div>
-              <div class="chat-message__body">
-                <div
-                  class="chat-bubble"
-                  :class="[
-                    `chat-bubble--${message.role}`,
-                    `chat-bubble--${message.status}`,
-                    { 'chat-bubble--audio': isAudioMessage(message) }
-                  ]"
-                >
-                  <button
-                    v-if="isAudioMessage(message)"
-                    class="voice-message"
-                    :class="{ 'is-playing': isAudioMessagePlaying(message.id) }"
-                    type="button"
-                    @click="handleAudioMessageClick(message)"
-                  >
-                    <span
-                      class="voice-message__icon"
-                      :class="isAudioMessagePlaying(message.id) ? 'is-pause' : 'is-play'"
-                      aria-hidden="true"
-                    />
-                    <span class="voice-message__body">
-                      <strong>{{ getAudioMessageLabel(message) }}</strong>
-                      <small>{{ isAudioMessagePlaying(message.id) ? "点击停止播放" : "点击播放语音" }}</small>
+              <template v-if="isRuntimeToolMessage(message)">
+                <div class="chat-tool-call__avatar" aria-hidden="true">
+                  <svg viewBox="0 0 20 20">
+                    <path d="M12.3 3.3a4 4 0 0 0 4.4 5.4l-3.1 3.1-1.8-1.8-5.6 5.6a1.6 1.6 0 1 1-2.3-2.3l5.6-5.6-1.8-1.8 3.1-3.1a4 4 0 0 0 1.5.5z" />
+                  </svg>
+                </div>
+                <div class="chat-tool-call__body">
+                  <button class="chat-tool-call__pill" type="button" @click="toggleRuntimeToolMessageExpanded(message.id)">
+                    <span class="chat-tool-call__pill-main">
+                      <svg class="chat-tool-call__icon" viewBox="0 0 20 20" aria-hidden="true">
+                        <path d="M11.2 1.8 4.6 10h4.3L7.9 18.2 14.7 10h-4.2z" />
+                      </svg>
+                      <span class="chat-tool-call__name">{{ getRuntimeToolLabel(message) }}</span>
+                      <span class="chat-tool-call__status" :class="getRuntimeToolStatusClass(message)">
+                        {{ getRuntimeToolStatusLabel(message) }}
+                      </span>
                     </span>
+                    <svg class="chat-tool-call__caret" :class="{ 'is-open': isRuntimeToolMessageExpanded(message.id) }" viewBox="0 0 20 20" aria-hidden="true">
+                      <path d="m5 7 5 6 5-6" />
+                    </svg>
                   </button>
-                  <template v-else>
-                    <div v-if="message.attachments && message.attachments.length > 0" class="bubble-attachments">
-                      <div v-for="att in message.attachments" :key="att.id" class="bubble-attachment">
-                        <img v-if="isImageAttachment(att)" class="bubble-attachment__img" :src="att.dataUrl" :alt="att.name" />
-                        <span v-else class="bubble-attachment__file">
-                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
-                          {{ att.name }}
-                        </span>
+                  <pre
+                    v-if="isRuntimeToolMessageExpanded(message.id) && getRuntimeToolMessageDetail(message)"
+                    class="chat-tool-call__detail"
+                  >{{ getRuntimeToolMessageDetail(message) }}</pre>
+                </div>
+              </template>
+              <template v-else>
+                <div
+                  v-if="message.role !== 'user' && message.role !== 'system'"
+                  class="chat-message__avatar"
+                  aria-hidden="true"
+                >
+                  <svg viewBox="0 0 20 20">
+                    <path d="M10 2.8l1.5 3.3 3.4 1.5-3.4 1.5L10 12.4 8.5 9.1 5 7.6l3.5-1.5z" />
+                  </svg>
+                </div>
+                <div class="chat-message__body">
+                  <div
+                    class="chat-bubble"
+                    :class="[
+                      `chat-bubble--${message.role}`,
+                      `chat-bubble--${message.status}`,
+                      { 'chat-bubble--audio': isAudioMessage(message) }
+                    ]"
+                  >
+                    <button
+                      v-if="isAudioMessage(message)"
+                      class="voice-message"
+                      :class="{ 'is-playing': isAudioMessagePlaying(message.id) }"
+                      type="button"
+                      @click="handleAudioMessageClick(message)"
+                    >
+                      <span
+                        class="voice-message__icon"
+                        :class="isAudioMessagePlaying(message.id) ? 'is-pause' : 'is-play'"
+                        aria-hidden="true"
+                      />
+                      <span class="voice-message__body">
+                        <strong>{{ getAudioMessageLabel(message) }}</strong>
+                        <small>{{ isAudioMessagePlaying(message.id) ? "点击停止播放" : "点击播放语音" }}</small>
+                      </span>
+                    </button>
+                    <template v-else>
+                      <div v-if="message.attachments && message.attachments.length > 0" class="bubble-attachments">
+                        <div v-for="att in message.attachments" :key="att.id" class="bubble-attachment">
+                          <img v-if="isImageAttachment(att)" class="bubble-attachment__img" :src="att.dataUrl" :alt="att.name" />
+                          <span v-else class="bubble-attachment__file">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                            {{ att.name }}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                    <p v-if="message.text && message.text !== '(附件)'">{{ message.text }}</p>
-                  </template>
+                      <p v-if="message.text && message.text !== '(附件)'">{{ message.text }}</p>
+                    </template>
+                  </div>
+                  <div class="chat-message__meta">
+                    <span class="chat-message__meta-role">{{ getMessageRoleLabel(message) }}</span>
+                    <span v-if="getMessageTimeLabel(message)">{{ getMessageTimeLabel(message) }}</span>
+                  </div>
                 </div>
-                <div class="chat-message__meta">
-                  <span class="chat-message__meta-role">{{ getMessageRoleLabel(message) }}</span>
-                  <span v-if="getMessageTimeLabel(message)">{{ getMessageTimeLabel(message) }}</span>
-                </div>
-              </div>
+              </template>
             </article>
             <div v-if="chatMessages.length === 0" class="empty-state empty-state--small">
               当前会话还没有消息，发送第一句开始对话吧。
@@ -11858,20 +12385,72 @@ onBeforeUnmount(() => {
       <div v-else-if="activeSection === 'role-workflow'" class="desktop-console-body desktop-console-body--overview role-workflow-layout">
         <section class="section-block overview-section role-workflow-section">
           <header class="section-block__header role-workflow-header">
-            <h3>角色工作流</h3>
-            <input
-              v-model="roleWorkflowKeyword"
-              class="management-filter-input role-workflow-search"
-              type="search"
-              placeholder="搜索角色 / 分组 / 场景"
-            />
+            <div class="role-workflow-toolbar">
+              <p class="role-workflow-summary">
+                共 {{ roleWorkflowTotalCount }} 个角色，当前显示 {{ roleWorkflowVisibleCount }} 个。
+              </p>
+              <div class="role-workflow-toolbar__actions">
+                <input
+                  v-model="roleWorkflowKeyword"
+                  class="management-filter-input role-workflow-search"
+                  type="search"
+                  placeholder="搜索角色 / 分组 / 场景"
+                />
+                <button class="desktop-console-panel__action role-workflow-add-button" type="button" @click="openRoleWorkflowCreateModal">
+                  新增角色
+                </button>
+              </div>
+            </div>
           </header>
 
-          <p class="role-workflow-summary">
-            共 {{ roleWorkflowTotalCount }} 个角色，当前显示 {{ roleWorkflowVisibleCount }} 个。
-          </p>
+          <div
+            v-if="roleWorkflowActionNotice"
+            class="role-workflow-action-notice"
+            :class="`role-workflow-action-notice--${roleWorkflowActionNotice.tone}`"
+          >
+            {{ roleWorkflowActionNotice.text }}
+          </div>
 
-          <div v-if="roleWorkflowVisibleCount === 0" class="empty-state">未找到匹配角色，请调整关键词。</div>
+          <section class="role-workflow-custom-section">
+            <header class="role-workflow-division__header role-workflow-library-header">
+              <h4>我创建的角色</h4>
+              <span>{{ roleWorkflowCustomVisibleRoles.length }} / {{ roleWorkflowCustomRoles.length }} 个</span>
+            </header>
+            <div v-if="roleWorkflowCustomVisibleRoles.length === 0" class="empty-state">
+              {{ roleWorkflowCustomRoles.length === 0 ? "还没有自定义角色，点击右上角“新增角色”开始创建。" : "未找到匹配的自定义角色，请调整关键词。" }}
+            </div>
+            <div v-else class="role-workflow-grid role-workflow-custom-grid">
+              <article
+                v-for="role in roleWorkflowCustomVisibleRoles"
+                :key="role.id"
+                class="role-workflow-card role-workflow-card--custom"
+                role="button"
+                tabindex="0"
+                @click="openCustomRoleWorkflowDetail(role.id)"
+                @keydown.enter.prevent="openCustomRoleWorkflowDetail(role.id)"
+                @keydown.space.prevent="openCustomRoleWorkflowDetail(role.id)"
+              >
+                <button
+                  class="role-workflow-card__delete"
+                  type="button"
+                  :title="`删除 ${role.nameZh}`"
+                  :aria-label="`删除 ${role.nameZh}`"
+                  @click.stop="requestDeleteCustomRoleWorkflowRole(role.id)"
+                >
+                  ×
+                </button>
+                <strong>{{ role.nameZh }}</strong>
+                <p>{{ role.workflowZh }}</p>
+              </article>
+            </div>
+          </section>
+
+          <header class="role-workflow-division__header role-workflow-library-header">
+            <h4>角色库</h4>
+            <span>{{ roleWorkflowLibraryVisibleCount }} / {{ roleWorkflowLibraryTotalCount }} 个</span>
+          </header>
+
+          <div v-if="roleWorkflowLibraryVisibleCount === 0" class="empty-state">角色库未找到匹配角色，请调整关键词。</div>
 
           <div v-else class="role-workflow-division-list">
             <section v-for="division in roleWorkflowDivisions" :key="division.id" class="role-workflow-division">
@@ -13562,12 +14141,12 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <section class="role-workflow-detail-modal__versions">
+          <section v-if="!isRoleWorkflowCustomRole" class="role-workflow-detail-modal__versions">
             <header class="role-workflow-detail-modal__versions-header">
               <strong>已保存版本（最多 3 个）</strong>
             </header>
             <p v-if="roleWorkflowDetailSavedVersions.length === 0" class="role-workflow-detail-modal__versions-empty">
-              暂无已保存版本，点击“保存修改”后会自动保留历史。
+              暂无已保存版本，点击“保存”后会自动保留历史。
             </p>
             <ul v-else class="role-workflow-detail-modal__versions-list">
               <li v-for="version in roleWorkflowDetailSavedVersions" :key="version.id" class="role-workflow-detail-modal__version-item">
@@ -13587,6 +14166,7 @@ onBeforeUnmount(() => {
 
         <div class="platform-modal__actions role-workflow-detail-modal__actions">
           <button
+            v-if="!isRoleWorkflowCustomRole"
             class="desktop-console-panel__action desktop-console-panel__action--ghost"
             type="button"
             :disabled="!isRoleWorkflowDraftChanged"
@@ -13597,10 +14177,10 @@ onBeforeUnmount(() => {
           <button
             class="desktop-console-panel__action"
             type="button"
-            :disabled="!isRoleWorkflowDraftChanged"
+            :disabled="!canSaveRoleWorkflowDraft"
             @click="saveRoleWorkflowDetail"
           >
-            保存修改
+            保存
           </button>
           <button
             class="desktop-console-panel__action desktop-console-panel__action--ghost"
@@ -13638,6 +14218,27 @@ onBeforeUnmount(() => {
           </button>
           <button class="desktop-console-panel__action desktop-console-panel__action--danger" type="button" :disabled="isStaffDeleting" @click="confirmDeleteStaffMember">
             {{ isStaffDeleting ? "移除中..." : "确认移除" }}
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="roleWorkflowDeleteTargetRole" class="platform-modal-backdrop" @click.self="closeDeleteCustomRoleWorkflowRole">
+      <section class="platform-modal staff-delete-modal" role="dialog" aria-modal="true" aria-label="删除自定义角色确认">
+        <header class="platform-modal__header">
+          <div>
+            <strong>删除角色</strong>
+            <p>确认删除「{{ roleWorkflowDeleteTargetRole.nameZh }}」？删除后不可恢复。</p>
+          </div>
+          <button class="platform-modal__close" type="button" aria-label="关闭" @click.stop="closeDeleteCustomRoleWorkflowRole">×</button>
+        </header>
+
+        <div class="platform-modal__actions">
+          <button class="desktop-console-panel__action desktop-console-panel__action--ghost" type="button" @click="closeDeleteCustomRoleWorkflowRole">
+            取消
+          </button>
+          <button class="desktop-console-panel__action desktop-console-panel__action--danger" type="button" @click="confirmDeleteCustomRoleWorkflowRole">
+            确认删除
           </button>
         </div>
       </section>

@@ -1,0 +1,23 @@
+{
+  "role_md": "",
+  "agent_out": "",
+  "release": false,
+  "exit_code": 1,
+  "intake": {
+    "ready_for_generation": false,
+    "missing_fields": []
+  },
+  "review": {
+    "BLOCKER": 0,
+    "HIGH": 0,
+    "MEDIUM": 0
+  },
+  "eval": {
+    "pass_rate": 0.0,
+    "fail_counts": {
+      "BLOCKER": 0,
+      "HIGH": 0,
+      "MEDIUM": 0
+    }
+  }
+}

@@ -1,0 +1,6 @@
+interface:
+  display_name: "OpenClaw Agent Reviewer"
+  short_description: "按门禁清单审查并修复 OpenClaw agent 质量问题"
+  default_prompt: "Use $openclaw-agent-reviewer to run blocker/high checks on an OpenClaw agent file and return a structured review report."
+policy:
+  allow_implicit_invocation: false

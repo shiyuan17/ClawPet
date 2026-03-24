@@ -1,0 +1,6 @@
+interface:
+  display_name: "OpenClaw Agent Generator"
+  short_description: "用角色描述生成符合模式的 OpenClaw Agent"
+  default_prompt: "Use $openclaw-agent-generator to turn academic/*.md style role descriptions into validated OpenClaw agent files with pattern-based workflow."
+policy:
+  allow_implicit_invocation: false

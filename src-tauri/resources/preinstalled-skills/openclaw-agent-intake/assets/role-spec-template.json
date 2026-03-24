@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "ready_for_generation": false,
+  "profile": {
+    "name": "",
+    "description": "",
+    "color": "",
+    "emoji": "",
+    "vibe": ""
+  },
+  "semantics": {
+    "role_scope": "",
+    "mission": [],
+    "must_rules": [],
+    "must_not_rules": [],
+    "deliverables": [],
+    "workflow_steps": [],
+    "communication_style": [],
+    "memory_policy": [],
+    "success_metrics": []
+  },
+  "quality": {
+    "missing_fields": [],
+    "assumptions": [],
+    "confidence": 0.0
+  }
+}

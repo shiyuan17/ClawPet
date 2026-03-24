@@ -31,6 +31,26 @@
     {
       "slug": "brave-web-search",
       "autoEnable": true
+    },
+    {
+      "slug": "openclaw-agent-evaluator",
+      "autoEnable": true
+    },
+    {
+      "slug": "openclaw-agent-factory",
+      "autoEnable": true
+    },
+    {
+      "slug": "openclaw-agent-generator",
+      "autoEnable": true
+    },
+    {
+      "slug": "openclaw-agent-intake",
+      "autoEnable": true
+    },
+    {
+      "slug": "openclaw-agent-reviewer",
+      "autoEnable": true
     }
   ]
 }

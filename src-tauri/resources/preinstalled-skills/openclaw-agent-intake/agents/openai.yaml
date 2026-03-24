@@ -1,0 +1,6 @@
+interface:
+  display_name: "OpenClaw Agent Intake"
+  short_description: "将角色描述抽取为结构化角色规格（role spec）"
+  default_prompt: "Use $openclaw-agent-intake to convert role markdown into a normalized role_spec JSON with missing-field prompts."
+policy:
+  allow_implicit_invocation: false

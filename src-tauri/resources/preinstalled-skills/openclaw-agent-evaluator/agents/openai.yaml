@@ -1,0 +1,6 @@
+interface:
+  display_name: "OpenClaw Agent Evaluator"
+  short_description: "运行回归评测与评分卡，跟踪 agent 迭代质量漂移"
+  default_prompt: "Use $openclaw-agent-evaluator to run an eval suite against an OpenClaw agent and produce a scorecard with regressions."
+policy:
+  allow_implicit_invocation: false

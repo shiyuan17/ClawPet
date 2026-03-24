@@ -1,0 +1,6 @@
+interface:
+  display_name: "OpenClaw Agent Factory"
+  short_description: "单入口创建 OpenClaw Agent（内含 4 个子 skill 流水线）"
+  default_prompt: "Use $openclaw-agent-factory to create an OpenClaw agent from a role markdown via intake, generation, review, and eval in one run."
+policy:
+  allow_implicit_invocation: true
