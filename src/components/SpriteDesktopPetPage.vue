@@ -500,6 +500,7 @@ type LobsterSnapshotResponse = {
   backupDir: string;
   detail: string;
   backups: LobsterBackupItem[];
+  installWizardOpenEveryLaunch?: boolean;
 };
 
 type LobsterActionResult = {
@@ -1137,7 +1138,7 @@ const APP_I18N_MESSAGES: Record<AppLocale, Record<string, string>> = {
     "console.section.overview": "总览",
     "console.section.platforms": "代理配置",
     "console.section.staff": "员工管理",
-    "console.section.role_workflow": "员工招募",
+    "console.section.role_workflow": "数字员工",
     "console.section.skill_market": "技能市场",
     "console.section.channels": "消息频道",
     "console.section.bindings": "宠物绑定",
@@ -1852,6 +1853,7 @@ const skillMarketCategoryTotal = ref(0);
 const skillMarketGlobalSkills = ref<SkillMarketSkill[]>([]);
 const skillMarketGlobalTotal = ref(0);
 const activeSkillMarketDetail = ref<SkillMarketSkill | null>(null);
+const skillMarketInstallingSlug = ref("");
 const runtimeLogDetail = ref("正在读取 OpenClaw 运行时消息...");
 const memorySnapshotDetail = ref("正在读取记忆文件...");
 const memorySnapshotSourcePath = ref("");
@@ -2063,7 +2065,7 @@ const skillMarketCategories: SkillMarketCategoryOption[] = [
   { id: "ai-intelligence", label: "AI 智能", icon: "AI", hint: "智能能力", apiCategory: "ai-intelligence" },
   { id: "developer-tools", label: "开发工具", icon: "</>", hint: "工程研发", apiCategory: "developer-tools" },
   { id: "productivity", label: "效率提升", icon: "⚡", hint: "个人效率", apiCategory: "productivity" },
-  { id: "data-analytics", label: "数据分析", icon: "图", hint: "洞察分析", apiCategory: "data-analytics" },
+  { id: "data-analysis", label: "数据分析", icon: "图", hint: "洞察分析", apiCategory: "data-analysis" },
   { id: "content-creation", label: "内容创作", icon: "创", hint: "文案视频", apiCategory: "content-creation" },
   { id: "security-compliance", label: "安全合规", icon: "盾", hint: "安全审计", apiCategory: "security-compliance" },
   {
@@ -2074,6 +2076,7 @@ const skillMarketCategories: SkillMarketCategoryOption[] = [
     apiCategory: "communication-collaboration"
   }
 ];
+const SKILL_MARKET_SKILLHUB_URL = "https://skillhub.tencent.com/";
 const skillMarketSortOptions: Array<{ id: SkillMarketSortBy; label: string }> = [
   { id: "score", label: "综合排序" },
   { id: "downloads", label: "下载量" },
@@ -5807,12 +5810,70 @@ function goNextSkillMarketPage() {
   goToSkillMarketPage(skillMarketPage.value + 1);
 }
 
-function openSkillMarketHomepage(url: string) {
-  if (!url.trim()) {
-    statusText.value = "该技能暂未提供主页地址。";
+function resolveSkillMarketHomepageUrl(url: string | null | undefined) {
+  const trimmed = (url ?? "").trim();
+  return trimmed || SKILL_MARKET_SKILLHUB_URL;
+}
+
+function isSkillMarketSkillInstalling(skill: SkillMarketSkill | null | undefined) {
+  const slug = skill?.slug?.trim();
+  return Boolean(slug) && skillMarketInstallingSlug.value === slug;
+}
+
+function canInstallSkillMarketSkill(skill: SkillMarketSkill | null | undefined) {
+  if (!skill) {
+    return false;
+  }
+  const slug = skill.slug?.trim();
+  if (slug && getTauriApi()?.core?.invoke) {
+    return true;
+  }
+  return Boolean(resolveSkillMarketHomepageUrl(skill.homepage));
+}
+
+async function installSkillMarketSkill(skill: SkillMarketSkill) {
+  const slug = skill.slug?.trim() ?? "";
+  const invoke = getTauriApi()?.core?.invoke;
+
+  if (invoke && slug) {
+    if (skillMarketInstallingSlug.value === slug) {
+      return;
+    }
+    skillMarketInstallingSlug.value = slug;
+    try {
+      const result = (await invoke("install_skill_market_skill", {
+        skillSlug: slug
+      })) as string;
+      statusText.value = result?.trim() || `技能「${skill.name}」安装成功。`;
+      await refreshOpenClawSkillsList();
+      await refreshOpenClawSkillSnapshot();
+      return;
+    } catch (error) {
+      statusText.value =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string" && error.trim()
+            ? error
+            : `安装 ${skill.name} 失败。`;
+      return;
+    } finally {
+      if (skillMarketInstallingSlug.value === slug) {
+        skillMarketInstallingSlug.value = "";
+      }
+    }
+  }
+
+  await openSkillMarketHomepage(skill.homepage);
+  statusText.value = "当前环境暂不支持一键安装，已打开 SkillHub 页面。";
+}
+
+async function openSkillMarketHomepage(url: string | null | undefined) {
+  const targetUrl = resolveSkillMarketHomepageUrl(url);
+  if (!targetUrl.trim()) {
+    statusText.value = "该技能暂未提供可访问地址。";
     return;
   }
-  void openCodingPlanPlatform(url);
+  await openCodingPlanPlatform(targetUrl);
 }
 
 function openSkillMarketDetailModal(skill: SkillMarketSkill) {
@@ -6255,7 +6316,7 @@ function getConsoleSectionTitle(section: ConsoleSection) {
   if (section === "overview") return "总览";
   if (section === "platforms") return "代理配置";
   if (section === "staff") return "员工管理";
-  if (section === "role-workflow") return "员工招募";
+  if (section === "role-workflow") return "数字员工";
   if (section === "skill-market") return "技能市场";
   if (section === "channels") return "消息频道";
   if (section === "bindings") return "宠物绑定";
@@ -6302,7 +6363,7 @@ async function openConsole(section: ConsoleSection) {
     void refreshOpenClawSkillSnapshot();
     void refreshOpenClawSkillsList();
   } else if (section === "role-workflow") {
-    statusText.value = "员工招募已展开，可在我创建的角色和角色库中筛选并招募角色。";
+    statusText.value = "数字员工已展开，可在我创建的角色和角色库中筛选并招募角色。";
   } else if (section === "skill-market") {
     statusText.value = "技能市场已展开，可按分类浏览并快速查看热门技能。";
     void refreshSkillMarket();
@@ -7645,14 +7706,27 @@ async function autoOpenLobsterInstallWizardForFirstLaunch() {
   if (isConsoleWindowMode) {
     return;
   }
-  if (safeLocalStorageGetItem(LOBSTER_INSTALL_WIZARD_AUTOSTARTED_STORAGE_KEY) === "1") {
-    return;
+
+  let snapshot = await refreshLobsterSnapshot();
+  if (!snapshot && typeof window !== "undefined") {
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
+    snapshot = await refreshLobsterSnapshot();
   }
-  safeLocalStorageSetItem(LOBSTER_INSTALL_WIZARD_AUTOSTARTED_STORAGE_KEY, "1");
+  const openEveryLaunch = snapshot?.installWizardOpenEveryLaunch === true;
+  if (!openEveryLaunch) {
+    if (safeLocalStorageGetItem(LOBSTER_INSTALL_WIZARD_AUTOSTARTED_STORAGE_KEY) === "1") {
+      return;
+    }
+    safeLocalStorageSetItem(LOBSTER_INSTALL_WIZARD_AUTOSTARTED_STORAGE_KEY, "1");
+  }
 
   openLobsterInstallWizard();
-  appendLobsterWizardLog("info", "首次启动，自动打开安装向导。");
-  const snapshot = await refreshLobsterSnapshot();
+  appendLobsterWizardLog(
+    "info",
+    openEveryLaunch
+      ? "已启用 CLAWPET_INSTALL_WIZARD_OPEN_EVERY_LAUNCH，每次启动自动打开安装向导。"
+      : "首次启动，自动打开安装向导。"
+  );
   if (!snapshot?.openclawInstalled || !isLobsterInstallWizardOpen.value) {
     return;
   }
@@ -12990,6 +13064,14 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="platform-modal__actions skill-market-detail-modal__actions">
+          <button
+            class="desktop-console-panel__action"
+            type="button"
+            :disabled="!canInstallSkillMarketSkill(activeSkillMarketDetail) || isSkillMarketSkillInstalling(activeSkillMarketDetail)"
+            @click="installSkillMarketSkill(activeSkillMarketDetail)"
+          >
+            {{ isSkillMarketSkillInstalling(activeSkillMarketDetail) ? "安装中..." : "安装技能" }}
+          </button>
           <button
             class="desktop-console-panel__action desktop-console-panel__action--ghost"
             type="button"

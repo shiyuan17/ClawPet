@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
-import appLogoUrl from "../../images/logo.png";
+import appLogoUrl from "../../images/xia-logo.png";
+import channelDingtalkIcon from "../images/channels/dingtalk.svg";
+import channelDiscordIcon from "../images/channels/discord.svg";
+import channelFeishuIcon from "../images/channels/feishu.svg";
+import channelQqIcon from "../images/channels/qq.svg";
+import channelTelegramIcon from "../images/channels/telegram.svg";
+import channelWecomIcon from "../images/channels/wecom.svg";
+import channelWechatIcon from "../images/channels/whatsapp.svg";
 import packageJson from "../../package.json";
 import {
   DEFAULT_TASK_PROJECT_NAME,
@@ -29,7 +36,7 @@ type AgentGroupKind = "staff" | "group";
 type AgentStatusTone = "online" | "busy" | "offline";
 type ChatRole = "assistant" | "user" | "system";
 type ChatStatus = "pending" | "done" | "error";
-type AgentPaneTab = "staff" | "group";
+type AgentPaneTab = "staff" | "group" | "channel";
 type RelatedResourceTarget = "memory" | "skills" | "tools" | "model" | "channel" | "schedule";
 type RelatedSkillCategory = "builtIn" | "installed";
 type UtilityModalType = "history" | "logs";
@@ -307,6 +314,7 @@ type GatewayHealthSnapshotResponse = {
 type LobsterSnapshotResponse = {
   openclawInstalled: boolean;
   openclawVersion: string | null;
+  installWizardOpenEveryLaunch?: boolean;
 };
 
 type LobsterActionResult = {
@@ -389,6 +397,14 @@ type ChatArchiveRecord = {
   messages: AgentChatMessage[];
 };
 
+type ChannelPaneCatalogItem = {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  aliases?: string[];
+};
+
 type TauriInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 type TauriWindowApi = {
   close?: () => Promise<void> | void;
@@ -414,7 +430,7 @@ const sidebarItems: SidebarItem[] = [
   { id: "chat", label: "聊天" },
   { id: "tasks", label: "任务管理" },
   { id: "dashboard", label: "仪表盘" },
-  { id: "recruitment", label: "员工招募" },
+  { id: "recruitment", label: "数字员工" },
   { id: "skills", label: "技能市场" }
 ];
 const sidebarSettingsMenuGroups: SidebarSettingsMenuGroup[] = [
@@ -454,9 +470,78 @@ const taskBoardColumns: TaskBoardColumn[] = [
   { id: "cancelled", label: "Cancelled", subtitle: "取消", emptyText: "暂无已取消任务。" }
 ];
 const agentPaneTabs: Array<{ id: AgentPaneTab; label: string }> = [
-  { id: "staff", label: "角色" },
+  { id: "staff", label: "数字员工" },
+  { id: "channel", label: "频道" },
   { id: "group", label: "群组" }
 ];
+const chatChannelCatalog: ChannelPaneCatalogItem[] = [
+  {
+    id: "wechat",
+    name: "微信",
+    description: "微信消息触达与机器人接入",
+    icon: channelWechatIcon,
+    aliases: ["wx"]
+  },
+  {
+    id: "feishu",
+    name: "飞书",
+    description: "飞书机器人与消息通知",
+    icon: channelFeishuIcon
+  },
+  {
+    id: "wecom",
+    name: "企业微信",
+    description: "企业微信应用与群机器人",
+    icon: channelWecomIcon,
+    aliases: ["workwechat", "wechatwork", "qywx"]
+  },
+  {
+    id: "dingtalk",
+    name: "钉钉",
+    description: "钉钉机器人与工作通知",
+    icon: channelDingtalkIcon,
+    aliases: ["dingding"]
+  },
+  {
+    id: "qq",
+    name: "QQ",
+    description: "QQ群机器人与私聊触达",
+    icon: channelQqIcon
+  },
+  {
+    id: "telegram",
+    name: "Telegram",
+    description: "Bot API 多账号接入",
+    icon: channelTelegramIcon,
+    aliases: ["tg"]
+  },
+  {
+    id: "discord",
+    name: "Discord",
+    description: "Guild / Channel 事件联动",
+    icon: channelDiscordIcon
+  }
+];
+const chatChannelCatalogMap = new Map<string, ChannelPaneCatalogItem>(chatChannelCatalog.map((channel) => [channel.id, channel]));
+const chatChannelAliasMap = new Map<string, string>();
+for (const channel of chatChannelCatalog) {
+  chatChannelAliasMap.set(channel.id, channel.id);
+  for (const alias of channel.aliases ?? []) {
+    chatChannelAliasMap.set(alias, channel.id);
+  }
+}
+for (const alias of ["work-wechat", "work_wechat"]) {
+  chatChannelAliasMap.set(alias, "wecom");
+}
+for (const alias of ["ding-talk", "ding_talk"]) {
+  chatChannelAliasMap.set(alias, "dingtalk");
+}
+for (const alias of ["wechat-official", "wechat_service"]) {
+  chatChannelAliasMap.set(alias, "wechat");
+}
+for (const alias of ["tencent-qq"]) {
+  chatChannelAliasMap.set(alias, "qq");
+}
 const agentAvatarModules = import.meta.glob("../../images/avatar/*.{png,jpg,jpeg,webp,avif,svg}", {
   eager: true,
   import: "default"
@@ -515,6 +600,7 @@ const taskDraftPriority = ref<TaskRecord["priority"]>("p1");
 const taskDragTaskId = ref<string | null>(null);
 const taskDragOverStatus = ref<TaskBoardStatus | null>(null);
 const isAgentSettingsOpen = ref(false);
+const isSidebarLogsOpen = ref(false);
 const isSidebarSettingsModalOpen = ref(false);
 const sidebarSettingsActiveGroup = ref<SidebarSettingsMenuGroupId>("general");
 const sidebarSettingsAppearance = ref<SidebarSettingsAppearance>(
@@ -589,6 +675,7 @@ const startupOpenClawStatusText = ref("正在检测 OpenClaw 安装状态...");
 const startupOpenClawInstallError = ref("");
 const startupOpenClawSteps = ref<StartupInstallStep[]>(cloneStartupOpenClawSteps());
 const startupOpenClawRuntimeLogs = ref("");
+const startupOpenClawShowManualActions = ref(false);
 const activeSkillMarketCategory = ref<SkillMarketSectionCategory>("top");
 const skillMarketSortBy = ref<SkillMarketSortBy>("score");
 const skillMarketSearch = ref("");
@@ -606,6 +693,7 @@ const skillMarketCache = new Map<string, SkillMarketListResultSnapshot>();
 const skillMarketGlobalCache = new Map<string, SkillMarketListResultSnapshot>();
 const activeSkillMarketDetail = ref<SkillMarketSkill | null>(null);
 const skillMarketActionNotice = ref("");
+const skillMarketInstallingSlug = ref("");
 let skillMarketRequestToken = 0;
 let roleWorkflowDetailRequestToken = 0;
 const utilityRuntimeCategories: Array<{ id: UtilityLogCategory; label: string }> = [
@@ -624,11 +712,12 @@ const skillMarketCategories: SkillMarketCategoryOption[] = [
   { id: "ai-intelligence", label: "AI 智能", hint: "智能体与推理增强", apiCategory: "ai-intelligence" },
   { id: "developer-tools", label: "开发工具", hint: "研发与工程效率", apiCategory: "developer-tools" },
   { id: "productivity", label: "效率协作", hint: "办公与流程自动化", apiCategory: "productivity" },
-  { id: "data-analytics", label: "数据分析", hint: "洞察与可视化", apiCategory: "data-analytics" },
+  { id: "data-analysis", label: "数据分析", hint: "洞察与可视化", apiCategory: "data-analysis" },
   { id: "content-creation", label: "内容创作", hint: "文案、媒体与运营", apiCategory: "content-creation" },
   { id: "security-compliance", label: "安全合规", hint: "风险与治理", apiCategory: "security-compliance" },
   { id: "communication-collaboration", label: "沟通协同", hint: "协作与集成", apiCategory: "communication-collaboration" }
 ];
+const SKILL_MARKET_SKILLHUB_URL = "https://skillhub.tencent.com/";
 
 function getStorage() {
   if (typeof window === "undefined") {
@@ -937,6 +1026,13 @@ function markStartupOpenClawStepFailed(stepIndex: number) {
   setStartupOpenClawStepStatus(stepIndex, "failed");
 }
 
+function markStartupOpenClawAllDone() {
+  startupOpenClawSteps.value = startupOpenClawSteps.value.map((step) => ({
+    ...step,
+    status: "done" as StartupInstallStepStatus
+  }));
+}
+
 function getStartupOpenClawStepBadge(step: StartupInstallStep) {
   if (step.status === "failed") {
     return "失败";
@@ -993,6 +1089,7 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke) {
   startupOpenClawInstalling.value = true;
   startupOpenClawInstallError.value = "";
   startupOpenClawRuntimeLogs.value = "";
+  startupOpenClawShowManualActions.value = false;
   resetStartupOpenClawSteps();
 
   const appendStartupOpenClawRuntimeLogs = (...entries: Array<string | undefined>) => {
@@ -1005,6 +1102,7 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke) {
     startupOpenClawStatusText.value = "正在检测环境...";
     setStartupOpenClawStepInstalling(0);
     let environmentCheckNotice = "";
+    let environmentBlockingError = "";
     try {
       const installGuide = (await invoke("load_lobster_install_guide")) as {
         ready?: boolean;
@@ -1015,15 +1113,19 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke) {
         const failedDetail = failedChecks
           .map((item) => `${item.title || "检查项"}：${item.detail || "未通过"}`)
           .join("；");
-        environmentCheckNotice = failedDetail
-          ? `环境检查存在未通过项，已继续安装：${failedDetail}`
-          : "环境检查存在未通过项，已继续安装。";
+        environmentBlockingError = failedDetail ? `环境检查未通过：${failedDetail}` : "环境检查未通过。";
       }
     } catch (error) {
       environmentCheckNotice =
         error instanceof Error && error.message.trim()
-          ? `环境检查不可用，已继续安装：${error.message}`
-          : "环境检查不可用，已继续安装。";
+          ? `环境检查不可用，将继续安装：${error.message}`
+          : "环境检查不可用，将继续安装。";
+    }
+    if (environmentBlockingError) {
+      markStartupOpenClawStepFailed(0);
+      startupOpenClawStatusText.value = "环境检查未通过，已停止自动安装。";
+      startupOpenClawRuntimeLogs.value = environmentBlockingError;
+      throw new Error(`${environmentBlockingError} 请先修复后再重试安装。`);
     }
     markStartupOpenClawStepDone(0);
     if (environmentCheckNotice) {
@@ -1057,6 +1159,19 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke) {
     }
     appendStartupOpenClawRuntimeLogs(installResult.command, installResult.stdout, installResult.stderr);
     if (!installResult.success) {
+      const installFailureOutput = [installResult.detail, installResult.stderr].filter(Boolean).join("\n");
+      const isRuntimeBlockingFailure =
+        installFailureOutput.includes("Node 版本过低") ||
+        installFailureOutput.includes("运行条件不满足") ||
+        installFailureOutput.includes("OPENCLAW_NODE_PATH");
+      if (isRuntimeBlockingFailure) {
+        throw new Error(
+          `${
+            installResult.detail || "openClaw 安装失败。"
+          } 检测到运行环境阻断错误，已跳过自动修复与重试。请先修复 Node 运行时后再安装。`
+        );
+      }
+
       startupOpenClawStatusText.value = "安装遇到问题，正在自动修复...";
       try {
         const autoFixResult = (await invoke("run_lobster_action", { action: "auto_fix" })) as LobsterActionResult;
@@ -1149,17 +1264,33 @@ async function ensureStartupOpenClawReady() {
 
   try {
     const snapshot = (await invoke("load_lobster_snapshot")) as LobsterSnapshotResponse;
+    const openInstallUiEveryLaunch = snapshot.installWizardOpenEveryLaunch === true;
     if (snapshot.openclawInstalled) {
       try {
         await applyLockedStartupProviderConfig(invoke);
       } catch {
         // Keep app usable even if default provider write fails.
       }
+      if (openInstallUiEveryLaunch) {
+        const versionText = snapshot.openclawVersion?.trim() ? snapshot.openclawVersion.trim() : "未知";
+        startupOpenClawStatusText.value = "已启用每次启动显示安装界面。";
+        startupOpenClawInstallError.value = "";
+        startupOpenClawRuntimeLogs.value = [
+          `检测结果：OpenClaw 已安装（版本 ${versionText}）。`,
+          "你可以点击“重新安装”再次执行安装流程，或点击“继续使用”进入应用。"
+        ].join("\n");
+        startupOpenClawShowManualActions.value = true;
+        startupOpenClawOverlayVisible.value = true;
+        startupOpenClawInstalling.value = false;
+        markStartupOpenClawAllDone();
+      }
       return;
     }
+    startupOpenClawShowManualActions.value = false;
   } catch (error) {
     startupOpenClawInstallError.value = error instanceof Error ? error.message : "无法检测 OpenClaw 安装状态。";
     startupOpenClawStatusText.value = "OpenClaw 安装检测失败，请重试。";
+    startupOpenClawShowManualActions.value = false;
     startupOpenClawOverlayVisible.value = true;
     return;
   }
@@ -1180,6 +1311,7 @@ function dismissStartupOpenClawOverlay() {
   if (startupOpenClawInstalling.value) {
     return;
   }
+  startupOpenClawShowManualActions.value = false;
   startupOpenClawOverlayVisible.value = false;
 }
 
@@ -1560,6 +1692,8 @@ function switchAgent(agentId: string | null) {
   setAgentMeta(agentId, { unread: 0 });
   if (utilityModalType.value) {
     void refreshUtilityModalData(utilityModalType.value);
+  } else if (isSidebarLogsOpen.value) {
+    void refreshUtilityModalData("logs");
   }
   void scrollMessagesToBottom();
 }
@@ -1939,11 +2073,12 @@ async function handleSidebarFeedbackCopy() {
 
 async function openFeedbackLogsFromSidebarSettings() {
   closeSidebarSettingsModal();
-  await openUtilityModal("logs");
+  await openSidebarLogs();
 }
 
 function toggleAgentSettingsPanel() {
   closeSidebarSettingsModal();
+  closeSidebarLogsPanel();
   isAgentSettingsOpen.value = !isAgentSettingsOpen.value;
 }
 
@@ -1954,6 +2089,7 @@ function closeAgentSettingsPanel() {
 async function openSidebarSettings() {
   activeSection.value = "chat";
   isAgentSettingsOpen.value = false;
+  closeSidebarLogsPanel();
   closeUtilityModal();
   closeProxyConfigModal();
   closeRelatedResourceModal();
@@ -1971,7 +2107,12 @@ async function openSidebarLogs() {
   isAgentSettingsOpen.value = false;
   closeSidebarSettingsModal();
   closeProxyConfigModal();
-  await openUtilityModal("logs");
+  closeRelatedResourceModal();
+  closeUtilityModal();
+  isSidebarLogsOpen.value = true;
+  clearUtilityViewStatus();
+  resetUtilityLogViewState();
+  await refreshUtilityModalData("logs");
 }
 
 function buildProxyConfigDraft(platform?: OpenClawPlatformSnapshotItem | null): ProxyConfigDraft {
@@ -2095,6 +2236,7 @@ async function handleProxyConfigSave() {
 
 async function openSidebarProxyConfig() {
   isAgentSettingsOpen.value = false;
+  closeSidebarLogsPanel();
   closeSidebarSettingsModal();
   closeUtilityModal();
   closeRelatedResourceModal();
@@ -2104,6 +2246,7 @@ async function openSidebarProxyConfig() {
 
 async function openSidebarOpenClawWeb() {
   isAgentSettingsOpen.value = false;
+  closeSidebarLogsPanel();
   closeSidebarSettingsModal();
   closeUtilityModal();
   closeProxyConfigModal();
@@ -2131,6 +2274,7 @@ async function openSidebarOpenClawWeb() {
 
 async function openSidebarLegacyConsole() {
   isAgentSettingsOpen.value = false;
+  closeSidebarLogsPanel();
   closeSidebarSettingsModal();
   closeUtilityModal();
   closeProxyConfigModal();
@@ -2163,6 +2307,14 @@ async function openSidebarLegacyConsole() {
 
 function equalsIgnoreCase(left: string | null | undefined, right: string | null | undefined) {
   return (left ?? "").trim().toLowerCase() === (right ?? "").trim().toLowerCase();
+}
+
+function normalizeChannelPaneType(value: string | null | undefined) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  return chatChannelAliasMap.get(normalized) ?? normalized;
 }
 
 function normalizeProviderIdentifier(value: string | null | undefined) {
@@ -3070,10 +3222,7 @@ function formatSkillMarketVersion(value: string | null | undefined) {
 }
 
 async function openSkillHomepage(skill: SkillMarketSkill) {
-  const url = skill.homepage?.trim();
-  if (!url) {
-    return;
-  }
+  const url = skill.homepage?.trim() || SKILL_MARKET_SKILLHUB_URL;
   await openExternalUrl(url);
 }
 
@@ -3083,6 +3232,11 @@ function openSkillMarketDetailModal(skill: SkillMarketSkill) {
 
 function closeSkillMarketDetailModal() {
   activeSkillMarketDetail.value = null;
+}
+
+function isSkillMarketSkillInstalling(skill: SkillMarketSkill | null | undefined) {
+  const slug = skill?.slug?.trim();
+  return Boolean(slug) && skillMarketInstallingSlug.value === slug;
 }
 
 function getSkillMarketCategoryLabel(category: string | null | undefined) {
@@ -3095,28 +3249,49 @@ function getSkillMarketCategoryLabel(category: string | null | undefined) {
 }
 
 function canInstallSkillMarketSkill(skill: SkillMarketSkill) {
-  return Boolean(getTauriInvoke()) || Boolean(skill.homepage?.trim());
+  const slug = skill.slug?.trim();
+  if (slug && getTauriInvoke()) {
+    return true;
+  }
+  return Boolean((skill.homepage ?? "").trim() || SKILL_MARKET_SKILLHUB_URL);
 }
 
 async function installSkillMarketSkill(skill: SkillMarketSkill) {
+  const slug = skill.slug?.trim() ?? "";
   const invoke = getTauriInvoke();
-  if (invoke) {
-    try {
-      await invoke("open_console_window", { section: "skill-market" });
-      skillMarketActionNotice.value = "已打开旧版技能市场，可继续安装流程。";
+
+  if (invoke && slug) {
+    if (skillMarketInstallingSlug.value === slug) {
       return;
-    } catch {
-      // Fallback to market homepage.
+    }
+    skillMarketInstallingSlug.value = slug;
+    try {
+      const result = (await invoke("install_skill_market_skill", {
+        skillSlug: slug
+      })) as string;
+      skillMarketActionNotice.value = result?.trim() || `技能「${skill.name}」安装成功。`;
+      if (relatedResourceModalTarget.value === "skills") {
+        await loadRelatedSkillsSnapshot();
+      }
+      return;
+    } catch (error) {
+      skillMarketActionNotice.value =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string" && error.trim()
+            ? error
+            : `安装 ${skill.name} 失败。`;
+      return;
+    } finally {
+      if (skillMarketInstallingSlug.value === slug) {
+        skillMarketInstallingSlug.value = "";
+      }
     }
   }
 
-  const url = skill.homepage?.trim();
-  if (!url) {
-    skillMarketActionNotice.value = "当前技能缺少可安装入口。";
-    return;
-  }
+  const url = skill.homepage?.trim() || SKILL_MARKET_SKILLHUB_URL;
   await openExternalUrl(url);
-  skillMarketActionNotice.value = "已打开技能详情页，请按页面提示完成安装。";
+  skillMarketActionNotice.value = "当前环境暂不支持一键安装，已打开 SkillHub 页面。";
 }
 
 function buildInstallableRoleAgentId(sourcePath: string) {
@@ -3432,6 +3607,7 @@ function handleSidebarSectionChange(section: SidebarSection) {
   activeSection.value = section;
   if (section !== "chat") {
     isAgentSettingsOpen.value = false;
+    closeSidebarLogsPanel();
     closeSidebarSettingsModal();
   }
 
@@ -3710,15 +3886,33 @@ async function handleRelatedMemorySave() {
   }
 }
 
-function closeUtilityModal() {
-  utilityModalType.value = null;
-  utilityModalLoading.value = false;
-  utilityModalError.value = "";
-  utilityModalNotice.value = "";
+function resetUtilityLogViewState() {
   utilityLogTab.value = "runtime";
   utilityLogDetailTab.value = "response";
   utilityRuntimeCategory.value = "all";
   utilitySelectedLogId.value = null;
+}
+
+function clearUtilityViewStatus() {
+  utilityModalError.value = "";
+  utilityModalNotice.value = "";
+}
+
+function closeSidebarLogsPanel() {
+  if (!isSidebarLogsOpen.value) {
+    return;
+  }
+  isSidebarLogsOpen.value = false;
+  utilityModalLoading.value = false;
+  clearUtilityViewStatus();
+  resetUtilityLogViewState();
+}
+
+function closeUtilityModal() {
+  utilityModalType.value = null;
+  utilityModalLoading.value = false;
+  clearUtilityViewStatus();
+  resetUtilityLogViewState();
 }
 
 async function refreshUtilityModalData(type: UtilityModalType) {
@@ -3767,23 +3961,24 @@ async function refreshUtilityModalData(type: UtilityModalType) {
 }
 
 async function openUtilityModal(type: UtilityModalType) {
+  closeSidebarLogsPanel();
   utilityModalType.value = type;
   utilityModalNotice.value = "";
   utilityModalError.value = "";
   if (type === "logs") {
-    utilityLogTab.value = "runtime";
-    utilityLogDetailTab.value = "response";
-    utilityRuntimeCategory.value = "all";
-    utilitySelectedLogId.value = null;
+    resetUtilityLogViewState();
   }
   await refreshUtilityModalData(type);
 }
 
 async function handleUtilityModalRefresh() {
-  if (!utilityModalType.value) {
+  if (utilityModalType.value) {
+    await refreshUtilityModalData(utilityModalType.value);
     return;
   }
-  await refreshUtilityModalData(utilityModalType.value);
+  if (isSidebarLogsOpen.value) {
+    await refreshUtilityModalData("logs");
+  }
 }
 
 async function handleArchiveCurrentChat() {
@@ -4063,7 +4258,7 @@ async function handleRelatedChannelBinding(channelType: string, accountId: strin
 
 function getModuleTitle(section: SidebarSection) {
   if (section === "dashboard") return "仪表盘";
-  if (section === "recruitment") return "员工招募";
+  if (section === "recruitment") return "数字员工";
   if (section === "skills") return "技能市场";
   if (section === "tasks") return "任务管理";
   return "聊天";
@@ -4089,10 +4284,69 @@ const filteredAgents = computed(() => {
   });
 });
 
+const isChannelPaneActive = computed(() => activeAgentPaneTab.value === "channel");
 const staffAgents = computed(() => filteredAgents.value.filter((agent) => agent.groupKind === "staff"));
 const groupAgents = computed(() => filteredAgents.value.filter((agent) => agent.groupKind === "group"));
-const currentPaneAgents = computed(() => (activeAgentPaneTab.value === "staff" ? staffAgents.value : groupAgents.value));
-const currentPaneEmptyText = computed(() => (activeAgentPaneTab.value === "staff" ? "暂无角色 Agent" : "暂无群组 Agent"));
+const currentPaneAgents = computed(() => (activeAgentPaneTab.value === "group" ? groupAgents.value : staffAgents.value));
+const currentPaneEmptyText = computed(() => (activeAgentPaneTab.value === "group" ? "暂无群组 Agent" : "暂无数字员工"));
+const configuredChannelPaneGroups = computed(() => {
+  const groups = dashboardChannelSnapshot.value?.channels ?? [];
+  return groups
+    .map((group) => {
+      const channelType = (group.channelType ?? "").trim();
+      const normalizedType = normalizeChannelPaneType(channelType);
+      const catalog = chatChannelCatalogMap.get(normalizedType);
+      const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+      const connectedAccounts = accounts.filter((account) => {
+        if (!account.configured) {
+          return false;
+        }
+        const status = (account.status ?? "").trim().toLowerCase();
+        return status === "connected" || status === "online";
+      }).length;
+      return {
+        id: normalizedType || channelType.toLowerCase(),
+        channelType: channelType || normalizedType || "unknown",
+        name: catalog?.name || channelType || normalizedType || "未命名频道",
+        icon: catalog?.icon ?? null,
+        totalAccounts: accounts.length,
+        configuredAccounts: accounts.filter((account) => account.configured).length,
+        connectedAccounts
+      };
+    })
+    .filter((group) => group.channelType);
+});
+const configuredChannelPaneIdSet = computed(() => {
+  const configuredIds = new Set<string>();
+  for (const group of configuredChannelPaneGroups.value) {
+    if (group.id) {
+      configuredIds.add(group.id);
+    }
+    const normalizedType = normalizeChannelPaneType(group.channelType);
+    if (normalizedType) {
+      configuredIds.add(normalizedType);
+    }
+  }
+  return configuredIds;
+});
+const configuredChannelPaneGroupsForDisplay = computed(() => {
+  if (!normalizedQuery.value) {
+    return configuredChannelPaneGroups.value;
+  }
+  return configuredChannelPaneGroups.value.filter((group) =>
+    `${group.name} ${group.channelType}`.toLowerCase().includes(normalizedQuery.value)
+  );
+});
+const visibleChannelPaneCatalog = computed(() => {
+  const base = chatChannelCatalog.map((channel) => ({
+    ...channel,
+    configured: configuredChannelPaneIdSet.value.has(channel.id)
+  }));
+  if (!normalizedQuery.value) {
+    return base;
+  }
+  return base.filter((channel) => `${channel.name} ${channel.id} ${channel.description}`.toLowerCase().includes(normalizedQuery.value));
+});
 const sidebarChatBadge = computed(() => {
   const unread = agents.value.reduce((sum, agent) => sum + getAgentMeta(agent.agentId).unread, 0);
   const value = unread > 0 ? unread : agents.value.length;
@@ -4906,6 +5160,10 @@ const startupOpenClawProgress = computed(() => {
   return Math.max(4, Math.min(100, Math.round((score / total) * 100)));
 });
 
+const startupOpenClawShowActions = computed(
+  () => !startupOpenClawInstalling.value && (Boolean(startupOpenClawInstallError.value) || startupOpenClawShowManualActions.value)
+);
+
 const taskSummary = computed(() => {
   const total = taskItems.value.length;
   const todo = taskItems.value.filter((item) => item.status === "todo").length;
@@ -5015,9 +5273,13 @@ watch(
         <p v-if="startupOpenClawInstallError" class="startup-openclaw-error">{{ startupOpenClawInstallError }}</p>
         <pre v-if="startupOpenClawRuntimeLogs" class="startup-openclaw-logs">{{ startupOpenClawRuntimeLogs }}</pre>
 
-        <div v-if="startupOpenClawInstallError && !startupOpenClawInstalling" class="startup-openclaw-actions">
-          <button type="button" @click="retryStartupOpenClawInstall">重试安装</button>
-          <button type="button" class="is-ghost" @click="dismissStartupOpenClawOverlay">稍后再说</button>
+        <div v-if="startupOpenClawShowActions" class="startup-openclaw-actions">
+          <button type="button" @click="retryStartupOpenClawInstall">
+            {{ startupOpenClawInstallError ? "重试安装" : "重新安装" }}
+          </button>
+          <button type="button" class="is-ghost" @click="dismissStartupOpenClawOverlay">
+            {{ startupOpenClawInstallError ? "稍后再说" : "继续使用" }}
+          </button>
         </div>
       </section>
     </div>
@@ -5083,7 +5345,7 @@ watch(
             </button>
             <button
               class="nav-item nav-item--secondary"
-              :class="{ active: utilityModalType === 'logs' }"
+              :class="{ active: activeSection === 'chat' && (isSidebarLogsOpen || utilityModalType === 'logs') }"
               type="button"
               title="日志"
               aria-label="打开日志"
@@ -5135,7 +5397,198 @@ watch(
         </aside>
 
         <template v-if="activeSection === 'chat'">
-          <section class="chat-list">
+          <main v-if="isSidebarLogsOpen" class="module-board module-board--utility-logs">
+            <header class="module-board__header module-board__header--utility-logs" @mousedown.left="handleRegionMouseDown">
+              <div>
+                <h2>运行日志</h2>
+                <p>{{ utilityModalSubtitle }}</p>
+              </div>
+              <div class="utility-modal__actions" data-no-window-drag>
+                <button class="utility-modal__refresh" type="button" :disabled="utilityModalLoading" @click="handleUtilityModalRefresh">刷新</button>
+                <button class="utility-modal__close" type="button" aria-label="关闭日志" @click="closeSidebarLogsPanel">×</button>
+              </div>
+            </header>
+
+            <div class="utility-modal__body utility-modal__body--logs utility-panel-body">
+              <p v-if="utilityModalNotice" class="utility-modal__notice">{{ utilityModalNotice }}</p>
+              <p v-if="utilityModalError" class="utility-modal__error">{{ utilityModalError }}</p>
+              <div v-if="utilityModalLoading" class="utility-modal__empty">正在加载数据...</div>
+
+              <template v-else>
+                <p class="utility-modal__detail">
+                  {{ chatRuntimeLogs?.detail || "展示 OpenClaw 运行日志。" }} · 当前员工
+                  {{ utilityLogTab === "runtime" ? runtimeCategoryLogItems.length : runtimeLogItems.length }} / {{ runtimeLogItems.length }} 条
+                </p>
+
+                <div class="utility-log-tabs" role="tablist" aria-label="日志视图切换">
+                  <button
+                    type="button"
+                    class="utility-log-tab"
+                    :class="{ 'is-active': utilityLogTab === 'runtime' }"
+                    @click="handleUtilityLogTabChange('runtime')"
+                  >
+                    运行日志
+                  </button>
+                  <button
+                    type="button"
+                    class="utility-log-tab"
+                    :class="{ 'is-active': utilityLogTab === 'errorAnalysis' }"
+                    @click="handleUtilityLogTabChange('errorAnalysis')"
+                  >
+                    错误日志分析
+                  </button>
+                </div>
+
+                <template v-if="utilityLogTab === 'runtime'">
+                  <div class="utility-log-categories" role="tablist" aria-label="运行日志分类">
+                    <button
+                      v-for="category in utilityRuntimeCategories"
+                      :key="category.id"
+                      type="button"
+                      class="utility-log-category"
+                      :class="{ 'is-active': utilityRuntimeCategory === category.id }"
+                      @click="handleUtilityRuntimeCategoryChange(category.id)"
+                    >
+                      {{ category.label }}
+                    </button>
+                  </div>
+
+                  <div v-if="runtimeCategoryLogItems.length === 0" class="utility-modal__empty">当前分类暂无运行日志。</div>
+                  <div v-else class="utility-log-layout">
+                    <div class="utility-log-list">
+                      <button
+                        v-for="log in runtimeCategoryLogItems"
+                        :key="log.id"
+                        type="button"
+                        class="utility-log-item"
+                        :class="{ 'is-active': selectedRuntimeLog?.id === log.id }"
+                        @click="handleUtilityLogSelect(log)"
+                      >
+                        <div class="utility-log-item__head">
+                          <div class="utility-log-item__meta">
+                            <strong>{{ log.method }}</strong>
+                            <span class="utility-log-kind" :data-kind="getRuntimeLogCategory(log)">{{ getRuntimeLogCategoryLabel(log) }}</span>
+                          </div>
+                          <span class="utility-log-status" :data-tone="getLogStatusTone(log.responseStatus)">{{ log.responseStatus }}</span>
+                        </div>
+                        <p>{{ getLogRequestUrl(log) }}</p>
+                        <small>{{ formatDateTime(log.createdAt) }} · 耗时 {{ formatDurationLabel(log.duration) }}</small>
+                      </button>
+                    </div>
+
+                    <section v-if="selectedRuntimeLog && activeRuntimeLogDetailSection" class="utility-log-detail">
+                      <div class="utility-log-detail__head">
+                        <header class="utility-log-detail__header">
+                          <div>
+                            <strong>{{ selectedRuntimeLog.method }} {{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</strong>
+                            <p>{{ selectedRuntimeLog.platformName }} · {{ formatDateTime(selectedRuntimeLog.createdAt) }}</p>
+                          </div>
+                          <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
+                            selectedRuntimeLog.responseStatus
+                          }}</span>
+                        </header>
+                        <div class="utility-log-detail__stats">
+                          <span>耗时 {{ formatDurationLabel(selectedRuntimeLog.duration) }}</span>
+                          <span v-if="typeof selectedRuntimeLog.firstTokenTime === 'number'">
+                            首 Token {{ formatDurationLabel(selectedRuntimeLog.firstTokenTime) }}
+                          </span>
+                          <span v-if="typeof selectedRuntimeLog.totalTokens === 'number'">Token {{ selectedRuntimeLog.totalTokens }}</span>
+                        </div>
+                        <div class="utility-log-detail-tabs" role="tablist" aria-label="日志详情分栏">
+                          <button
+                            v-for="section in runtimeLogDetailSections"
+                            :key="section.id"
+                            type="button"
+                            class="utility-log-detail-tab"
+                            :class="{ 'is-active': activeRuntimeLogDetailSection.id === section.id }"
+                            @click="handleUtilityLogDetailTabSelect(section.id)"
+                          >
+                            {{ section.label }}
+                          </button>
+                        </div>
+                      </div>
+                      <div class="utility-log-detail__content-wrap">
+                        <button
+                          type="button"
+                          class="utility-log-copy"
+                          title="复制当前内容"
+                          aria-label="复制当前内容"
+                          @click="handleCopyRuntimeLogContent"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                        </button>
+                        <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
+                      </div>
+                    </section>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <div v-if="errorAnalysisSummaries.length === 0" class="utility-modal__empty">当前员工暂无错误日志。</div>
+                  <div v-else class="utility-log-layout">
+                    <div class="utility-error-list">
+                      <button
+                        v-for="summary in errorAnalysisSummaries"
+                        :key="summary.key"
+                        type="button"
+                        class="utility-error-item"
+                        :class="{ 'is-active': selectedErrorSummary?.key === summary.key }"
+                        @click="handleUtilityErrorSummarySelect(summary.key)"
+                      >
+                        <div class="utility-error-item__head">
+                          <strong>{{ summary.title }}</strong>
+                          <span>{{ summary.count }} 次</span>
+                        </div>
+                        <p>{{ summary.latestLog.method }} {{ summary.latestLog.path || summary.latestLog.endpoint || "/" }}</p>
+                        <small>最近 {{ formatDateTime(summary.latestAt) }}</small>
+                      </button>
+                    </div>
+
+                    <section v-if="selectedRuntimeLog && activeRuntimeLogDetailSection" class="utility-log-detail">
+                      <div class="utility-log-detail__head">
+                        <header class="utility-log-detail__header">
+                          <div>
+                            <strong>错误详情</strong>
+                            <p>{{ selectedRuntimeLog.method }} {{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</p>
+                          </div>
+                          <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
+                            selectedRuntimeLog.responseStatus
+                          }}</span>
+                        </header>
+                        <div class="utility-log-detail-tabs" role="tablist" aria-label="错误详情分栏">
+                          <button
+                            v-for="section in runtimeLogDetailSections"
+                            :key="section.id"
+                            type="button"
+                            class="utility-log-detail-tab"
+                            :class="{ 'is-active': activeRuntimeLogDetailSection.id === section.id }"
+                            @click="handleUtilityLogDetailTabSelect(section.id)"
+                          >
+                            {{ section.label }}
+                          </button>
+                        </div>
+                      </div>
+                      <div class="utility-log-detail__content-wrap">
+                        <button
+                          type="button"
+                          class="utility-log-copy"
+                          title="复制当前内容"
+                          aria-label="复制当前内容"
+                          @click="handleCopyRuntimeLogContent"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                        </button>
+                        <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
+                      </div>
+                    </section>
+                  </div>
+                </template>
+              </template>
+            </div>
+          </main>
+
+          <template v-else>
+            <section class="chat-list">
             <header class="chat-list__header" @mousedown.left="handleRegionMouseDown">
               <div class="search-row">
                 <label class="search-box" aria-label="搜索 Agent">
@@ -5161,42 +5614,103 @@ watch(
             </header>
 
             <div class="chat-list__body">
-              <button
-                v-for="agent in currentPaneAgents"
-                :key="agent.agentId"
-                class="agent-item"
-                :class="{ active: selectedAgentId === agent.agentId }"
-                type="button"
-                @click="switchAgent(agent.agentId)"
-              >
-                <div class="agent-avatar" :class="{ 'agent-avatar--group': agent.groupKind === 'group' }">
-                  <img
-                    v-if="getAgentAvatarUrl(agent)"
-                    class="agent-avatar__image"
-                    :src="getAgentAvatarUrl(agent) ?? undefined"
-                    :alt="`${stripRoleLabel(agent.displayName)} 头像`"
-                    loading="lazy"
-                    decoding="async"
-                  />
-                  <span v-else>{{ getAgentInitial(agent) }}</span>
-                  <i class="status-dot" :data-tone="agent.statusTone" />
+              <template v-if="isChannelPaneActive">
+                <div class="chat-channel-pane">
+                  <section class="chat-channel-pane__section">
+                    <header class="chat-channel-pane__head">
+                      <h4>已配置</h4>
+                      <small>{{ configuredChannelPaneGroupsForDisplay.length }} 个</small>
+                    </header>
+                    <p class="chat-channel-pane__hint">{{ dashboardChannelSnapshot?.detail || "已接入频道会在这里显示。" }}</p>
+                    <div v-if="configuredChannelPaneGroupsForDisplay.length > 0" class="chat-channel-pane__configured-list">
+                      <article
+                        v-for="group in configuredChannelPaneGroupsForDisplay"
+                        :key="`configured-channel-pane-${group.channelType}`"
+                        class="chat-channel-pane__configured-card"
+                      >
+                        <div class="chat-channel-pane__identity">
+                          <span class="chat-channel-pane__icon-shell">
+                            <img v-if="group.icon" :src="group.icon" :alt="group.name" />
+                            <span v-else>{{ group.name.charAt(0).toUpperCase() }}</span>
+                          </span>
+                          <div>
+                            <strong>{{ group.name }}</strong>
+                            <p>{{ group.channelType }}</p>
+                          </div>
+                        </div>
+                        <small>{{ group.configuredAccounts }}/{{ group.totalAccounts }} 已配置 · {{ group.connectedAccounts }} 在线</small>
+                      </article>
+                    </div>
+                    <p v-else class="list-empty list-empty--compact">暂无已配置频道。</p>
+                  </section>
+
+                  <section class="chat-channel-pane__section">
+                    <header class="chat-channel-pane__head">
+                      <h4>频道列表</h4>
+                      <small>{{ visibleChannelPaneCatalog.length }} 个</small>
+                    </header>
+                    <div v-if="visibleChannelPaneCatalog.length > 0" class="chat-channel-pane__catalog-grid">
+                      <article
+                        v-for="channel in visibleChannelPaneCatalog"
+                        :key="`channel-pane-${channel.id}`"
+                        class="chat-channel-pane__catalog-card"
+                      >
+                        <div class="chat-channel-pane__identity">
+                          <span class="chat-channel-pane__icon-shell">
+                            <img :src="channel.icon" :alt="channel.name" />
+                          </span>
+                          <div>
+                            <strong>{{ channel.name }}</strong>
+                            <p>{{ channel.description }}</p>
+                          </div>
+                        </div>
+                        <span class="chat-channel-pane__tag" :class="{ 'is-configured': channel.configured }">
+                          {{ channel.configured ? "已配置" : "未配置" }}
+                        </span>
+                      </article>
+                    </div>
+                    <p v-else class="list-empty list-empty--compact">没有匹配的频道。</p>
+                  </section>
                 </div>
-                <div class="agent-content">
-                  <div class="agent-top-line">
-                    <strong>{{ stripRoleLabel(agent.displayName) }}</strong>
-                    <span class="agent-channel">{{ agent.channel }}</span>
+              </template>
+              <template v-else>
+                <button
+                  v-for="agent in currentPaneAgents"
+                  :key="agent.agentId"
+                  class="agent-item"
+                  :class="{ active: selectedAgentId === agent.agentId }"
+                  type="button"
+                  @click="switchAgent(agent.agentId)"
+                >
+                  <div class="agent-avatar" :class="{ 'agent-avatar--group': agent.groupKind === 'group' }">
+                    <img
+                      v-if="getAgentAvatarUrl(agent)"
+                      class="agent-avatar__image"
+                      :src="getAgentAvatarUrl(agent) ?? undefined"
+                      :alt="`${stripRoleLabel(agent.displayName)} 头像`"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <span v-else>{{ getAgentInitial(agent) }}</span>
+                    <i class="status-dot" :data-tone="agent.statusTone" />
                   </div>
-                  <p class="agent-preview">{{ getAgentMeta(agent.agentId).preview }}</p>
-                  <small class="agent-status">{{ getAgentStatusLabel(agent) }}</small>
-                </div>
-                <div class="agent-meta">
-                  <span>{{ getAgentMeta(agent.agentId).timeLabel }}</span>
-                  <span v-if="getAgentMeta(agent.agentId).unread" class="agent-unread">{{ getAgentMeta(agent.agentId).unread }}</span>
-                </div>
-              </button>
-              <p v-if="currentPaneAgents.length === 0" class="list-empty">
-                {{ normalizedQuery ? "没有匹配的 Agent" : currentPaneEmptyText }}
-              </p>
+                  <div class="agent-content">
+                    <div class="agent-top-line">
+                      <strong>{{ stripRoleLabel(agent.displayName) }}</strong>
+                      <span class="agent-channel">{{ agent.channel }}</span>
+                    </div>
+                    <p class="agent-preview">{{ getAgentMeta(agent.agentId).preview }}</p>
+                    <small class="agent-status">{{ getAgentStatusLabel(agent) }}</small>
+                  </div>
+                  <div class="agent-meta">
+                    <span>{{ getAgentMeta(agent.agentId).timeLabel }}</span>
+                    <span v-if="getAgentMeta(agent.agentId).unread" class="agent-unread">{{ getAgentMeta(agent.agentId).unread }}</span>
+                  </div>
+                </button>
+                <p v-if="currentPaneAgents.length === 0" class="list-empty">
+                  {{ normalizedQuery ? "没有匹配的 Agent" : currentPaneEmptyText }}
+                </p>
+              </template>
             </div>
           </section>
 
@@ -5226,10 +5740,10 @@ watch(
                 <button
                   type="button"
                   class="header-btn"
-                  :class="{ 'is-active': utilityModalType === 'logs' }"
+                  :class="{ 'is-active': isSidebarLogsOpen || utilityModalType === 'logs' }"
                   title="运行日志"
                   aria-label="打开运行日志"
-                  @click="openUtilityModal('logs')"
+                  @click="openSidebarLogs"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8M8 4a2 2 0 0 0-2 2v1h12V6a2 2 0 0 0-2-2M6 7h12v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z" /><path d="m8 15 3-3 2 2 3-4" /></svg>
                 </button>
@@ -5259,7 +5773,12 @@ watch(
               </div>
             </header>
 
-            <div class="chat-window__content" :class="{ 'chat-window__content--settings-open': isAgentSettingsOpen }">
+            <div
+              class="chat-window__content"
+              :class="{
+                'chat-window__content--settings-open': isAgentSettingsOpen
+              }"
+            >
               <div ref="messageScroller" class="chat-window__messages" :class="{ 'chat-window__messages--empty': isConversationEmpty }">
                 <div v-if="isConversationEmpty" class="chat-empty-state">
                   <div class="chat-empty-state__logo" aria-hidden="true">
@@ -5416,6 +5935,7 @@ watch(
 
                 <div v-else class="chat-settings-sidebar__empty">请选择员工后打开设置。</div>
               </aside>
+
             </div>
 
             <footer class="chat-window__composer">
@@ -5443,6 +5963,7 @@ watch(
               </div>
             </footer>
           </section>
+        </template>
         </template>
 
         <main v-else class="module-board" :class="{ 'module-board--dashboard': activeSection === 'dashboard' }">
@@ -5703,10 +6224,10 @@ watch(
                       <button
                         class="skill-market-card-v2__action"
                         type="button"
-                        :disabled="!canInstallSkillMarketSkill(skill)"
+                        :disabled="!canInstallSkillMarketSkill(skill) || isSkillMarketSkillInstalling(skill)"
                         @click="installSkillMarketSkill(skill)"
                       >
-                        安装技能
+                        {{ isSkillMarketSkillInstalling(skill) ? "安装中..." : "安装技能" }}
                       </button>
                     </div>
                   </article>
@@ -5987,15 +6508,14 @@ watch(
           <button
             class="skill-market-detail-modal__action skill-market-detail-modal__action--primary"
             type="button"
-            :disabled="!canInstallSkillMarketSkill(activeSkillMarketDetail)"
+            :disabled="!canInstallSkillMarketSkill(activeSkillMarketDetail) || isSkillMarketSkillInstalling(activeSkillMarketDetail)"
             @click="installSkillMarketSkill(activeSkillMarketDetail)"
           >
-            安装技能
+            {{ isSkillMarketSkillInstalling(activeSkillMarketDetail) ? "安装中..." : "安装技能" }}
           </button>
           <button
             class="skill-market-detail-modal__action"
             type="button"
-            :disabled="!activeSkillMarketDetail.homepage"
             @click="openSkillHomepage(activeSkillMarketDetail)"
           >
             访问 SkillHub
@@ -7082,7 +7602,7 @@ watch(
   padding: 4px;
   border-radius: 999px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   border: 1px solid #d9e0ea;
   background: #e9edf3;
@@ -7271,6 +7791,142 @@ watch(
   margin: 16px 8px;
   color: #8193ad;
   font-size: 13px;
+}
+
+.list-empty--compact {
+  margin: 0;
+  border: 1px dashed #d5dfec;
+  border-radius: 9px;
+  background: #ffffff;
+  padding: 10px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.chat-channel-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-channel-pane__section {
+  border: 1px solid #dfe8f6;
+  border-radius: 10px;
+  background: #f9fbff;
+  padding: 10px;
+}
+
+.chat-channel-pane__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.chat-channel-pane__head h4 {
+  margin: 0;
+  color: #2f4463;
+  font-size: 13px;
+}
+
+.chat-channel-pane__head small {
+  color: #7b8fae;
+  font-size: 11px;
+}
+
+.chat-channel-pane__hint {
+  margin: 0 0 8px;
+  color: #7a8ea9;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.chat-channel-pane__configured-list,
+.chat-channel-pane__catalog-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-channel-pane__configured-card,
+.chat-channel-pane__catalog-card {
+  border: 1px solid #dce6f5;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 8px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chat-channel-pane__identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-channel-pane__icon-shell {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  background: #f1f5fd;
+  color: #496288;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+}
+
+.chat-channel-pane__icon-shell img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.chat-channel-pane__identity strong {
+  display: block;
+  color: #2f3f5b;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.chat-channel-pane__identity p {
+  margin: 2px 0 0;
+  color: #7689a9;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.chat-channel-pane__configured-card small {
+  flex-shrink: 0;
+  color: #6f83a3;
+  font-size: 11px;
+  text-align: right;
+}
+
+.chat-channel-pane__tag {
+  flex-shrink: 0;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid #d2dff1;
+  background: #f3f7ff;
+  color: #6d82a3;
+  padding: 0 8px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.chat-channel-pane__tag.is-configured {
+  border-color: #9fc2ff;
+  background: #e9f2ff;
+  color: #2d5fb3;
 }
 
 .chat-window {
@@ -8016,6 +8672,27 @@ watch(
   overflow: auto;
   background: #ffffff;
   color: #24344f;
+}
+
+.module-board--utility-logs {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.module-board__header--utility-logs {
+  margin-bottom: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e8eef8;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.utility-panel-body {
+  padding: 0;
+  min-height: 0;
 }
 
 .module-board--dashboard {
@@ -11541,6 +12218,11 @@ watch(
     width: 100%;
     padding: 14px;
     border-radius: 15px;
+  }
+
+  .module-board__header--utility-logs {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .module-board--dashboard {

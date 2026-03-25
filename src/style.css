@@ -9924,8 +9924,7 @@ html[data-app-theme-resolved="dark"] .channel-card__icon-shell {
 html[data-app-theme-resolved="dark"] .channel-card__icon-shell img {
   width: 24px;
   height: 24px;
-  filter: grayscale(1) brightness(0) invert(0.92);
-  opacity: 0.96;
+  opacity: 1;
 }
 
 html[data-app-theme-resolved="dark"] .channel-card__title-row strong {
