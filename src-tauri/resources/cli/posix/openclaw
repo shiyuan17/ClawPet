@@ -9,6 +9,47 @@ while [ -L "$SCRIPT" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT")" && pwd)"
 
+version_part() {
+  version="$1"
+  field="$2"
+  value="$(printf '%s' "$version" | cut -d. -f"$field" | sed 's/[^0-9].*$//')"
+  if [ -z "$value" ]; then
+    value="0"
+  fi
+  printf '%s' "$value"
+}
+
+version_gt() {
+  left="$1"
+  right="$2"
+
+  left_major="$(version_part "$left" 1)"
+  right_major="$(version_part "$right" 1)"
+  if [ "$left_major" -gt "$right_major" ]; then
+    return 0
+  fi
+  if [ "$left_major" -lt "$right_major" ]; then
+    return 1
+  fi
+
+  left_minor="$(version_part "$left" 2)"
+  right_minor="$(version_part "$right" 2)"
+  if [ "$left_minor" -gt "$right_minor" ]; then
+    return 0
+  fi
+  if [ "$left_minor" -lt "$right_minor" ]; then
+    return 1
+  fi
+
+  left_patch="$(version_part "$left" 3)"
+  right_patch="$(version_part "$right" 3)"
+  if [ "$left_patch" -gt "$right_patch" ]; then
+    return 0
+  fi
+
+  return 1
+}
+
 resolve_entry() {
   for root in \
     "$SCRIPT_DIR" \
@@ -34,19 +75,43 @@ resolve_node() {
     return 0
   fi
 
+  BEST_NODE_BIN=""
+  BEST_NODE_VERSION=""
+  consider_node_candidate() {
+    candidate="$1"
+    if [ ! -x "$candidate" ]; then
+      return
+    fi
+
+    candidate_version="$("$candidate" -v 2>/dev/null | tr -d '\r' | sed 's/^v//')"
+    if [ -z "$candidate_version" ]; then
+      return
+    fi
+
+    if [ -z "$BEST_NODE_BIN" ] || version_gt "$candidate_version" "$BEST_NODE_VERSION"; then
+      BEST_NODE_BIN="$candidate"
+      BEST_NODE_VERSION="$candidate_version"
+    fi
+  }
+
   ENTRY_DIR="$(dirname "$1")"
   for node_bin in \
     "$ENTRY_DIR/../bin/node" \
     "$ENTRY_DIR/../../bin/node"
   do
-    if [ -x "$node_bin" ]; then
-      echo "$node_bin"
-      return 0
-    fi
+    consider_node_candidate "$node_bin"
   done
 
-  if command -v node >/dev/null 2>&1; then
-    command -v node
+  OLD_IFS="$IFS"
+  IFS=':'
+  for path_dir in $PATH; do
+    [ -z "$path_dir" ] && continue
+    consider_node_candidate "$path_dir/node"
+  done
+  IFS="$OLD_IFS"
+
+  if [ -n "$BEST_NODE_BIN" ]; then
+    echo "$BEST_NODE_BIN"
     return 0
   fi
 
