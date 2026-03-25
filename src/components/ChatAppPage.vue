@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
 import appLogoUrl from "../../images/xia-logo.png";
 import channelDingtalkIcon from "../images/channels/dingtalk.svg";
@@ -31,19 +31,22 @@ import {
 } from "../services/skillsMarket";
 import { loadAgentDetailMarkdownZh } from "../services/agentDetail";
 
-type SidebarSection = "chat" | "dashboard" | "recruitment" | "skills" | "tasks";
+type SidebarSection = "chat" | "dashboard" | "recruitment" | "skills" | "tasks" | "market";
 type AgentGroupKind = "staff" | "group";
 type AgentStatusTone = "online" | "busy" | "offline";
 type ChatRole = "assistant" | "user" | "system";
 type ChatStatus = "pending" | "done" | "error";
+type ChatMessageKind = "default" | "runtime_tool";
+type ChatToolStatus = "running" | "done" | "error";
 type AgentPaneTab = "staff" | "group" | "channel";
 type RelatedResourceTarget = "memory" | "skills" | "tools" | "model" | "channel" | "schedule";
 type RelatedSkillCategory = "builtIn" | "installed";
+type RelatedScheduleFilter = "all" | "enabled" | "stopped" | "disabled";
 type UtilityModalType = "history" | "logs";
 type UtilityLogTab = "runtime" | "errorAnalysis";
 type UtilityLogDetailTab = "request" | "response" | "stream" | "raw";
 type UtilityLogCategory = "all" | "message" | "tool";
-type SidebarSettingsMenuGroupId = "general" | "about";
+type SidebarSettingsMenuGroupId = "general" | "providers" | "about";
 type SidebarSettingsAppearance = "system" | "light" | "dark";
 type SidebarSettingsLanguage = "zh-CN" | "en-US";
 type SidebarSettingsMenuGroup = {
@@ -89,6 +92,38 @@ type TaskBoardStatus = TaskRecord["status"];
 type SidebarItem = {
   id: SidebarSection;
   label: string;
+};
+
+type MarketModelPlan = {
+  id: string;
+  name: string;
+  badge?: string;
+  monthlyPrice: number;
+  monthlyOriginalPrice: number;
+  yearlyPrice: number;
+  description: string;
+};
+
+type MarketTeamBundle = {
+  id: string;
+  name: string;
+  summary: string;
+  roles: string[];
+  skills: string[];
+  actionLabel: string;
+};
+
+type MarketFlowKind = "publish" | "purchase";
+
+type MarketFlowTemplate = {
+  id: string;
+  kind: MarketFlowKind;
+  title: string;
+  summary: string;
+  roleOrTeam: string;
+  skills: string[];
+  platform: string;
+  configJson: string;
 };
 
 type StaffMemberSnapshot = {
@@ -138,6 +173,18 @@ type AgentChatMessage = {
   text: string;
   status: ChatStatus;
   createdAt: number;
+  kind?: ChatMessageKind;
+  toolName?: string;
+  toolStatus?: ChatToolStatus;
+  toolInput?: string;
+  toolOutput?: string;
+};
+
+type RuntimeToolSyncContext = {
+  pendingMessageId: string;
+  startedAtMs: number;
+  runtimeAgentId: string;
+  expiresAtMs: number;
 };
 
 type AgentChatMeta = {
@@ -248,8 +295,12 @@ type RelatedModelDraft = {
 
 type ProxyConfigDraft = {
   providerId: string;
+  protocol: OpenClawProviderProtocol;
+  apiKind: OpenClawProviderApiKind;
   baseUrl: string;
+  model: string;
   apiKey: string;
+  apiPath: string;
 };
 
 type TaskSnapshotItem = {
@@ -397,12 +448,25 @@ type ChatArchiveRecord = {
   messages: AgentChatMessage[];
 };
 
+type ChannelPaneConfigField = {
+  key: string;
+  label: string;
+  placeholder: string;
+  required?: boolean;
+  secret?: boolean;
+  description?: string;
+};
+
 type ChannelPaneCatalogItem = {
   id: string;
   name: string;
   description: string;
   icon: string;
   aliases?: string[];
+  backendChannelType?: string;
+  docsUrl?: string;
+  instructions?: string[];
+  fields?: ChannelPaneConfigField[];
 };
 
 type TauriInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -430,11 +494,13 @@ const sidebarItems: SidebarItem[] = [
   { id: "chat", label: "聊天" },
   { id: "tasks", label: "任务管理" },
   { id: "dashboard", label: "仪表盘" },
+  { id: "market", label: "商城" },
   { id: "recruitment", label: "数字员工" },
   { id: "skills", label: "技能市场" }
 ];
 const sidebarSettingsMenuGroups: SidebarSettingsMenuGroup[] = [
   { id: "general", label: "通用设置" },
+  { id: "providers", label: "模型商管理" },
   { id: "about", label: "关于我们" }
 ];
 const sidebarSettingsAppearanceOptions: Array<{ id: SidebarSettingsAppearance; label: string }> = [
@@ -459,6 +525,14 @@ const SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY = "keai.desktop-pet.sidebar-settin
 const SIDEBAR_SETTINGS_LANGUAGE_STORAGE_KEY = "keai.desktop-pet.sidebar-settings.language";
 const packageVersionFallback =
   typeof packageJson.version === "string" && packageJson.version.trim() ? packageJson.version.trim() : "0.2.0";
+const FEISHU_CHANNEL_ID = "feishu";
+const FEISHU_DEFAULT_ACCOUNT_ID = "default";
+const FEISHU_PLUGIN_PACKAGE_NAME = "@larksuite/openclaw-lark";
+const FEISHU_DOCS_URL = "https://www.feishu.cn/content/article/7613711414611463386";
+const FEISHU_OPENCLAW_PAGE_URL = "https://open.feishu.cn/page/openclaw";
+const FEISHU_OPENCLAW_FROM = "autoclaw";
+const FEISHU_APP_ID_PLACEHOLDER = "cli_xxxxxxxxxxxxxxxx";
+const FEISHU_APP_SECRET_PLACEHOLDER = "请输入飞书应用的 Secret";
 
 const taskProjectStorageKey = "keai.desktop-pet.task-projects";
 const taskStatusFlow: TaskBoardStatus[] = ["todo", "in_progress", "in_review", "done", "cancelled"];
@@ -480,46 +554,109 @@ const chatChannelCatalog: ChannelPaneCatalogItem[] = [
     name: "微信",
     description: "微信消息触达与机器人接入",
     icon: channelWechatIcon,
-    aliases: ["wx"]
+    aliases: ["wx", "wechat_official_account", "wechat-official-account"],
+    instructions: ["保存配置后将自动启用微信频道。", "若你使用插件接入，请先确认插件已安装并启用。"],
+    fields: []
   },
   {
     id: "feishu",
     name: "飞书",
     description: "飞书机器人与消息通知",
-    icon: channelFeishuIcon
+    icon: channelFeishuIcon,
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/GKn8wOvHnibpPNkNkPzcAvGlnzK#Py88dTltfoJc1jxAhIBcW3Pkn7b",
+    instructions: [
+      "前往 飞书开放平台 (open.feishu.cn) 并创建企业自建应用",
+      "在应用详情页获取 App ID 和 App Secret 并填入",
+      "确保应用已开通“机器人”能力",
+      "保存配置后，根据网关提示完成机器人创建"
+    ],
+    fields: [
+      { key: "appId", label: "应用 ID (App ID)", placeholder: "cli_xxxxxx", required: true },
+      { key: "appSecret", label: "应用密钥 (App Secret)", placeholder: "输入应用密钥", required: true, secret: true }
+    ]
   },
   {
     id: "wecom",
     name: "企业微信",
     description: "企业微信应用与群机器人",
     icon: channelWecomIcon,
-    aliases: ["workwechat", "wechatwork", "qywx"]
+    aliases: ["workwechat", "wechatwork", "qywx"],
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/JTGnwoV0RixKPtkr4w7c7gpAnDc",
+    instructions: ["在企业微信管理后台创建应用并获取配置", "确保已启用接收消息服务器配置", "填写 Bot ID 和 Secret 后保存"],
+    fields: [
+      { key: "botId", label: "机器人 Bot ID", placeholder: "ww_xxxxxx", required: true },
+      { key: "secret", label: "应用 Secret", placeholder: "输入企业微信 Secret", required: true, secret: true }
+    ]
   },
   {
     id: "dingtalk",
     name: "钉钉",
     description: "钉钉机器人与工作通知",
     icon: channelDingtalkIcon,
-    aliases: ["dingding"]
+    aliases: ["dingding"],
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/Y5eNwiSiZidkLskrwtJc1rUln0b#doxcnr8KfaA2mNPeQUeHO83eDPh",
+    instructions: [
+      "在钉钉开发者后台创建企业内部应用并开启 Stream 模式",
+      "填写 Client ID 与 Client Secret（必填）",
+      "Robot Code / Corp ID / Agent ID 按需填写"
+    ],
+    fields: [
+      { key: "clientId", label: "Client ID (AppKey)", placeholder: "dingxxxxxx", required: true },
+      { key: "clientSecret", label: "Client Secret (AppSecret)", placeholder: "输入应用密钥", required: true, secret: true },
+      { key: "robotCode", label: "Robot Code（可选）", placeholder: "通常与 Client ID 相同" },
+      { key: "corpId", label: "Corp ID（可选）", placeholder: "dingxxxxxx" },
+      { key: "agentId", label: "Agent ID（可选）", placeholder: "123456789" }
+    ]
   },
   {
     id: "qq",
     name: "QQ",
     description: "QQ群机器人与私聊触达",
-    icon: channelQqIcon
+    icon: channelQqIcon,
+    backendChannelType: "qqbot",
+    aliases: ["qqbot", "qq-bot"],
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/KPIJwlyiGiupMrkiS9ice39Zn2c",
+    instructions: ["前往 QQ 机器人开放平台创建应用", "获取 App ID 与 Client Secret", "填写凭证后保存并连接"],
+    fields: [
+      { key: "appId", label: "App ID", placeholder: "输入 QQ 机器人 App ID", required: true },
+      { key: "clientSecret", label: "Client Secret", placeholder: "输入 Client Secret", required: true, secret: true }
+    ]
   },
   {
     id: "telegram",
     name: "Telegram",
     description: "Bot API 多账号接入",
     icon: channelTelegramIcon,
-    aliases: ["tg"]
+    aliases: ["tg"],
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/TjiGwxsMWi7hpDkDAQBc0ydMnEf#PL8ndvsEwoYVWIx1T4mcB1EvnSb",
+    instructions: [
+      "打开 Telegram 并搜索 @BotFather",
+      "发送 /newbot 并按照说明操作，复制机器人令牌",
+      "从 @userinfobot 获取你的用户 ID",
+      "将令牌和允许用户 ID 填入后保存"
+    ],
+    fields: [
+      { key: "botToken", label: "机器人令牌", placeholder: "123456:ABC-DEF...", required: true, secret: true },
+      { key: "allowedUsers", label: "允许的用户 ID", placeholder: "例如 123456789, 987654321", required: true }
+    ]
   },
   {
     id: "discord",
     name: "Discord",
     description: "Guild / Channel 事件联动",
-    icon: channelDiscordIcon
+    icon: channelDiscordIcon,
+    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/BkOywJYCAiYRN9k4KTTceKPMnxg#C9zjdBRT1oqZ4VxF8q7ceRxQnLk",
+    instructions: [
+      "前往 Discord Developer Portal 创建应用并添加 Bot",
+      "复制 Bot Token，并启用 Message Content Intent",
+      "通过 OAuth2 URL Generator 生成邀请链接并拉机器人入群",
+      "填入 Token，按需补充服务器 ID 和频道 ID 后保存"
+    ],
+    fields: [
+      { key: "token", label: "机器人令牌", placeholder: "输入 Discord Bot Token", required: true, secret: true },
+      { key: "guildId", label: "服务器 ID", placeholder: "例如 123456789012345678" },
+      { key: "channelId", label: "频道 ID（可选）", placeholder: "例如 123456789012345678" }
+    ]
   }
 ];
 const chatChannelCatalogMap = new Map<string, ChannelPaneCatalogItem>(chatChannelCatalog.map((channel) => [channel.id, channel]));
@@ -541,6 +678,12 @@ for (const alias of ["wechat-official", "wechat_service"]) {
 }
 for (const alias of ["tencent-qq"]) {
   chatChannelAliasMap.set(alias, "qq");
+}
+for (const alias of ["qqbot"]) {
+  chatChannelAliasMap.set(alias, "qq");
+}
+for (const alias of ["lark"]) {
+  chatChannelAliasMap.set(alias, "feishu");
 }
 const agentAvatarModules = import.meta.glob("../../images/avatar/*.{png,jpg,jpeg,webp,avif,svg}", {
   eager: true,
@@ -580,6 +723,8 @@ const isSending = ref(false);
 const agents = ref<AgentListItem[]>([]);
 const selectedAgentId = ref<string | null>(null);
 const chatMessages = ref<AgentChatMessage[]>([]);
+const runtimeToolSyncContext = ref<RuntimeToolSyncContext | null>(null);
+const expandedRuntimeToolMessages = ref<Record<string, boolean>>({});
 const agentHistories = ref<Record<string, AgentChatMessage[]>>({});
 const agentMetaMap = ref<Record<string, AgentChatMeta>>({});
 const currentSessionId = ref("");
@@ -634,13 +779,38 @@ const relatedSkillsSnapshot = ref<OpenClawSkillsListResponse | null>(null);
 const relatedToolsSnapshot = ref<OpenClawToolsListResponse | null>(null);
 const relatedModelSnapshot = ref<OpenClawPlatformSnapshotResponse | null>(null);
 const relatedModelDraft = ref<RelatedModelDraft | null>(null);
+const relatedModelCustomExpanded = ref(false);
 const relatedChannelSnapshot = ref<OpenClawChannelAccountsSnapshotResponse | null>(null);
 const relatedTaskSnapshot = ref<TaskSnapshotResponse | null>(null);
 const relatedSkillCategory = ref<RelatedSkillCategory>("builtIn");
+const relatedScheduleFilter = ref<RelatedScheduleFilter>("all");
 const relatedSkillSearch = ref("");
 const relatedMemorySearch = ref("");
 const relatedMemorySelectedId = ref<string | null>(null);
 const relatedMemoryDraftContent = ref("");
+const isFeishuConnectModalOpen = ref(false);
+const feishuConnectLoading = ref(false);
+const feishuConnectSaving = ref(false);
+const feishuConnectChecking = ref(false);
+const feishuConnectError = ref("");
+const feishuConnectNotice = ref("");
+const feishuManualExpanded = ref(false);
+const feishuAppId = ref("");
+const feishuAppSecret = ref("");
+const feishuAppSecretVisible = ref(false);
+const feishuQrVisible = ref(false);
+const feishuQrRefreshNonce = ref(0);
+const feishuOpenclawUserCode = ref("");
+const isChannelConfigModalOpen = ref(false);
+const channelConfigCatalogId = ref("");
+const channelConfigBackendType = ref("");
+const channelConfigAccountId = ref("");
+const channelConfigAllowEditAccountId = ref(false);
+const channelConfigExistingAccountIds = ref<string[]>([]);
+const channelConfigForm = ref<Record<string, string>>({});
+const channelConfigError = ref("");
+const channelConfigSaving = ref(false);
+const channelConfigSecretVisibility = ref<Record<string, boolean>>({});
 const utilityModalType = ref<UtilityModalType | null>(null);
 const utilityModalLoading = ref(false);
 const utilityModalError = ref("");
@@ -658,6 +828,10 @@ const utilityLogTab = ref<UtilityLogTab>("runtime");
 const utilityLogDetailTab = ref<UtilityLogDetailTab>("response");
 const utilityRuntimeCategory = ref<UtilityLogCategory>("all");
 const utilitySelectedLogId = ref<string | null>(null);
+const runtimeToolSyncWindowMs = 180000;
+const runtimeToolSyncPostResponseWindowMs = 4000;
+const runtimeToolSyncRetryDelayMs = 400;
+let runtimeToolSyncRetryTimer = 0;
 const recruitmentKeyword = ref("");
 const recruitmentDivisions = loadAgencyRosterZh();
 const roleWorkflowOverrides = ref<Record<string, RoleWorkflowOverride>>(loadRoleWorkflowOverrides());
@@ -694,6 +868,16 @@ const skillMarketGlobalCache = new Map<string, SkillMarketListResultSnapshot>();
 const activeSkillMarketDetail = ref<SkillMarketSkill | null>(null);
 const skillMarketActionNotice = ref("");
 const skillMarketInstallingSlug = ref("");
+const marketFlowRoleTeam = ref("增长突击队");
+const marketFlowSkills = ref("选题规划, 内容生成, 质量审核, 多平台分发");
+const marketFlowPlatform = ref("OpenClaw + 飞书 + 公众号");
+const marketFlowConfigJson = ref(`{
+  "trigger": "daily",
+  "publishAt": "09:30",
+  "needsApproval": true,
+  "channels": ["feishu", "wechat_official_account"]
+}`);
+const marketFlowNotice = ref("可先点击模板卡片，自动填充流程配置项。");
 let skillMarketRequestToken = 0;
 let roleWorkflowDetailRequestToken = 0;
 const utilityRuntimeCategories: Array<{ id: UtilityLogCategory; label: string }> = [
@@ -717,6 +901,103 @@ const skillMarketCategories: SkillMarketCategoryOption[] = [
   { id: "security-compliance", label: "安全合规", hint: "风险与治理", apiCategory: "security-compliance" },
   { id: "communication-collaboration", label: "沟通协同", hint: "协作与集成", apiCategory: "communication-collaboration" }
 ];
+const marketModelPlans: MarketModelPlan[] = [
+  {
+    id: "andante",
+    name: "Andante",
+    monthlyPrice: 39,
+    monthlyOriginalPrice: 49,
+    yearlyPrice: 468,
+    description: "提供专属 Kimi Code 使用额度，旗舰模型优先体验，支持多个编程会话。"
+  },
+  {
+    id: "moderato",
+    name: "Moderato",
+    badge: "推荐",
+    monthlyPrice: 79,
+    monthlyOriginalPrice: 99,
+    yearlyPrice: 948,
+    description: "每周更新的使用额度，允许多种设备登录分享你的套餐额度，支持多项目协作。"
+  },
+  {
+    id: "allegretto",
+    name: "Allegretto",
+    monthlyPrice: 159,
+    monthlyOriginalPrice: 199,
+    yearlyPrice: 1908,
+    description: "充足的每周额度与更高并发上限，为高级用户提供稳定的超值选择。"
+  },
+  {
+    id: "allegro",
+    name: "Allegro",
+    monthlyPrice: 559,
+    monthlyOriginalPrice: 699,
+    yearlyPrice: 6708,
+    description: "尊享澎湃额度，完整适配日常办公与高强度开发的复合场景。"
+  }
+];
+const marketTeamBundles: MarketTeamBundle[] = [
+  {
+    id: "growth-strike",
+    name: "增长突击队",
+    summary: "产品、运营、内容、数据四角色协同，适合新品冷启动与增长试验。",
+    roles: ["产品经理", "增长运营", "内容策划", "数据分析师"],
+    skills: ["需求拆解", "AB 测试", "内容投放", "复盘看板"],
+    actionLabel: "配置增长团队"
+  },
+  {
+    id: "commerce-ops",
+    name: "电商运营战队",
+    summary: "覆盖商品上新、渠道分发、客服响应与订单跟踪的一体化团队。",
+    roles: ["选品经理", "渠道运营", "客服专家", "供应链跟单"],
+    skills: ["选品评估", "渠道分发", "自动回复", "库存预警"],
+    actionLabel: "配置运营战队"
+  },
+  {
+    id: "delivery-factory",
+    name: "交付工厂",
+    summary: "研发与测试角色打包交付，支持需求到发布的短链路自动协作。",
+    roles: ["架构师", "前端开发", "后端开发", "测试工程师"],
+    skills: ["任务拆分", "代码评审", "自动化测试", "发布审批"],
+    actionLabel: "配置交付团队"
+  }
+];
+const marketFlowTemplates: MarketFlowTemplate[] = [
+  {
+    id: "publish-flow",
+    kind: "publish",
+    title: "内容发布流程",
+    summary: "从选题、生成、审核到多平台分发的一站式发布流程。",
+    roleOrTeam: "增长突击队",
+    skills: ["选题规划", "内容生成", "质量审核", "多平台分发"],
+    platform: "OpenClaw + 飞书 + 公众号",
+    configJson: `{
+  "trigger": "daily",
+  "publishAt": "09:30",
+  "needsApproval": true,
+  "channels": ["feishu", "wechat_official_account"]
+}`
+  },
+  {
+    id: "purchase-flow",
+    kind: "purchase",
+    title: "采购下单流程",
+    summary: "需求确认后自动比价、审批并在目标平台发起采购。",
+    roleOrTeam: "电商运营战队",
+    skills: ["需求收集", "供应商比价", "风险校验", "自动下单"],
+    platform: "OpenClaw + ERP + 钉钉审批",
+    configJson: `{
+  "trigger": "event",
+  "eventName": "inventory_low",
+  "needsApproval": true,
+  "maxBudget": 50000
+}`
+  }
+];
+const marketFlowKindLabelMap: Record<MarketFlowKind, string> = {
+  publish: "发布流程",
+  purchase: "购买流程"
+};
 const SKILL_MARKET_SKILLHUB_URL = "https://skillhub.tencent.com/";
 
 function getStorage() {
@@ -1380,6 +1661,17 @@ function normalizeStatus(value: unknown): ChatStatus {
   return "done";
 }
 
+function normalizeToolStatus(value: unknown): ChatToolStatus | undefined {
+  if (value === "running" || value === "done" || value === "error") {
+    return value;
+  }
+  return undefined;
+}
+
+function isRuntimeToolMessage(message: AgentChatMessage) {
+  return message.kind === "runtime_tool";
+}
+
 function normalizeMessage(raw: unknown): AgentChatMessage | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -1390,13 +1682,24 @@ function normalizeMessage(raw: unknown): AgentChatMessage | null {
   if (!role || typeof candidate.text !== "string") {
     return null;
   }
+  const kind: ChatMessageKind = candidate.kind === "runtime_tool" ? "runtime_tool" : "default";
+  const toolName = typeof candidate.toolName === "string" && candidate.toolName.trim() ? candidate.toolName.trim() : undefined;
+  const toolStatus = normalizeToolStatus(candidate.toolStatus);
+  const toolInput = typeof candidate.toolInput === "string" && candidate.toolInput.trim() ? candidate.toolInput.trim() : undefined;
+  const toolOutput =
+    typeof candidate.toolOutput === "string" && candidate.toolOutput.trim() ? candidate.toolOutput.trim() : undefined;
 
   return {
     id: typeof candidate.id === "string" && candidate.id.trim() ? candidate.id : createMessageId("msg"),
     role,
     text: candidate.text,
     status: normalizeStatus(candidate.status),
-    createdAt: typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt) ? candidate.createdAt : Date.now()
+    createdAt: typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt) ? candidate.createdAt : Date.now(),
+    kind,
+    toolName,
+    toolStatus,
+    toolInput,
+    toolOutput
   };
 }
 
@@ -1505,6 +1808,7 @@ function persistChatHistory(agentId: string) {
 function getOpenClawMessages(items: AgentChatMessage[]): OpenClawMessage[] {
   return items
     .filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item))
+    .filter((item) => !isRuntimeToolMessage(item) && !item.id.startsWith("runtime-tool-") && !item.toolName)
     .filter((item) => item.role === "assistant" || item.role === "user" || item.role === "system")
     .map((item) => ({ role: item.role, content: item.text }));
 }
@@ -1553,7 +1857,9 @@ function setAgentMeta(agentId: string, patch: Partial<AgentChatMeta>) {
 }
 
 function refreshAgentMetaFromHistory(agentId: string, messages: AgentChatMessage[], fallback: string) {
-  const stable = messages.filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item));
+  const stable = messages.filter(
+    (item) => item.status !== "pending" && !isLegacyWelcomeMessage(item) && !isRuntimeToolMessage(item)
+  );
   const latest = stable[stable.length - 1];
   if (!latest) {
     setAgentMeta(agentId, {
@@ -1682,6 +1988,9 @@ function switchAgent(agentId: string | null) {
 
   selectedAgentId.value = agentId;
   currentSessionId.value = loadSessionId(agentId);
+  runtimeToolSyncContext.value = null;
+  expandedRuntimeToolMessages.value = {};
+  clearRuntimeToolSyncRetryTimer();
 
   const cachedHistory = agentHistories.value[agentId];
   const loadedHistory = cachedHistory && cachedHistory.length > 0 ? cachedHistory : loadChatHistory(agentId);
@@ -1706,6 +2015,9 @@ function handleNewChat() {
 
   const active = agents.value.find((item) => item.agentId === activeId) ?? null;
   chatMessages.value = createWelcomeMessages(active);
+  runtimeToolSyncContext.value = null;
+  expandedRuntimeToolMessages.value = {};
+  clearRuntimeToolSyncRetryTimer();
   persistChatHistory(activeId);
   refreshAgentMetaFromHistory(activeId, chatMessages.value, active?.currentWork || "暂无会话");
   void scrollMessagesToBottom();
@@ -1738,6 +2050,18 @@ async function submitChat() {
     status: "pending",
     createdAt: Date.now()
   });
+  runtimeToolSyncContext.value = {
+    pendingMessageId: pendingId,
+    startedAtMs: startedAt,
+    runtimeAgentId: activeAgent.agentId,
+    expiresAtMs: Date.now() + runtimeToolSyncWindowMs
+  };
+  clearRuntimeToolSyncRetryTimer();
+  const initialSyncContext = runtimeToolSyncContext.value;
+  if (initialSyncContext) {
+    void syncRuntimeToolMessagesNow(initialSyncContext);
+    scheduleRuntimeToolSyncRetry();
+  }
 
   chatInput.value = "";
   setAgentMeta(activeAgent.agentId, {
@@ -1780,6 +2104,18 @@ async function submitChat() {
       unread: 0
     });
   } finally {
+    const syncContext = runtimeToolSyncContext.value;
+    if (syncContext) {
+      syncContext.expiresAtMs = Date.now() + runtimeToolSyncPostResponseWindowMs;
+      await syncRuntimeToolMessagesNow(syncContext);
+      const latest = runtimeToolSyncContext.value;
+      if (latest && !isRuntimeToolSyncExpired(latest)) {
+        scheduleRuntimeToolSyncRetry();
+      } else {
+        runtimeToolSyncContext.value = null;
+        clearRuntimeToolSyncRetryTimer();
+      }
+    }
     isSending.value = false;
     persistChatHistory(activeAgent.agentId);
     agentHistories.value[activeAgent.agentId] = [...chatMessages.value];
@@ -2024,14 +2360,22 @@ async function handleSidebarSettingsLaunchOnLoginToggle() {
   }
 }
 
-async function handleSidebarSettingsGroupChange(groupId: SidebarSettingsMenuGroupId) {
-  sidebarSettingsActiveGroup.value = groupId;
-  clearSidebarSettingsStatus();
+async function loadSidebarSettingsGroupData(groupId: SidebarSettingsMenuGroupId) {
   if (groupId === "general") {
     await loadSidebarSettingsLaunchOnLoginStatus();
     return;
   }
+  if (groupId === "providers") {
+    await loadProxyConfigSnapshot(proxyConfigSelectedProviderId.value);
+    return;
+  }
   await loadSidebarSettingsAppVersion();
+}
+
+async function handleSidebarSettingsGroupChange(groupId: SidebarSettingsMenuGroupId) {
+  sidebarSettingsActiveGroup.value = groupId;
+  clearSidebarSettingsStatus();
+  await loadSidebarSettingsGroupData(groupId);
 }
 
 async function handleSidebarFeedbackCopy() {
@@ -2092,14 +2436,12 @@ async function openSidebarSettings() {
   closeSidebarLogsPanel();
   closeUtilityModal();
   closeProxyConfigModal();
+  closeFeishuConnectModal();
+  closeChannelConfigModal();
   closeRelatedResourceModal();
   isSidebarSettingsModalOpen.value = true;
   clearSidebarSettingsStatus();
-  if (sidebarSettingsActiveGroup.value === "general") {
-    await loadSidebarSettingsLaunchOnLoginStatus();
-    return;
-  }
-  await loadSidebarSettingsAppVersion();
+  await loadSidebarSettingsGroupData(sidebarSettingsActiveGroup.value);
 }
 
 async function openSidebarLogs() {
@@ -2107,6 +2449,8 @@ async function openSidebarLogs() {
   isAgentSettingsOpen.value = false;
   closeSidebarSettingsModal();
   closeProxyConfigModal();
+  closeFeishuConnectModal();
+  closeChannelConfigModal();
   closeRelatedResourceModal();
   closeUtilityModal();
   isSidebarLogsOpen.value = true;
@@ -2116,10 +2460,16 @@ async function openSidebarLogs() {
 }
 
 function buildProxyConfigDraft(platform?: OpenClawPlatformSnapshotItem | null): ProxyConfigDraft {
+  const protocol = normalizeProviderProtocol(platform?.protocol);
+  const apiPath = platform?.apiPath ?? "";
   return {
     providerId: (platform?.providerId ?? "").trim() || "custom",
+    protocol,
+    apiKind: inferProviderApiKind(protocol, apiPath),
     baseUrl: platform?.baseUrl ?? "",
-    apiKey: platform?.apiKey ?? ""
+    model: platform?.model ?? "",
+    apiKey: platform?.apiKey ?? "",
+    apiPath
   };
 }
 
@@ -2148,10 +2498,10 @@ async function loadProxyConfigSnapshot(preferredProviderId?: string | null) {
     if (!invoke) {
       proxyConfigSnapshot.value = {
         sourcePath: "runtime unavailable",
-        detail: "当前环境不支持读取代理配置。",
+        detail: "当前环境不支持读取模型商配置。",
         platforms: []
       };
-      proxyConfigError.value = "当前环境不支持代理配置管理。";
+      proxyConfigError.value = "当前环境不支持模型商配置管理。";
       syncProxyConfigDraft(preferredProviderId);
       return;
     }
@@ -2159,7 +2509,7 @@ async function loadProxyConfigSnapshot(preferredProviderId?: string | null) {
     syncProxyConfigDraft(preferredProviderId);
   } catch (error) {
     proxyConfigSnapshot.value = null;
-    proxyConfigError.value = error instanceof Error ? error.message : "读取代理配置失败。";
+    proxyConfigError.value = error instanceof Error ? error.message : "读取模型商配置失败。";
     proxyConfigSelectedProviderId.value = null;
     proxyConfigDraft.value = buildProxyConfigDraft();
   } finally {
@@ -2203,6 +2553,7 @@ async function handleProxyConfigSave() {
 
   const providerId = normalizeProviderIdentifier(draft.providerId);
   const baseUrl = draft.baseUrl.trim();
+  const model = draft.model.trim();
 
   if (!providerId) {
     proxyConfigError.value = "请先填写 providerId。";
@@ -2212,23 +2563,35 @@ async function handleProxyConfigSave() {
     proxyConfigError.value = "请先填写基础 URL。";
     return;
   }
+  if (!model) {
+    proxyConfigError.value = "请先填写模型 ID。";
+    return;
+  }
 
   proxyConfigSaving.value = true;
   proxyConfigError.value = "";
   proxyConfigNotice.value = "";
 
   try {
+    const selectedProtocol = resolveProviderProtocolByApiKind(draft.apiKind || draft.protocol);
+    const selectedApiKind = normalizeProviderApiKind(
+      selectedProtocol,
+      draft.apiKind || inferProviderApiKind(selectedProtocol, draft.apiPath)
+    );
     await invoke("save_openclaw_provider_config", {
       config: {
         providerId,
+        protocol: selectedProtocol,
+        apiKind: selectedApiKind,
         baseUrl,
+        model,
         apiKey: draft.apiKey.trim()
       }
     });
     await Promise.all([loadProxyConfigSnapshot(providerId), loadAgents(), refreshDashboardData()]);
-    proxyConfigNotice.value = `已保存代理配置：${providerId}`;
+    proxyConfigNotice.value = `已保存模型商配置：${providerId}/${model}`;
   } catch (error) {
-    proxyConfigError.value = error instanceof Error ? error.message : "保存代理配置失败。";
+    proxyConfigError.value = error instanceof Error ? error.message : "保存模型商配置失败。";
   } finally {
     proxyConfigSaving.value = false;
   }
@@ -2239,6 +2602,8 @@ async function openSidebarProxyConfig() {
   closeSidebarLogsPanel();
   closeSidebarSettingsModal();
   closeUtilityModal();
+  closeFeishuConnectModal();
+  closeChannelConfigModal();
   closeRelatedResourceModal();
   isProxyConfigModalOpen.value = true;
   await loadProxyConfigSnapshot();
@@ -2250,6 +2615,8 @@ async function openSidebarOpenClawWeb() {
   closeSidebarSettingsModal();
   closeUtilityModal();
   closeProxyConfigModal();
+  closeFeishuConnectModal();
+  closeChannelConfigModal();
 
   const invoke = getTauriInvoke();
   if (invoke) {
@@ -2278,6 +2645,8 @@ async function openSidebarLegacyConsole() {
   closeSidebarSettingsModal();
   closeUtilityModal();
   closeProxyConfigModal();
+  closeFeishuConnectModal();
+  closeChannelConfigModal();
   closeRelatedResourceModal();
 
   const invoke = getTauriInvoke();
@@ -2317,6 +2686,21 @@ function normalizeChannelPaneType(value: string | null | undefined) {
   return chatChannelAliasMap.get(normalized) ?? normalized;
 }
 
+function resolveChannelConfigCatalog(channelId: string) {
+  const normalized = normalizeChannelPaneType(channelId);
+  if (!normalized) {
+    return null;
+  }
+  return chatChannelCatalogMap.get(normalized) ?? null;
+}
+
+function resolveChannelConfigBackendType(channel: ChannelPaneCatalogItem | null) {
+  if (!channel) {
+    return "";
+  }
+  return (channel.backendChannelType ?? channel.id).trim().toLowerCase();
+}
+
 function normalizeProviderIdentifier(value: string | null | undefined) {
   return (value ?? "")
     .trim()
@@ -2339,6 +2723,35 @@ function parseAgentModelReference(value: string | null | undefined) {
     providerId: rawModel.slice(0, separatorIndex),
     modelId: rawModel.slice(separatorIndex + 1)
   };
+}
+
+function normalizeModelReference(value: string | null | undefined) {
+  const parsed = parseAgentModelReference(value);
+  const providerId = normalizeProviderIdentifier(parsed.providerId);
+  const modelId = parsed.modelId.trim().toLowerCase();
+  if (providerId && modelId) {
+    return `${providerId}/${modelId}`;
+  }
+  if (modelId) {
+    return modelId;
+  }
+  return parsed.rawModel.trim().toLowerCase();
+}
+
+function buildProviderModelReference(providerId: string | null | undefined, modelId: string | null | undefined) {
+  const normalizedProviderId = normalizeProviderIdentifier(providerId);
+  const normalizedModelId = (modelId ?? "").trim();
+  if (normalizedProviderId && normalizedModelId) {
+    return `${normalizedProviderId}/${normalizedModelId}`;
+  }
+  if (normalizedModelId) {
+    return normalizedModelId;
+  }
+  return normalizedProviderId;
+}
+
+function getPlatformModelReference(platform: OpenClawPlatformSnapshotItem) {
+  return buildProviderModelReference(platform.providerId || platform.pathPrefix, platform.model);
 }
 
 function normalizeProviderProtocol(protocol: string | null | undefined): OpenClawProviderProtocol {
@@ -2424,6 +2837,36 @@ function formatDateTime(timestampMs: number | null | undefined) {
     minute: "2-digit",
     hour12: false
   });
+}
+
+function formatTaskScheduleKind(kind: string, deleteAfterRun: boolean) {
+  if (deleteAfterRun) {
+    return "一次性";
+  }
+  if (kind === "cron") {
+    return "周期";
+  }
+  if (kind === "at") {
+    return "定时";
+  }
+  return "任务";
+}
+
+function formatTaskNextRunCountdown(nextRunAtMs: number | null | undefined) {
+  if (!nextRunAtMs || !Number.isFinite(nextRunAtMs)) {
+    return "未设置";
+  }
+  const delta = nextRunAtMs - Date.now();
+  const absDelta = Math.abs(delta);
+  if (absDelta < 60 * 60 * 1000) {
+    return delta >= 0 ? "1h内" : "已逾期";
+  }
+  const hours = Math.round(absDelta / (60 * 60 * 1000));
+  if (hours < 24) {
+    return delta >= 0 ? `${hours}h后` : `${hours}h前`;
+  }
+  const days = Math.round(absDelta / (24 * 60 * 60 * 1000));
+  return delta >= 0 ? `${days}天后` : `${days}天前`;
 }
 
 function formatCompactTime(timestampMs: number | null | undefined) {
@@ -2525,6 +2968,7 @@ function clearRelatedResourceSnapshots() {
   relatedToolsSnapshot.value = null;
   relatedModelSnapshot.value = null;
   relatedModelDraft.value = null;
+  relatedModelCustomExpanded.value = false;
   relatedChannelSnapshot.value = null;
   relatedTaskSnapshot.value = null;
 }
@@ -2609,15 +3053,11 @@ function getLogAgentId(log: OpenClawMessageLogItem): string | null {
     return platformId.slice("openclaw-agent-".length);
   }
   if (platformId.startsWith("openclaw-runtime-")) {
-    const tail = platformId.slice("openclaw-runtime-".length);
-    const separator = tail.indexOf("-");
-    return separator > 0 ? tail.slice(0, separator) : tail;
+    return platformId.slice("openclaw-runtime-".length);
   }
   const sessionId = (log.sessionId ?? "").trim();
   if (sessionId.startsWith("runtime-")) {
-    const tail = sessionId.slice("runtime-".length);
-    const separator = tail.indexOf("-");
-    return separator > 0 ? tail.slice(0, separator) : tail;
+    return sessionId.slice("runtime-".length);
   }
   return null;
 }
@@ -2625,6 +3065,18 @@ function getLogAgentId(log: OpenClawMessageLogItem): string | null {
 function matchesAgentLog(log: OpenClawMessageLogItem, agentId: string | null) {
   if (!agentId) {
     return false;
+  }
+  const normalizedAgentId = agentId.trim().toLowerCase();
+  if (!normalizedAgentId) {
+    return false;
+  }
+  const platformId = (log.platformId ?? "").trim().toLowerCase();
+  if (platformId === `openclaw-agent-${normalizedAgentId}` || platformId === `openclaw-runtime-${normalizedAgentId}`) {
+    return true;
+  }
+  const sessionId = (log.sessionId ?? "").trim().toLowerCase();
+  if (sessionId.startsWith(`runtime-${normalizedAgentId}-`)) {
+    return true;
   }
   return equalsIgnoreCase(getLogAgentId(log), agentId);
 }
@@ -2651,6 +3103,215 @@ function matchesRuntimeLogCategory(log: OpenClawMessageLogItem, category: Utilit
 
 function getRuntimeLogCategoryLabel(log: OpenClawMessageLogItem) {
   return getRuntimeLogCategory(log) === "tool" ? "工具" : "消息";
+}
+
+function clearRuntimeToolSyncRetryTimer() {
+  if (runtimeToolSyncRetryTimer) {
+    window.clearTimeout(runtimeToolSyncRetryTimer);
+    runtimeToolSyncRetryTimer = 0;
+  }
+}
+
+function isRuntimeToolSyncExpired(context: RuntimeToolSyncContext) {
+  return Date.now() > context.expiresAtMs;
+}
+
+function normalizeRuntimeToolName(log: OpenClawMessageLogItem) {
+  const method = (log.method ?? "").trim();
+  if (method.toUpperCase().startsWith("TOOL:")) {
+    const name = method.slice("TOOL:".length).trim();
+    if (name) {
+      return name;
+    }
+  }
+  const endpoint = (log.endpoint ?? "").trim();
+  if (endpoint) {
+    const match = endpoint.match(/\/tool\/([^/?#]+)/i);
+    if (match?.[1]) {
+      try {
+        return decodeURIComponent(match[1]);
+      } catch {
+        return match[1];
+      }
+    }
+  }
+  return "tool";
+}
+
+function normalizeRuntimeToolPayloadText(value?: string) {
+  const source = (value ?? "").trim();
+  if (!source) {
+    return "";
+  }
+  try {
+    return JSON.stringify(JSON.parse(source), null, 2);
+  } catch {
+    return source;
+  }
+}
+
+function buildRuntimeToolMessage(log: OpenClawMessageLogItem): AgentChatMessage {
+  const toolInput = normalizeRuntimeToolPayloadText(log.requestBody);
+  const toolOutput = normalizeRuntimeToolPayloadText(log.streamSummary || log.responseBody || log.error || "");
+  const toolStatus: ChatToolStatus = (log.responseStatus >= 400 || Boolean((log.error ?? "").trim())) ? "error" : "done";
+  return {
+    id: `runtime-tool-${log.id}`,
+    role: "assistant",
+    text: toolOutput || toolInput || "工具执行完成。",
+    status: toolStatus === "error" ? "error" : "done",
+    createdAt: log.createdAt,
+    kind: "runtime_tool",
+    toolName: normalizeRuntimeToolName(log),
+    toolStatus,
+    toolInput: toolInput || undefined,
+    toolOutput: toolOutput || undefined
+  };
+}
+
+function insertRuntimeToolMessages(beforeMessageId: string, logs: OpenClawMessageLogItem[], afterMs: number, agentId: string) {
+  const anchorIndex = chatMessages.value.findIndex((message) => message.id === beforeMessageId);
+  if (anchorIndex < 0) {
+    return 0;
+  }
+  const rows = logs
+    .filter((log) => isToolRuntimeLog(log))
+    .filter((log) => matchesAgentLog(log, agentId))
+    .filter((log) => log.createdAt >= afterMs)
+    .filter((log) => !chatMessages.value.some((message) => message.id === `runtime-tool-${log.id}`))
+    .sort((left, right) => left.createdAt - right.createdAt)
+    .map((log) => buildRuntimeToolMessage(log));
+
+  if (rows.length === 0) {
+    return 0;
+  }
+
+  chatMessages.value.splice(anchorIndex, 0, ...rows);
+  return rows.length;
+}
+
+async function loadRuntimeToolLogs() {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return [] as OpenClawMessageLogItem[];
+  }
+  try {
+    const result = (await invoke("load_openclaw_message_logs")) as OpenClawMessageLogResponse;
+    return Array.isArray(result.logs) ? result.logs : [];
+  } catch {
+    return [] as OpenClawMessageLogItem[];
+  }
+}
+
+async function syncRuntimeToolMessagesNow(context: RuntimeToolSyncContext) {
+  if (isRuntimeToolSyncExpired(context)) {
+    runtimeToolSyncContext.value = null;
+    clearRuntimeToolSyncRetryTimer();
+    return 0;
+  }
+  const hasAnchor = chatMessages.value.some((message) => message.id === context.pendingMessageId);
+  if (!hasAnchor) {
+    runtimeToolSyncContext.value = null;
+    clearRuntimeToolSyncRetryTimer();
+    return 0;
+  }
+  const logs = await loadRuntimeToolLogs();
+  const inserted = insertRuntimeToolMessages(context.pendingMessageId, logs, context.startedAtMs, context.runtimeAgentId);
+  if (inserted > 0) {
+    await scrollMessagesToBottom();
+  }
+  return inserted;
+}
+
+function scheduleRuntimeToolSyncRetry() {
+  clearRuntimeToolSyncRetryTimer();
+  const context = runtimeToolSyncContext.value;
+  if (!context) {
+    return;
+  }
+  runtimeToolSyncRetryTimer = window.setTimeout(() => {
+    void (async () => {
+      const current = runtimeToolSyncContext.value;
+      if (!current) {
+        clearRuntimeToolSyncRetryTimer();
+        return;
+      }
+      await syncRuntimeToolMessagesNow(current);
+      const latest = runtimeToolSyncContext.value;
+      if (!latest || isRuntimeToolSyncExpired(latest)) {
+        runtimeToolSyncContext.value = null;
+        clearRuntimeToolSyncRetryTimer();
+        return;
+      }
+      scheduleRuntimeToolSyncRetry();
+    })();
+  }, runtimeToolSyncRetryDelayMs);
+}
+
+function isRuntimeToolMessageExpanded(messageId: string) {
+  return Boolean(expandedRuntimeToolMessages.value[messageId]);
+}
+
+function toggleRuntimeToolMessageExpanded(messageId: string) {
+  const current = expandedRuntimeToolMessages.value[messageId];
+  expandedRuntimeToolMessages.value = {
+    ...expandedRuntimeToolMessages.value,
+    [messageId]: !current
+  };
+}
+
+function resolveRuntimeToolStatus(message: AgentChatMessage): ChatToolStatus {
+  if (message.toolStatus === "running" || message.toolStatus === "done" || message.toolStatus === "error") {
+    return message.toolStatus;
+  }
+  if (message.status === "pending") {
+    return "running";
+  }
+  if (message.status === "error") {
+    return "error";
+  }
+  return "done";
+}
+
+function getRuntimeToolStatusLabel(message: AgentChatMessage) {
+  const status = resolveRuntimeToolStatus(message);
+  if (status === "running") {
+    return "加载中";
+  }
+  if (status === "error") {
+    return "失败";
+  }
+  return "完成";
+}
+
+function getRuntimeToolStatusClass(message: AgentChatMessage) {
+  const status = resolveRuntimeToolStatus(message);
+  if (status === "running") {
+    return "is-running";
+  }
+  if (status === "error") {
+    return "is-error";
+  }
+  return "is-done";
+}
+
+function getRuntimeToolLabel(message: AgentChatMessage) {
+  return message.toolName?.trim() || "tool";
+}
+
+function getRuntimeToolMessageDetail(message: AgentChatMessage) {
+  const sections: string[] = [];
+  const input = message.toolInput?.trim() ?? "";
+  const output = message.toolOutput?.trim() ?? "";
+  if (input) {
+    sections.push(`输入\n${input}`);
+  }
+  if (output) {
+    sections.push(`结果\n${output}`);
+  }
+  if (sections.length > 0) {
+    return sections.join("\n\n");
+  }
+  return message.text.trim();
 }
 
 function formatJsonText(value?: string) {
@@ -2868,11 +3529,13 @@ async function loadRelatedModelSnapshot() {
       platforms: []
     };
     relatedModelDraft.value = null;
+    relatedModelCustomExpanded.value = true;
     relatedResourceModalError.value = "当前环境不支持模型配置快照。";
     return;
   }
 
   relatedModelSnapshot.value = (await invoke("load_openclaw_platforms_snapshot")) as OpenClawPlatformSnapshotResponse;
+  relatedModelCustomExpanded.value = (relatedModelSnapshot.value?.platforms ?? []).length === 0;
   const target = resolveRelatedModelPlatform(activeAgent.value, relatedModelSnapshot.value?.platforms ?? []);
   if (!target) {
     relatedModelDraft.value = null;
@@ -3033,6 +3696,380 @@ async function openExternalUrl(url: string) {
   if (typeof window !== "undefined") {
     window.open(trimmed, "_blank", "noopener,noreferrer");
   }
+}
+
+function generateFeishuOpenclawUserCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let buffer = "";
+  for (let index = 0; index < 8; index += 1) {
+    const randomIndex = Math.floor(Math.random() * alphabet.length);
+    buffer += alphabet.charAt(randomIndex);
+  }
+  return `${buffer.slice(0, 4)}-${buffer.slice(4)}`;
+}
+
+function refreshFeishuOpenclawQrContext() {
+  feishuOpenclawUserCode.value = generateFeishuOpenclawUserCode();
+  feishuQrRefreshNonce.value = Date.now();
+}
+
+function getFeishuChannelGroup(snapshot: OpenClawChannelAccountsSnapshotResponse | null | undefined) {
+  if (!snapshot) {
+    return null;
+  }
+  return snapshot.channels.find((group) => normalizeChannelPaneType(group.channelType) === FEISHU_CHANNEL_ID) ?? null;
+}
+
+function syncFeishuFormValues(values: Record<string, unknown> | null | undefined) {
+  const appId = values?.appId;
+  const appSecret = values?.appSecret;
+  feishuAppId.value = typeof appId === "string" ? appId : "";
+  feishuAppSecret.value = typeof appSecret === "string" ? appSecret : "";
+}
+
+async function loadFeishuChannelFormValues() {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    throw new Error("当前环境不支持读取飞书配置。");
+  }
+  const values = (await invoke("load_openclaw_channel_form_values", {
+    channelType: FEISHU_CHANNEL_ID,
+    accountId: FEISHU_DEFAULT_ACCOUNT_ID
+  })) as Record<string, unknown>;
+  syncFeishuFormValues(values);
+}
+
+async function openFeishuConnectModal() {
+  closeProxyConfigModal();
+  closeRelatedResourceModal();
+  closeChannelConfigModal();
+  closeUtilityModal();
+  closeSidebarSettingsModal();
+  closeSidebarLogsPanel();
+  isFeishuConnectModalOpen.value = true;
+  feishuConnectLoading.value = true;
+  feishuConnectSaving.value = false;
+  feishuConnectChecking.value = false;
+  feishuConnectError.value = "";
+  feishuConnectNotice.value = "";
+  feishuManualExpanded.value = false;
+  feishuAppSecretVisible.value = false;
+  feishuQrVisible.value = false;
+  refreshFeishuOpenclawQrContext();
+
+  try {
+    await loadFeishuChannelFormValues();
+    const group = getFeishuChannelGroup(dashboardChannelSnapshot.value);
+    if (group?.accounts.some((account) => account.configured)) {
+      feishuConnectNotice.value = "已检测到飞书账号配置。你可以重新扫码创建新机器人，或直接更新 App ID / App Secret。";
+    }
+  } catch (error) {
+    feishuConnectError.value = error instanceof Error ? error.message : "读取飞书配置失败。";
+  } finally {
+    feishuConnectLoading.value = false;
+  }
+}
+
+function closeFeishuConnectModal() {
+  isFeishuConnectModalOpen.value = false;
+  feishuConnectLoading.value = false;
+  feishuConnectSaving.value = false;
+  feishuConnectChecking.value = false;
+  feishuConnectError.value = "";
+  feishuConnectNotice.value = "";
+  feishuManualExpanded.value = false;
+  feishuAppSecretVisible.value = false;
+  feishuQrVisible.value = false;
+  feishuOpenclawUserCode.value = "";
+  feishuAppId.value = "";
+  feishuAppSecret.value = "";
+}
+
+function handleFeishuQrConnect() {
+  refreshFeishuOpenclawQrContext();
+  feishuQrVisible.value = true;
+  feishuConnectError.value = "";
+  feishuConnectNotice.value = "";
+}
+
+async function handleFeishuOpenDocs() {
+  await openExternalUrl(FEISHU_DOCS_URL);
+}
+
+async function handleFeishuManualSave() {
+  const invoke = getTauriInvoke();
+  if (!invoke || feishuConnectSaving.value) {
+    if (!invoke) {
+      feishuConnectError.value = "当前环境不支持写入飞书配置。";
+    }
+    return;
+  }
+
+  const appId = feishuAppId.value.trim();
+  const appSecret = feishuAppSecret.value.trim();
+  if (!appId) {
+    feishuConnectError.value = "请输入 App ID。";
+    return;
+  }
+  if (!appSecret) {
+    feishuConnectError.value = "请输入 App Secret。";
+    return;
+  }
+
+  feishuConnectSaving.value = true;
+  feishuConnectError.value = "";
+  feishuConnectNotice.value = "";
+  try {
+    await invoke("save_openclaw_channel_config", {
+      payload: {
+        channelType: FEISHU_CHANNEL_ID,
+        accountId: FEISHU_DEFAULT_ACCOUNT_ID,
+        config: {
+          appId,
+          appSecret,
+          domain: "feishu"
+        }
+      }
+    });
+    feishuConnectNotice.value = "飞书凭证已保存。";
+    await refreshDashboardData();
+  } catch (error) {
+    feishuConnectError.value = error instanceof Error ? error.message : "保存飞书配置失败。";
+  } finally {
+    feishuConnectSaving.value = false;
+  }
+}
+
+async function handleFeishuConnectionCheck() {
+  const invoke = getTauriInvoke();
+  if (!invoke || feishuConnectChecking.value) {
+    if (!invoke) {
+      feishuConnectError.value = "当前环境不支持检查飞书连接状态。";
+    }
+    return;
+  }
+
+  feishuConnectChecking.value = true;
+  feishuConnectError.value = "";
+  feishuConnectNotice.value = "";
+  try {
+    const snapshot = (await invoke("load_openclaw_channel_accounts_snapshot")) as OpenClawChannelAccountsSnapshotResponse;
+    dashboardChannelSnapshot.value = snapshot;
+    if (relatedResourceModalTarget.value === "channel") {
+      relatedChannelSnapshot.value = snapshot;
+    }
+
+    const group = getFeishuChannelGroup(snapshot);
+    if (!group || group.accounts.length === 0) {
+      feishuConnectNotice.value = "尚未检测到飞书账号配置，可展开“手动输入”先保存 App ID 和 App Secret。";
+      return;
+    }
+
+    const defaultAccount = group.accounts.find((account) => account.isDefault) ?? group.accounts[0];
+    if (!defaultAccount.configured) {
+      feishuConnectNotice.value = "已检测到飞书账号，但凭证尚未配置完整，请检查 App ID / App Secret。";
+      return;
+    }
+
+    const normalizedStatus = defaultAccount.status.trim().toLowerCase();
+    const statusLabel = normalizedStatus === "connected" ? "已连接" : "已配置";
+    feishuConnectNotice.value = `检查完成：${defaultAccount.accountId} ${statusLabel}。`;
+  } catch (error) {
+    feishuConnectError.value = error instanceof Error ? error.message : "检查飞书状态失败。";
+  } finally {
+    feishuConnectChecking.value = false;
+  }
+}
+
+function resetChannelConfigSecretVisibility() {
+  channelConfigSecretVisibility.value = {};
+}
+
+function isChannelConfigSecretVisible(fieldKey: string) {
+  return channelConfigSecretVisibility.value[fieldKey] === true;
+}
+
+function toggleChannelConfigSecretVisibility(fieldKey: string) {
+  channelConfigSecretVisibility.value = {
+    ...channelConfigSecretVisibility.value,
+    [fieldKey]: !channelConfigSecretVisibility.value[fieldKey]
+  };
+}
+
+function getChannelConfigGroup(catalogId: string, backendType: string) {
+  const groups = dashboardChannelSnapshot.value?.channels ?? [];
+  for (const group of groups) {
+    const groupType = (group.channelType ?? "").trim().toLowerCase();
+    const normalizedGroupType = normalizeChannelPaneType(group.channelType);
+    if (groupType === backendType || normalizedGroupType === catalogId) {
+      return group;
+    }
+  }
+  return null;
+}
+
+async function openChannelConfigModal(
+  catalogId: string,
+  backendType: string,
+  accountId: string,
+  options?: {
+    allowEditAccountId?: boolean;
+    loadExisting?: boolean;
+    existingAccountIds?: string[];
+  }
+) {
+  closeProxyConfigModal();
+  closeRelatedResourceModal();
+  closeUtilityModal();
+  closeSidebarSettingsModal();
+  closeSidebarLogsPanel();
+  closeFeishuConnectModal();
+
+  const invoke = getTauriInvoke();
+  const allowEdit = options?.allowEditAccountId === true;
+  const loadExisting = options?.loadExisting === true;
+  channelConfigCatalogId.value = catalogId;
+  channelConfigBackendType.value = backendType;
+  channelConfigAccountId.value = accountId;
+  channelConfigAllowEditAccountId.value = allowEdit;
+  channelConfigExistingAccountIds.value = options?.existingAccountIds ?? [];
+  channelConfigForm.value = {};
+  channelConfigError.value = "";
+  channelConfigSaving.value = false;
+  resetChannelConfigSecretVisibility();
+
+  if (loadExisting && invoke) {
+    try {
+      const values = (await invoke("load_openclaw_channel_form_values", {
+        channelType: backendType,
+        accountId
+      })) as Record<string, string>;
+      channelConfigForm.value = values && typeof values === "object" ? values : {};
+    } catch (error) {
+      channelConfigForm.value = {};
+      channelConfigError.value = error instanceof Error ? error.message : "读取频道配置失败。";
+    }
+  }
+
+  isChannelConfigModalOpen.value = true;
+}
+
+function closeChannelConfigModal() {
+  isChannelConfigModalOpen.value = false;
+  channelConfigCatalogId.value = "";
+  channelConfigBackendType.value = "";
+  channelConfigAccountId.value = "";
+  channelConfigAllowEditAccountId.value = false;
+  channelConfigExistingAccountIds.value = [];
+  channelConfigForm.value = {};
+  channelConfigError.value = "";
+  channelConfigSaving.value = false;
+  resetChannelConfigSecretVisibility();
+}
+
+async function handleOpenChannelConfigDocs() {
+  const url = activeChannelConfigMeta.value?.docsUrl?.trim();
+  if (!url) {
+    return;
+  }
+  await openExternalUrl(url);
+}
+
+async function handleOpenLegacyChannelConfigFromCatalog(channelId: string) {
+  const catalog = resolveChannelConfigCatalog(channelId);
+  if (!catalog) {
+    return;
+  }
+  const backendType = resolveChannelConfigBackendType(catalog);
+  if (!backendType) {
+    return;
+  }
+
+  const group = getChannelConfigGroup(catalog.id, backendType);
+  if (group && group.accounts.length > 0) {
+    const target = group.accounts.find((account) => account.isDefault) ?? group.accounts[0];
+    await openChannelConfigModal(catalog.id, backendType, target.accountId, {
+      allowEditAccountId: false,
+      loadExisting: true,
+      existingAccountIds: group.accounts.map((account) => account.accountId)
+    });
+    return;
+  }
+
+  await openChannelConfigModal(catalog.id, backendType, FEISHU_DEFAULT_ACCOUNT_ID, {
+    allowEditAccountId: false,
+    // Non-Feishu cards should keep the legacy migration behavior on first open.
+    loadExisting: true,
+    existingAccountIds: []
+  });
+}
+
+async function handleSaveChannelConfig() {
+  const invoke = getTauriInvoke();
+  const meta = activeChannelConfigMeta.value;
+  const backendType = channelConfigBackendType.value.trim().toLowerCase();
+  const accountId = channelConfigAccountId.value.trim();
+  if (!meta) {
+    return;
+  }
+  if (!backendType) {
+    channelConfigError.value = "当前频道类型无效。";
+    return;
+  }
+  if (!accountId) {
+    channelConfigError.value = "账号 ID 不能为空。";
+    return;
+  }
+  if (
+    channelConfigAllowEditAccountId.value &&
+    channelConfigExistingAccountIds.value.some((item) => item.trim().toLowerCase() === accountId.toLowerCase())
+  ) {
+    channelConfigError.value = `账号 ID ${accountId} 已存在。`;
+    return;
+  }
+  if (!invoke) {
+    channelConfigError.value = "当前环境不支持写入频道配置。";
+    return;
+  }
+
+  const payloadConfig: Record<string, string> = {};
+  for (const field of meta.fields ?? []) {
+    const value = (channelConfigForm.value[field.key] ?? "").trim();
+    if (field.required && !value) {
+      channelConfigError.value = `${field.label} 不能为空。`;
+      return;
+    }
+    if (value) {
+      payloadConfig[field.key] = value;
+    }
+  }
+
+  channelConfigSaving.value = true;
+  channelConfigError.value = "";
+  try {
+    await invoke("save_openclaw_channel_config", {
+      payload: {
+        channelType: backendType,
+        accountId,
+        config: payloadConfig
+      }
+    });
+    closeChannelConfigModal();
+    await refreshDashboardData();
+  } catch (error) {
+    channelConfigError.value = error instanceof Error ? error.message : "保存频道配置失败。";
+  } finally {
+    channelConfigSaving.value = false;
+  }
+}
+
+function handleChannelPaneCatalogCardClick(channelId: string) {
+  const normalized = normalizeChannelPaneType(channelId);
+  if (normalized === FEISHU_CHANNEL_ID) {
+    void openFeishuConnectModal();
+    return;
+  }
+  void handleOpenLegacyChannelConfigFromCatalog(normalized || channelId);
 }
 
 function getSkillMarketCacheKey(category: SkillMarketSectionCategory, sortBy: SkillMarketSortBy) {
@@ -3621,6 +4658,60 @@ function handleSidebarSectionChange(section: SidebarSection) {
   }
 }
 
+function normalizeMarketSkillsInput(value: string) {
+  return value
+    .split(/[\n,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function applyMarketFlowTemplate(template: MarketFlowTemplate) {
+  marketFlowRoleTeam.value = template.roleOrTeam;
+  marketFlowSkills.value = template.skills.join(", ");
+  marketFlowPlatform.value = template.platform;
+  marketFlowConfigJson.value = template.configJson;
+  marketFlowNotice.value = `已载入「${template.title}」模板，可继续编辑后构建。`;
+}
+
+function handleMarketFlowBuild(kind: MarketFlowKind) {
+  const roleOrTeam = marketFlowRoleTeam.value.trim();
+  const platform = marketFlowPlatform.value.trim();
+  if (!roleOrTeam || !platform) {
+    marketFlowNotice.value = "请先填写角色/团队与平台。";
+    return;
+  }
+  const configRaw = marketFlowConfigJson.value.trim() || "{}";
+  try {
+    JSON.parse(configRaw);
+  } catch {
+    marketFlowNotice.value = "配置 JSON 不是有效格式，请检查后再构建。";
+    return;
+  }
+  marketFlowNotice.value = `${marketFlowKindLabelMap[kind]}已构建，可用于发布与购买流程编排。`;
+}
+
+const marketFlowPayloadPreview = computed(() => {
+  const configRaw = marketFlowConfigJson.value.trim() || "{}";
+  let config: unknown;
+  try {
+    config = JSON.parse(configRaw);
+  } catch {
+    config = {
+      raw: configRaw
+    };
+  }
+  return JSON.stringify(
+    {
+      roleOrTeam: marketFlowRoleTeam.value.trim() || "待填写",
+      skills: normalizeMarketSkillsInput(marketFlowSkills.value),
+      platform: marketFlowPlatform.value.trim() || "待填写",
+      config
+    },
+    null,
+    2
+  );
+});
+
 function openTaskProjectsHome() {
   taskModuleView.value = "projects";
   taskModuleError.value = "";
@@ -3816,9 +4907,12 @@ async function openRelatedResource(target: RelatedResourceTarget) {
     return;
   }
   closeProxyConfigModal();
+  closeFeishuConnectModal();
+  closeChannelConfigModal();
   relatedResourceModalTarget.value = target;
   relatedSkillSearch.value = "";
   relatedMemorySearch.value = "";
+  relatedScheduleFilter.value = "all";
   relatedResourceModalError.value = "";
   relatedResourceModalNotice.value = "";
   if (target === "skills") {
@@ -3840,7 +4934,9 @@ function closeRelatedResourceModal() {
   relatedMemorySelectedId.value = null;
   relatedMemoryDraftContent.value = "";
   relatedSkillSearch.value = "";
+  relatedScheduleFilter.value = "all";
   relatedModelDraft.value = null;
+  relatedModelCustomExpanded.value = false;
 }
 
 async function handleRelatedResourceRefresh() {
@@ -3988,7 +5084,9 @@ async function handleArchiveCurrentChat() {
   }
 
   const stableMessages = getStableChatMessages(chatMessages.value);
-  const meaningfulMessages = stableMessages.filter((item) => item.role === "assistant" || item.role === "user");
+  const meaningfulMessages = stableMessages.filter(
+    (item) => (item.role === "assistant" || item.role === "user") && !isRuntimeToolMessage(item)
+  );
   if (meaningfulMessages.length === 0) {
     utilityModalNotice.value = "当前会话暂无可归档的消息。";
     return;
@@ -4006,6 +5104,9 @@ async function handleArchiveCurrentChat() {
   chatHistoryArchives.value = nextArchives;
 
   chatMessages.value = createWelcomeMessages(agent);
+  runtimeToolSyncContext.value = null;
+  expandedRuntimeToolMessages.value = {};
+  clearRuntimeToolSyncRetryTimer();
   currentSessionId.value = createSessionId();
   persistChatHistory(agent.agentId);
   agentHistories.value[agent.agentId] = [...chatMessages.value];
@@ -4025,6 +5126,9 @@ function handleRestoreArchive(record: ChatArchiveRecord) {
   }
   const restoredMessages = record.messages.map((message) => ({ ...message }));
   chatMessages.value = restoredMessages.length > 0 ? restoredMessages : createWelcomeMessages(agent);
+  runtimeToolSyncContext.value = null;
+  expandedRuntimeToolMessages.value = {};
+  clearRuntimeToolSyncRetryTimer();
   persistChatHistory(agent.agentId);
   agentHistories.value[agent.agentId] = [...chatMessages.value];
   refreshAgentMetaFromHistory(agent.agentId, chatMessages.value, agent.currentWork);
@@ -4111,6 +5215,38 @@ async function handleCopyRuntimeLogContent() {
     return;
   }
   await copyTextToClipboard(section.text, "已复制当前内容。");
+}
+
+function isRelatedModelPresetActive(reference: string) {
+  return normalizeModelReference(reference) === relatedModelActiveReference.value;
+}
+
+async function handleRelatedModelQuickSwitch(reference: string) {
+  const invoke = getTauriInvoke();
+  const agent = activeAgent.value;
+  const targetModel = reference.trim();
+  if (!invoke || !agent || !targetModel || relatedResourceModalSaving.value) {
+    return;
+  }
+
+  if (isRelatedModelPresetActive(targetModel)) {
+    relatedResourceModalNotice.value = `当前已在使用模型：${targetModel}`;
+    relatedModelCustomExpanded.value = false;
+    return;
+  }
+
+  relatedResourceModalSaving.value = true;
+  relatedResourceModalError.value = "";
+  try {
+    await invoke("save_openclaw_agent_model", { agentId: agent.agentId, model: targetModel });
+    relatedResourceModalNotice.value = `已切换模型：${targetModel}`;
+    relatedModelCustomExpanded.value = false;
+    await Promise.all([loadAgents(), loadRelatedModelSnapshot()]);
+  } catch (error) {
+    relatedResourceModalError.value = error instanceof Error ? error.message : "模型切换失败。";
+  } finally {
+    relatedResourceModalSaving.value = false;
+  }
 }
 
 async function handleRelatedModelSave() {
@@ -4222,6 +5358,97 @@ async function handleRelatedToolToggle(toolId: string, enabled: boolean) {
   }
 }
 
+async function handleRelatedScheduleToggle(job: TaskSnapshotItem, enabled: boolean) {
+  if (relatedResourceModalSaving.value) {
+    return;
+  }
+  const invoke = getTauriInvoke();
+  const snapshot = relatedTaskSnapshot.value;
+  if (!invoke || !snapshot) {
+    relatedResourceModalError.value = "当前环境不支持切换定时任务状态。";
+    return;
+  }
+
+  const previousJobs = snapshot.jobs;
+  const nextJobs = previousJobs.map((item) => {
+    if (item.id !== job.id) {
+      return item;
+    }
+    const nextStatusKind = enabled ? (item.statusKind === "disabled" ? "scheduled" : item.statusKind) : "disabled";
+    return {
+      ...item,
+      enabled,
+      statusKind: nextStatusKind,
+      statusLabel: enabled ? (nextStatusKind === "late" ? "待执行" : "已启用") : "已停用",
+      updatedAtMs: Date.now()
+    };
+  });
+
+  relatedTaskSnapshot.value = {
+    ...snapshot,
+    jobs: nextJobs
+  };
+  relatedResourceModalSaving.value = true;
+  relatedResourceModalError.value = "";
+
+  try {
+    await invoke("set_task_enabled", { taskId: job.id, enabled });
+    relatedResourceModalNotice.value = `定时任务「${job.name}」已${enabled ? "启用" : "停用"}。`;
+    await loadRelatedTaskSnapshot();
+  } catch (error) {
+    relatedTaskSnapshot.value = {
+      ...snapshot,
+      jobs: previousJobs
+    };
+    relatedResourceModalError.value = error instanceof Error ? error.message : "定时任务状态切换失败。";
+  } finally {
+    relatedResourceModalSaving.value = false;
+  }
+}
+
+async function handleRelatedScheduleDelete(job: TaskSnapshotItem) {
+  if (relatedResourceModalSaving.value) {
+    return;
+  }
+
+  const invoke = getTauriInvoke();
+  const snapshot = relatedTaskSnapshot.value;
+  if (!invoke || !snapshot) {
+    relatedResourceModalError.value = "当前环境不支持删除定时任务。";
+    return;
+  }
+
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    const confirmed = window.confirm(`确定删除定时任务「${job.name}」吗？`);
+    if (!confirmed) {
+      return;
+    }
+  }
+
+  const previousJobs = snapshot.jobs;
+  const nextJobs = previousJobs.filter((item) => item.id !== job.id);
+  relatedTaskSnapshot.value = {
+    ...snapshot,
+    jobs: nextJobs
+  };
+  relatedResourceModalSaving.value = true;
+  relatedResourceModalError.value = "";
+
+  try {
+    await invoke("delete_task", { taskId: job.id });
+    relatedResourceModalNotice.value = `定时任务「${job.name}」已删除。`;
+    await loadRelatedTaskSnapshot();
+  } catch (error) {
+    relatedTaskSnapshot.value = {
+      ...snapshot,
+      jobs: previousJobs
+    };
+    relatedResourceModalError.value = error instanceof Error ? error.message : "定时任务删除失败。";
+  } finally {
+    relatedResourceModalSaving.value = false;
+  }
+}
+
 function isChannelAccountBoundToActiveAgent(account: OpenClawChannelAccountSnapshotItem) {
   const agent = activeAgent.value;
   if (!agent) {
@@ -4258,6 +5485,7 @@ async function handleRelatedChannelBinding(channelType: string, accountId: strin
 
 function getModuleTitle(section: SidebarSection) {
   if (section === "dashboard") return "仪表盘";
+  if (section === "market") return "商城";
   if (section === "recruitment") return "数字员工";
   if (section === "skills") return "技能市场";
   if (section === "tasks") return "任务管理";
@@ -4347,6 +5575,38 @@ const visibleChannelPaneCatalog = computed(() => {
   }
   return base.filter((channel) => `${channel.name} ${channel.id} ${channel.description}`.toLowerCase().includes(normalizedQuery.value));
 });
+const feishuPluginVersionText = computed(() => {
+  const dependencies = packageJson as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  const rawVersion =
+    dependencies.devDependencies?.[FEISHU_PLUGIN_PACKAGE_NAME] ?? dependencies.dependencies?.[FEISHU_PLUGIN_PACKAGE_NAME] ?? "";
+  const normalizedVersion = rawVersion.trim().replace(/^[~^]/, "");
+  return `${FEISHU_PLUGIN_PACKAGE_NAME}@${normalizedVersion || "unknown"}`;
+});
+const feishuQrPayload = computed(() => {
+  const params = new URLSearchParams({
+    user_code: feishuOpenclawUserCode.value || "WAIT-CODE",
+    lpv: feishuPluginVersionText.value.replace(`${FEISHU_PLUGIN_PACKAGE_NAME}@`, ""),
+    ocv: packageVersionFallback,
+    from: FEISHU_OPENCLAW_FROM
+  });
+  return `${FEISHU_OPENCLAW_PAGE_URL}?${params.toString()}`;
+});
+const feishuQrImageUrl = computed(
+  () => `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=${encodeURIComponent(feishuQrPayload.value)}`
+);
+const feishuManualSaveDisabled = computed(
+  () => feishuConnectLoading.value || feishuConnectSaving.value || !feishuAppId.value.trim() || !feishuAppSecret.value.trim()
+);
+const activeChannelConfigMeta = computed(() => {
+  const channelId = channelConfigCatalogId.value.trim();
+  if (!channelId) {
+    return null;
+  }
+  return chatChannelCatalogMap.get(channelId) ?? null;
+});
 const sidebarChatBadge = computed(() => {
   const unread = agents.value.reduce((sum, agent) => sum + getAgentMeta(agent.agentId).unread, 0);
   const value = unread > 0 ? unread : agents.value.length;
@@ -4369,10 +5629,25 @@ const proxyConfigSelectedPlatform = computed(() => {
   }
   return proxyConfigPlatforms.value.find((item) => equalsIgnoreCase(item.providerId, selected)) ?? null;
 });
+const relatedModelPresets = computed(() => {
+  return (relatedModelSnapshot.value?.platforms ?? [])
+    .map((platform) => {
+      const reference = getPlatformModelReference(platform);
+      return {
+        id: platform.id || platform.providerId || reference,
+        name: platform.name || platform.providerId || "未命名模型",
+        providerId: platform.providerId || "custom",
+        modelId: (platform.model ?? "").trim(),
+        reference
+      };
+    })
+    .filter((item) => item.reference.trim().length > 0);
+});
+const relatedModelActiveReference = computed(() => normalizeModelReference(activeAgent.value?.model));
 const proxyConfigModalSubtitle = computed(() => {
   const snapshot = proxyConfigSnapshot.value;
   if (!snapshot) {
-    return "从 openclaw.json 读取并维护 provider 连接配置。";
+    return "从 openclaw.json 读取并维护模型商配置。";
   }
   return `${snapshot.detail || "读取完成"} · 来源：${snapshot.sourcePath || "—"}`;
 });
@@ -4382,7 +5657,7 @@ const relatedResourceModalTitle = computed(() => {
   if (relatedResourceModalTarget.value === "tools") return "关联资源 · 工具权限";
   if (relatedResourceModalTarget.value === "model") return "关联资源 · 模型";
   if (relatedResourceModalTarget.value === "channel") return "关联资源 · 频道";
-  if (relatedResourceModalTarget.value === "schedule") return "关联资源 · 任务";
+  if (relatedResourceModalTarget.value === "schedule") return "关联资源 · 定时任务";
   return "关联资源";
 });
 const relatedResourceModalSubtitle = computed(() => {
@@ -4467,7 +5742,9 @@ const utilityModalSubtitle = computed(() => {
   return `${stripRoleLabel(agent.displayName)} · ${agent.agentId}`;
 });
 const currentSessionMessages = computed(() =>
-  getStableChatMessages(chatMessagesForDisplay.value).filter((item) => item.role === "assistant" || item.role === "user")
+  getStableChatMessages(chatMessagesForDisplay.value).filter(
+    (item) => (item.role === "assistant" || item.role === "user") && !isRuntimeToolMessage(item)
+  )
 );
 const currentSessionPreviewText = computed(() => {
   const latest = currentSessionMessages.value[currentSessionMessages.value.length - 1];
@@ -4582,6 +5859,44 @@ const relatedScheduleJobs = computed(() => {
   const matched = jobs.filter((job) => equalsIgnoreCase(job.agentId, agent.agentId) || equalsIgnoreCase(job.agentId, stripRoleLabel(agent.displayName)));
   return matched.length > 0 ? matched : jobs;
 });
+
+function isRelatedScheduleDisabled(job: TaskSnapshotItem) {
+  return !job.enabled || job.statusKind === "disabled";
+}
+
+function isRelatedScheduleStopped(job: TaskSnapshotItem) {
+  return job.enabled && !isRelatedScheduleDisabled(job) && job.statusKind === "late";
+}
+
+function isRelatedScheduleEnabled(job: TaskSnapshotItem) {
+  return job.enabled && !isRelatedScheduleDisabled(job) && job.statusKind !== "late";
+}
+
+const relatedScheduleStatusCounts = computed(() => {
+  const jobs = relatedScheduleJobs.value;
+  return {
+    all: jobs.length,
+    enabled: jobs.filter((job) => isRelatedScheduleEnabled(job)).length,
+    stopped: jobs.filter((job) => isRelatedScheduleStopped(job)).length,
+    disabled: jobs.filter((job) => isRelatedScheduleDisabled(job)).length
+  };
+});
+
+const filteredRelatedScheduleJobs = computed(() => {
+  const jobs = relatedScheduleJobs.value;
+  if (relatedScheduleFilter.value === "enabled") {
+    return jobs.filter((job) => isRelatedScheduleEnabled(job));
+  }
+  if (relatedScheduleFilter.value === "stopped") {
+    return jobs.filter((job) => isRelatedScheduleStopped(job));
+  }
+  if (relatedScheduleFilter.value === "disabled") {
+    return jobs.filter((job) => isRelatedScheduleDisabled(job));
+  }
+  return jobs;
+});
+
+const canToggleRelatedSchedule = computed(() => Boolean(getTauriInvoke()));
 
 const dashboardGatewayState = computed(() => {
   const snapshot = dashboardGatewayHealth.value;
@@ -5214,6 +6529,10 @@ onMounted(async () => {
   await scrollMessagesToBottom();
 });
 
+onBeforeUnmount(() => {
+  clearRuntimeToolSyncRetryTimer();
+});
+
 watch(
   () => activeSection.value,
   (section) => {
@@ -5316,6 +6635,7 @@ watch(
               <span class="nav-item__icon" aria-hidden="true">
                 <svg v-if="item.id === 'chat'" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
                 <svg v-else-if="item.id === 'dashboard'" viewBox="0 0 24 24"><path d="M3 13h8V3H3zm10 8h8V3h-8zm-10 0h8v-6H3z" /></svg>
+                <svg v-else-if="item.id === 'market'" viewBox="0 0 24 24"><path d="M4 7h16l-1.2 12H5.2zM9 7V5a3 3 0 0 1 6 0v2M9 11h.01M15 11h.01" /></svg>
                 <svg v-else-if="item.id === 'recruitment'" viewBox="0 0 24 24"><path d="M10 2a8 8 0 1 0 5.3 14l4.9 4.9 1.4-1.4-4.9-4.9A8 8 0 0 0 10 2zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6z" /></svg>
                 <svg v-else-if="item.id === 'skills'" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.8L3 18.5V21h2.5l6.4-6.3a4 4 0 0 0 2.8-8.4zM14 10a2 2 0 1 1 1.4-.6A2 2 0 0 1 14 10z" /></svg>
                 <svg v-else viewBox="0 0 24 24"><path d="M9 11H7v2h2zm4 0h-2v2h2zm4 0h-2v2h2zm2-8H5a2 2 0 0 0-2 2v14l4-4h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" /></svg>
@@ -5654,6 +6974,8 @@ watch(
                         v-for="channel in visibleChannelPaneCatalog"
                         :key="`channel-pane-${channel.id}`"
                         class="chat-channel-pane__catalog-card"
+                        :class="{ 'chat-channel-pane__catalog-card--interactive': true }"
+                        @click="handleChannelPaneCatalogCardClick(channel.id)"
                       >
                         <div class="chat-channel-pane__identity">
                           <span class="chat-channel-pane__icon-shell">
@@ -5802,7 +7124,7 @@ watch(
                         <small>设置名字、角色，让 ClawPet 更了解你</small>
                       </span>
                     </button>
-                    <button class="chat-empty-action" type="button" :disabled="!activeAgent" @click="openRelatedResource('channel')">
+                    <button class="chat-empty-action" type="button" :disabled="!activeAgent" @click="openFeishuConnectModal">
                       <span class="chat-empty-action__icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24"><path d="M8 10h.01M12 10h.01M16 10h.01" /><path d="M4 5h16v10H7l-3 4z" /></svg>
                       </span>
@@ -5819,10 +7141,54 @@ watch(
                     v-for="message in chatMessagesForDisplay"
                     :key="message.id"
                     class="message-row"
-                    :class="[`message-row--${message.role}`, `message-row--${message.status}`]"
+                    :class="[
+                      `message-row--${message.role}`,
+                      `message-row--${message.status}`,
+                      { 'message-row--tool': isRuntimeToolMessage(message) }
+                    ]"
                   >
-                    <div class="message-bubble">{{ message.text }}</div>
-                    <span class="message-time">{{ getMessageTimeLabel(message) }}</span>
+                    <template v-if="isRuntimeToolMessage(message)">
+                      <div class="chat-tool-call__avatar" aria-hidden="true">
+                        <svg viewBox="0 0 20 20">
+                          <path d="M12.3 3.3a4 4 0 0 0 4.4 5.4l-3.1 3.1-1.8-1.8-5.6 5.6a1.6 1.6 0 1 1-2.3-2.3l5.6-5.6-1.8-1.8 3.1-3.1a4 4 0 0 0 1.5.5z" />
+                        </svg>
+                      </div>
+                      <div class="chat-tool-call__body">
+                        <button class="chat-tool-call__pill" type="button" @click="toggleRuntimeToolMessageExpanded(message.id)">
+                          <span class="chat-tool-call__pill-main">
+                            <svg class="chat-tool-call__icon" viewBox="0 0 20 20" aria-hidden="true">
+                              <path d="M11.2 1.8 4.6 10h4.3L7.9 18.2 14.7 10h-4.2z" />
+                            </svg>
+                            <span class="chat-tool-call__name">{{ getRuntimeToolLabel(message) }}</span>
+                            <span class="chat-tool-call__status" :class="getRuntimeToolStatusClass(message)">
+                              {{ getRuntimeToolStatusLabel(message) }}
+                            </span>
+                          </span>
+                          <svg class="chat-tool-call__caret" :class="{ 'is-open': isRuntimeToolMessageExpanded(message.id) }" viewBox="0 0 20 20" aria-hidden="true">
+                            <path d="m5 7 5 6 5-6" />
+                          </svg>
+                        </button>
+                        <pre
+                          v-if="isRuntimeToolMessageExpanded(message.id) && getRuntimeToolMessageDetail(message)"
+                          class="chat-tool-call__detail"
+                        >{{ getRuntimeToolMessageDetail(message) }}</pre>
+                      </div>
+                    </template>
+                    <div
+                      v-else-if="message.status === 'pending'"
+                      class="message-bubble message-bubble--typing"
+                      role="status"
+                      aria-live="polite"
+                      aria-label="正在思考中"
+                    >
+                      <span class="typing-indicator" aria-hidden="true">
+                        <span class="typing-indicator__dot" />
+                        <span class="typing-indicator__dot" />
+                        <span class="typing-indicator__dot" />
+                      </span>
+                    </div>
+                    <div v-else class="message-bubble">{{ message.text }}</div>
+                    <span v-if="!isRuntimeToolMessage(message)" class="message-time">{{ getMessageTimeLabel(message) }}</span>
                   </article>
                 </template>
               </div>
@@ -5890,8 +7256,8 @@ watch(
                         <button class="chat-settings-resource-action" type="button" @click="openRelatedResource('schedule')">
                           <span class="chat-settings-resource-action__icon">排</span>
                           <span class="chat-settings-resource-action__content">
-                            <span class="chat-settings-resource-action__main">任务</span>
-                            <span class="chat-settings-resource-action__sub">查看与调整任务</span>
+                            <span class="chat-settings-resource-action__main">定时任务</span>
+                            <span class="chat-settings-resource-action__sub">查看与调整定时任务</span>
                           </span>
                           <span class="chat-settings-resource-action__arrow">›</span>
                         </button>
@@ -5950,7 +7316,14 @@ watch(
                   </button>
                 </div>
                 <div class="composer-meta">
-                  <span class="composer-model-chip">{{ activeAgent?.model || "ClawPet" }}</span>
+                  <button
+                    class="composer-model-chip composer-model-chip--trigger"
+                    type="button"
+                    :disabled="!activeAgent"
+                    @click="openRelatedResource('model')"
+                  >
+                    {{ activeAgent?.model || "ClawPet" }}
+                  </button>
                   <button
                     class="composer-btn composer-btn--archive"
                     type="button"
@@ -6255,6 +7628,118 @@ watch(
               <p class="module-board__detail">数据来源：技能市场 API（可通过 Runtime fallback）。</p>
             </template>
 
+            <template v-else-if="activeSection === 'market'">
+              <section class="module-surface marketplace-surface">
+                <section class="marketplace-block">
+                  <header class="marketplace-block__header">
+                    <div>
+                      <strong>模型方案</strong>
+                      <p>按预算和并发强度选择套餐，支持团队协作与高频调用。</p>
+                    </div>
+                  </header>
+                  <div class="marketplan-grid">
+                    <article
+                      v-for="plan in marketModelPlans"
+                      :key="plan.id"
+                      class="marketplan-card"
+                      :class="{ 'marketplan-card--featured': Boolean(plan.badge) }"
+                    >
+                      <div class="marketplan-card__head">
+                        <strong>{{ plan.name }}</strong>
+                        <span v-if="plan.badge">{{ plan.badge }}</span>
+                      </div>
+                      <p class="marketplan-card__price">
+                        <span class="marketplan-card__price-current">¥{{ plan.monthlyPrice }}</span>
+                        <span class="marketplan-card__price-original">¥{{ plan.monthlyOriginalPrice }}</span>
+                        <span class="marketplan-card__price-unit">/ 月</span>
+                      </p>
+                      <p class="marketplan-card__yearly">按年计费 ¥{{ plan.yearlyPrice }} / 年</p>
+                      <p class="marketplan-card__description">{{ plan.description }}</p>
+                      <button class="marketplan-card__action" type="button">订阅 {{ plan.name }}</button>
+                    </article>
+                  </div>
+                </section>
+
+                <section class="marketplace-block">
+                  <header class="marketplace-block__header">
+                    <div>
+                      <strong>智慧团队</strong>
+                      <p>多个角色打包成团队卡片，一键加载协作分工与技能组合。</p>
+                    </div>
+                  </header>
+                  <div class="market-team-grid">
+                    <article v-for="team in marketTeamBundles" :key="team.id" class="market-team-card">
+                      <div class="market-team-card__head">
+                        <strong>{{ team.name }}</strong>
+                        <span>{{ team.roles.length }} 角色</span>
+                      </div>
+                      <p>{{ team.summary }}</p>
+                      <div class="market-team-card__roles">
+                        <span v-for="role in team.roles" :key="`${team.id}-${role}`">{{ role }}</span>
+                      </div>
+                      <div class="market-team-card__skills">
+                        <span v-for="skill in team.skills" :key="`${team.id}-${skill}`">#{{ skill }}</span>
+                      </div>
+                      <button class="market-team-card__action" type="button">{{ team.actionLabel }}</button>
+                    </article>
+                  </div>
+                </section>
+
+                <section class="marketplace-block">
+                  <header class="marketplace-block__header">
+                    <div>
+                      <strong>流程自动化办</strong>
+                      <p>可构建发布和购买流程，统一配置角色/团队、skills、平台与 JSON 参数。</p>
+                    </div>
+                  </header>
+
+                  <div class="market-flow-layout">
+                    <div class="market-flow-templates">
+                      <article v-for="flow in marketFlowTemplates" :key="flow.id" class="market-flow-template">
+                        <div class="market-flow-template__head">
+                          <span>{{ marketFlowKindLabelMap[flow.kind] }}</span>
+                          <button type="button" @click="applyMarketFlowTemplate(flow)">载入模板</button>
+                        </div>
+                        <strong>{{ flow.title }}</strong>
+                        <p>{{ flow.summary }}</p>
+                        <div class="market-flow-template__chips">
+                          <span>{{ flow.roleOrTeam }}</span>
+                          <span>{{ flow.platform }}</span>
+                          <span v-for="skill in flow.skills.slice(0, 2)" :key="`${flow.id}-${skill}`">#{{ skill }}</span>
+                        </div>
+                      </article>
+                    </div>
+
+                    <div class="market-flow-builder">
+                      <label class="market-flow-builder__field">
+                        <span>角色/团队</span>
+                        <input v-model="marketFlowRoleTeam" type="text" placeholder="例如：增长突击队" />
+                      </label>
+                      <label class="market-flow-builder__field">
+                        <span>skills</span>
+                        <input v-model="marketFlowSkills" type="text" placeholder="例如：内容生成, 自动审核, 多平台分发" />
+                      </label>
+                      <label class="market-flow-builder__field">
+                        <span>平台</span>
+                        <input v-model="marketFlowPlatform" type="text" placeholder="例如：OpenClaw + 飞书 + ERP" />
+                      </label>
+                      <label class="market-flow-builder__field">
+                        <span>配置 JSON</span>
+                        <textarea v-model="marketFlowConfigJson" rows="8" placeholder='{"trigger":"daily","needsApproval":true}'></textarea>
+                      </label>
+                      <div class="market-flow-builder__actions">
+                        <button type="button" @click="handleMarketFlowBuild('publish')">构建发布流程</button>
+                        <button type="button" @click="handleMarketFlowBuild('purchase')">构建购买流程</button>
+                      </div>
+                      <p class="market-flow-builder__notice">{{ marketFlowNotice }}</p>
+                      <pre class="market-flow-builder__preview">{{ marketFlowPayloadPreview }}</pre>
+                    </div>
+                  </div>
+                </section>
+              </section>
+              <p class="module-board__detail">商城模块提供模型套餐、智慧团队卡与流程自动化配置入口。</p>
+            </template>
+
             <template v-else-if="activeSection === 'tasks'">
               <section class="module-surface task-module-surface">
                 <p v-if="taskModuleNotice" class="module-surface__hint module-surface__hint--notice">{{ taskModuleNotice }}</p>
@@ -6524,11 +8009,185 @@ watch(
       </section>
     </div>
 
-    <div v-if="isProxyConfigModalOpen" class="related-resource-modal-backdrop" @click.self="closeProxyConfigModal">
-      <section class="related-resource-modal proxy-config-modal" role="dialog" aria-modal="true" aria-label="代理配置中心">
+    <div v-if="isFeishuConnectModalOpen" class="related-resource-modal-backdrop" @click.self="closeFeishuConnectModal">
+      <section class="feishu-connect-modal" role="dialog" aria-modal="true" aria-label="连接飞书">
+        <header class="feishu-connect-modal__header">
+          <div>
+            <strong>连接飞书</strong>
+            <p>扫码进入飞书 OpenClaw 页面创建机器人。完成后将 App ID / App Secret 填回本窗口保存即可。</p>
+            <small>官方插件版本: {{ feishuPluginVersionText }}</small>
+          </div>
+          <button class="feishu-connect-modal__close" type="button" aria-label="关闭" @click="closeFeishuConnectModal">×</button>
+        </header>
+
+        <div class="feishu-connect-modal__body">
+          <p v-if="feishuConnectNotice" class="feishu-connect-modal__notice">{{ feishuConnectNotice }}</p>
+          <p v-if="feishuConnectError" class="feishu-connect-modal__error">{{ feishuConnectError }}</p>
+
+          <button
+            class="feishu-connect-modal__scan-button"
+            type="button"
+            :disabled="feishuConnectLoading || feishuConnectChecking"
+            @click="handleFeishuQrConnect"
+          >
+            {{ feishuQrVisible ? "重新获取创建码" : "获取创建二维码" }}
+          </button>
+
+          <section v-if="feishuQrVisible" class="feishu-connect-qr">
+            <div class="feishu-connect-qr__tip">请用飞书扫码打开创建页面。创建完成后，请在下方手动填写 App ID / App Secret 并保存。</div>
+            <div class="feishu-connect-qr__panel">
+              <header class="feishu-connect-qr__head">
+                <div>
+                  <strong>第 1 步：用手机飞书扫码创建机器人</strong>
+                  <p>若手机扫码不便，可在电脑浏览器打开飞书 OpenClaw 页面</p>
+                </div>
+                <button type="button" :disabled="feishuConnectChecking" @click="handleFeishuConnectionCheck">
+                  {{ feishuConnectChecking ? "检查中..." : "检查结果" }}
+                </button>
+              </header>
+
+              <div class="feishu-connect-qr__code-shell">
+                <img :src="feishuQrImageUrl" alt="飞书连接二维码" loading="lazy" decoding="async" />
+              </div>
+              <p class="feishu-connect-qr__code-label">创建码：{{ feishuOpenclawUserCode }}</p>
+
+              <p class="feishu-connect-qr__desc">创建完成后，回到此处填写凭证并保存，再点击“检查结果”。</p>
+              <button class="feishu-connect-qr__help" type="button" @click="handleFeishuOpenDocs">打开飞书 OpenClaw 指南</button>
+            </div>
+          </section>
+
+          <section class="feishu-connect-manual">
+            <button class="feishu-connect-manual__toggle" type="button" @click="feishuManualExpanded = !feishuManualExpanded">
+              <span aria-hidden="true">{{ feishuManualExpanded ? "▼" : "▶" }}</span>
+              <span>已有 App ID？手动输入</span>
+            </button>
+
+            <form v-if="feishuManualExpanded" class="feishu-connect-manual__form" @submit.prevent="handleFeishuManualSave">
+              <label class="feishu-connect-manual__field">
+                <span>App ID</span>
+                <input v-model="feishuAppId" type="text" :placeholder="FEISHU_APP_ID_PLACEHOLDER" autocomplete="off" />
+              </label>
+
+              <label class="feishu-connect-manual__field">
+                <span>App Secret</span>
+                <div class="feishu-connect-manual__secret-row">
+                  <input
+                    v-model="feishuAppSecret"
+                    :type="feishuAppSecretVisible ? 'text' : 'password'"
+                    :placeholder="FEISHU_APP_SECRET_PLACEHOLDER"
+                    autocomplete="off"
+                  />
+                  <button type="button" @click="feishuAppSecretVisible = !feishuAppSecretVisible">
+                    {{ feishuAppSecretVisible ? "隐藏" : "显示" }}
+                  </button>
+                </div>
+              </label>
+
+              <div class="feishu-connect-manual__actions">
+                <button type="submit" :disabled="feishuManualSaveDisabled">
+                  {{ feishuConnectSaving ? "保存中..." : "保存" }}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="isChannelConfigModalOpen && activeChannelConfigMeta" class="related-resource-modal-backdrop" @click.self="closeChannelConfigModal">
+      <section class="related-resource-modal channel-pane-config-modal" role="dialog" aria-modal="true" :aria-label="`配置 ${activeChannelConfigMeta.name}`">
         <header class="related-resource-modal__header">
           <div>
-            <strong>代理配置中心</strong>
+            <strong>配置 {{ activeChannelConfigMeta.name }}</strong>
+            <p>{{ activeChannelConfigMeta.description }}</p>
+          </div>
+          <div class="related-resource-modal__actions">
+            <button
+              v-if="activeChannelConfigMeta.docsUrl"
+              class="related-resource-modal__refresh"
+              type="button"
+              :disabled="channelConfigSaving"
+              @click="handleOpenChannelConfigDocs"
+            >
+              查看文档
+            </button>
+            <button class="related-resource-modal__close" type="button" aria-label="关闭" @click="closeChannelConfigModal">×</button>
+          </div>
+        </header>
+
+        <div class="related-resource-modal__body">
+          <p v-if="channelConfigError" class="related-resource-modal__error">{{ channelConfigError }}</p>
+          <form class="related-model-form channel-pane-config-form" @submit.prevent="handleSaveChannelConfig">
+            <div v-if="(activeChannelConfigMeta.instructions ?? []).length > 0" class="channel-pane-config-form__steps">
+              <strong>配置步骤</strong>
+              <ol>
+                <li v-for="step in activeChannelConfigMeta.instructions ?? []" :key="`channel-pane-step-${activeChannelConfigMeta.id}-${step}`">
+                  {{ step }}
+                </li>
+              </ol>
+            </div>
+
+            <label class="related-model-form__field">
+              <span>账号 ID</span>
+              <input
+                v-model="channelConfigAccountId"
+                class="related-model-form__input"
+                type="text"
+                placeholder="default"
+                :disabled="!channelConfigAllowEditAccountId || channelConfigSaving"
+              />
+            </label>
+
+            <template v-for="field in activeChannelConfigMeta.fields ?? []" :key="`channel-pane-field-${field.key}`">
+              <label class="related-model-form__field">
+                <span>
+                  {{ field.label }}
+                  <em v-if="field.required" class="channel-pane-config-form__required">*</em>
+                </span>
+                <div class="channel-pane-config-form__input-row" :class="{ 'is-secret': field.secret }">
+                  <input
+                    v-model="channelConfigForm[field.key]"
+                    class="related-model-form__input"
+                    :type="field.secret && !isChannelConfigSecretVisible(field.key) ? 'password' : 'text'"
+                    :placeholder="field.placeholder"
+                    :disabled="channelConfigSaving"
+                  />
+                  <button
+                    v-if="field.secret"
+                    class="channel-pane-config-form__secret-toggle"
+                    type="button"
+                    :disabled="channelConfigSaving"
+                    @click="toggleChannelConfigSecretVisibility(field.key)"
+                  >
+                    {{ isChannelConfigSecretVisible(field.key) ? "隐藏" : "显示" }}
+                  </button>
+                </div>
+                <small v-if="field.description" class="channel-pane-config-form__field-hint">{{ field.description }}</small>
+              </label>
+            </template>
+
+            <div v-if="(activeChannelConfigMeta.fields ?? []).length === 0" class="related-resource-modal__empty related-resource-modal__empty--small">
+              当前频道无需手动填写参数，保存后会直接启用该频道。
+            </div>
+
+            <div class="related-model-form__actions channel-pane-config-form__actions">
+              <button class="related-resource-modal__refresh" type="button" :disabled="channelConfigSaving" @click="closeChannelConfigModal">
+                取消
+              </button>
+              <button class="related-resource-modal__refresh channel-pane-config-form__submit" type="submit" :disabled="channelConfigSaving">
+                {{ channelConfigSaving ? "保存中..." : "保存配置" }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="isProxyConfigModalOpen" class="related-resource-modal-backdrop" @click.self="closeProxyConfigModal">
+      <section class="related-resource-modal proxy-config-modal" role="dialog" aria-modal="true" aria-label="模型商配置中心">
+        <header class="related-resource-modal__header">
+          <div>
+            <strong>模型商配置中心</strong>
             <p>{{ proxyConfigModalSubtitle }}</p>
           </div>
           <div class="related-resource-modal__actions">
@@ -6554,7 +8213,7 @@ watch(
               <aside class="proxy-config-nav-pane">
                 <div class="proxy-config-nav-pane__toolbar">
                   <button class="related-resource-modal__refresh" type="button" :disabled="proxyConfigSaving" @click="handleProxyConfigCreate">
-                    新增平台
+                    新增模型商
                   </button>
                 </div>
                 <div class="proxy-config-nav-list">
@@ -6567,10 +8226,10 @@ watch(
                     @click="handleProxyConfigSelect(platform.providerId)"
                   >
                     <strong>{{ platform.name || platform.providerId }}</strong>
-                    <p>{{ platform.providerId }}</p>
+                    <p>{{ platform.providerId }} · {{ platform.model || "未配置模型" }}</p>
                   </button>
                   <div v-if="proxyConfigPlatforms.length === 0" class="related-resource-modal__empty related-resource-modal__empty--small">
-                    暂无已配置平台，请点击“新增平台”创建。
+                    暂无已配置模型商，请点击“新增模型商”创建。
                   </div>
                 </div>
               </aside>
@@ -6601,6 +8260,24 @@ watch(
                     />
                   </label>
                   <label class="related-model-form__field">
+                    <span>模型 ID</span>
+                    <input
+                      v-model="proxyConfigDraft.model"
+                      class="related-model-form__input"
+                      type="text"
+                      placeholder="gpt-5.4"
+                      :disabled="proxyConfigSaving"
+                    />
+                  </label>
+                  <label class="related-model-form__field">
+                    <span>协议</span>
+                    <select v-model="proxyConfigDraft.apiKind" class="related-model-form__select" :disabled="proxyConfigSaving">
+                      <option v-for="option in relatedModelProtocolOptions" :key="`proxy-provider-protocol-${option.id}`" :value="option.id">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="related-model-form__field">
                     <span>API 密钥</span>
                     <input
                       v-model="proxyConfigDraft.apiKey"
@@ -6611,7 +8288,7 @@ watch(
                     />
                   </label>
                   <div class="related-model-form__actions">
-                    <small>仅更新 provider 连接信息，不会改动模型选择。</small>
+                    <small>当前协议：{{ getProviderApiKindLabel(proxyConfigDraft.apiKind) }}</small>
                     <button class="related-resource-modal__refresh" type="submit" :disabled="proxyConfigSaving">
                       {{ proxyConfigSaving ? "保存中..." : "保存配置" }}
                     </button>
@@ -6625,7 +8302,13 @@ watch(
     </div>
 
     <div v-if="relatedResourceModalTarget" class="related-resource-modal-backdrop" @click.self="closeRelatedResourceModal">
-      <section class="related-resource-modal" role="dialog" aria-modal="true" :aria-label="relatedResourceModalTitle">
+      <section
+        class="related-resource-modal"
+        :class="{ 'related-resource-modal--schedule': relatedResourceModalTarget === 'schedule' }"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="relatedResourceModalTitle"
+      >
         <header class="related-resource-modal__header">
           <div>
             <strong>{{ relatedResourceModalTitle }}</strong>
@@ -6757,58 +8440,87 @@ watch(
           </template>
 
           <template v-else-if="relatedResourceModalTarget === 'model'">
-            <div v-if="relatedModelDraft" class="related-model-form">
-              <label class="related-model-form__field">
-                <span>基础 URL</span>
-                <input
-                  v-model="relatedModelDraft.baseUrl"
-                  class="related-model-form__input"
-                  type="text"
-                  placeholder="https://api.example.com/v1"
-                  :disabled="relatedResourceModalSaving"
-                />
-              </label>
-              <label class="related-model-form__field">
-                <span>模型 ID</span>
-                <input
-                  v-model="relatedModelDraft.model"
-                  class="related-model-form__input"
-                  type="text"
-                  placeholder="gpt-4o-mini"
-                  :disabled="relatedResourceModalSaving"
-                />
-              </label>
-              <label class="related-model-form__field">
-                <span>协议</span>
-                <select v-model="relatedModelDraft.apiKind" class="related-model-form__select" :disabled="relatedResourceModalSaving">
-                  <option v-for="option in relatedModelProtocolOptions" :key="`provider-protocol-${option.id}`" :value="option.id">
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-              <label class="related-model-form__field">
-                <span>API 密钥</span>
-                <input
-                  v-model="relatedModelDraft.apiKey"
-                  class="related-model-form__input"
-                  type="password"
-                  placeholder="sk-..."
-                  :disabled="relatedResourceModalSaving"
-                />
-              </label>
-              <div class="related-model-form__actions">
-                <small>当前协议：{{ getProviderApiKindLabel(relatedModelDraft.apiKind) }}</small>
+            <div class="related-model-panel">
+              <div class="related-model-quick-list">
                 <button
-                  class="related-resource-modal__refresh"
+                  v-for="preset in relatedModelPresets"
+                  :key="`related-model-preset-${preset.id}`"
+                  class="related-model-quick-item"
+                  :class="{ 'is-active': isRelatedModelPresetActive(preset.reference) && !relatedModelCustomExpanded }"
                   type="button"
                   :disabled="relatedResourceModalSaving || relatedResourceModalLoading"
-                  @click="handleRelatedModelSave"
+                  @click="handleRelatedModelQuickSwitch(preset.reference)"
                 >
-                  保存
+                  <strong>{{ preset.modelId || preset.name }}</strong>
+                  <p>{{ preset.reference }}</p>
+                </button>
+                <button
+                  class="related-model-quick-item related-model-quick-item--custom"
+                  :class="{ 'is-active': relatedModelCustomExpanded }"
+                  type="button"
+                  :disabled="relatedResourceModalSaving || relatedResourceModalLoading"
+                  @click="relatedModelCustomExpanded = !relatedModelCustomExpanded"
+                >
+                  <strong>自定义配置</strong>
+                  <p>手动编辑 URL、协议与密钥</p>
                 </button>
               </div>
+
+              <div v-if="relatedModelCustomExpanded">
+                <div v-if="relatedModelDraft" class="related-model-form related-model-form--custom">
+                  <label class="related-model-form__field">
+                    <span>基础 URL</span>
+                    <input
+                      v-model="relatedModelDraft.baseUrl"
+                      class="related-model-form__input"
+                      type="text"
+                      placeholder="https://api.example.com/v1"
+                      :disabled="relatedResourceModalSaving"
+                    />
+                  </label>
+                  <label class="related-model-form__field">
+                    <span>模型 ID</span>
+                    <input
+                      v-model="relatedModelDraft.model"
+                      class="related-model-form__input"
+                      type="text"
+                      placeholder="gpt-4o-mini"
+                      :disabled="relatedResourceModalSaving"
+                    />
+                  </label>
+                  <label class="related-model-form__field">
+                    <span>协议</span>
+                    <select v-model="relatedModelDraft.apiKind" class="related-model-form__select" :disabled="relatedResourceModalSaving">
+                      <option v-for="option in relatedModelProtocolOptions" :key="`provider-protocol-${option.id}`" :value="option.id">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="related-model-form__field">
+                    <span>API 密钥</span>
+                    <input
+                      v-model="relatedModelDraft.apiKey"
+                      class="related-model-form__input"
+                      type="password"
+                      placeholder="sk-..."
+                      :disabled="relatedResourceModalSaving"
+                    />
+                  </label>
+                  <div class="related-model-form__actions">
+                    <small>当前协议：{{ getProviderApiKindLabel(relatedModelDraft.apiKind) }}</small>
+                    <button
+                      class="related-resource-modal__refresh"
+                      type="button"
+                      :disabled="relatedResourceModalSaving || relatedResourceModalLoading"
+                      @click="handleRelatedModelSave"
+                    >
+                      保存
+                    </button>
+                  </div>
+                </div>
+                <div v-else class="related-resource-modal__empty">未找到可编辑的模型平台配置。</div>
+              </div>
             </div>
-            <div v-else class="related-resource-modal__empty">未找到可编辑的模型平台配置。</div>
           </template>
 
           <template v-else-if="relatedResourceModalTarget === 'tools'">
@@ -6862,15 +8574,97 @@ watch(
           </template>
 
           <template v-else>
-            <p class="related-resource-modal__detail">{{ relatedTaskSnapshot?.detail || "暂无排班数据。" }}</p>
-            <div v-if="relatedScheduleJobs.length === 0" class="related-resource-modal__empty">当前员工暂无排班任务。</div>
-            <div v-else class="related-resource-list">
-              <article v-for="job in relatedScheduleJobs" :key="`schedule-${job.id}`" class="related-resource-card">
-                <strong>{{ job.name }}</strong>
-                <p>{{ job.summary || "暂无任务描述。" }}</p>
-                <small>
-                  {{ job.statusLabel }} · 下次运行 {{ formatDateTime(job.nextRunAtMs) }} · 更新时间 {{ formatDateTime(job.updatedAtMs) }}
-                </small>
+            <div v-if="relatedScheduleJobs.length === 0" class="related-resource-modal__empty">当前员工暂无定时任务。</div>
+            <template v-else>
+              <div class="related-schedule-filter" role="tablist" aria-label="定时任务状态筛选">
+                <button
+                  class="related-schedule-filter__button"
+                  :class="{ 'is-active': relatedScheduleFilter === 'all' }"
+                  type="button"
+                  @click="relatedScheduleFilter = 'all'"
+                >
+                  全部
+                  <em>{{ relatedScheduleStatusCounts.all }}</em>
+                </button>
+                <button
+                  class="related-schedule-filter__button"
+                  :class="{ 'is-active': relatedScheduleFilter === 'enabled' }"
+                  type="button"
+                  @click="relatedScheduleFilter = 'enabled'"
+                >
+                  启用
+                  <em>{{ relatedScheduleStatusCounts.enabled }}</em>
+                </button>
+                <button
+                  class="related-schedule-filter__button"
+                  :class="{ 'is-active': relatedScheduleFilter === 'stopped' }"
+                  type="button"
+                  @click="relatedScheduleFilter = 'stopped'"
+                >
+                  已停止
+                  <em>{{ relatedScheduleStatusCounts.stopped }}</em>
+                </button>
+                <button
+                  class="related-schedule-filter__button"
+                  :class="{ 'is-active': relatedScheduleFilter === 'disabled' }"
+                  type="button"
+                  @click="relatedScheduleFilter = 'disabled'"
+                >
+                  已禁用
+                  <em>{{ relatedScheduleStatusCounts.disabled }}</em>
+                </button>
+              </div>
+            </template>
+            <div
+              v-if="relatedScheduleJobs.length > 0 && filteredRelatedScheduleJobs.length === 0"
+              class="related-resource-modal__empty related-resource-modal__empty--small"
+            >
+              当前筛选条件下没有定时任务。
+            </div>
+            <div v-else-if="relatedScheduleJobs.length > 0" class="related-schedule-list">
+              <article
+                v-for="job in filteredRelatedScheduleJobs"
+                :key="`schedule-${job.id}`"
+                class="related-schedule-card"
+                :class="{
+                  'is-disabled': !job.enabled || job.statusKind === 'disabled',
+                  'is-due': job.enabled && job.statusKind === 'late'
+                }"
+              >
+                <div class="related-schedule-card__head">
+                  <div class="related-schedule-card__title-row">
+                    <strong>{{ job.name }}</strong>
+                  </div>
+                  <div class="related-schedule-card__actions">
+                    <button
+                      class="related-schedule-switch"
+                      :class="{ 'is-on': job.enabled && job.statusKind !== 'disabled' }"
+                      type="button"
+                      :disabled="relatedResourceModalSaving || !canToggleRelatedSchedule"
+                      :aria-label="job.enabled ? `停用定时任务 ${job.name}` : `启用定时任务 ${job.name}`"
+                      @click="handleRelatedScheduleToggle(job, !job.enabled)"
+                    >
+                      <i />
+                    </button>
+                    <button
+                      class="related-schedule-delete"
+                      type="button"
+                      :disabled="relatedResourceModalSaving || !canToggleRelatedSchedule"
+                      :aria-label="`删除定时任务 ${job.name}`"
+                      @click="handleRelatedScheduleDelete(job)"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+                <div class="related-schedule-card__meta-row">
+                  <p class="related-schedule-card__meta">
+                    {{ formatTaskScheduleKind(job.scheduleKind, job.deleteAfterRun) }}：{{ formatDateTime(job.nextRunAtMs) }}
+                    <span v-if="job.nextRunAtMs"> · 下次：{{ formatTaskNextRunCountdown(job.nextRunAtMs) }}</span>
+                  </p>
+                  <small class="related-schedule-card__updated">更新 {{ formatDateTime(job.updatedAtMs) }}</small>
+                </div>
+                <p class="related-schedule-card__summary">{{ job.summary || "暂无任务描述。" }}</p>
               </article>
             </div>
           </template>
@@ -7189,6 +8983,116 @@ watch(
                 >
                   <i />
                 </button>
+              </article>
+            </template>
+
+            <template v-else-if="sidebarSettingsActiveGroup === 'providers'">
+              <article class="sidebar-settings-card sidebar-settings-card--column">
+                <div>
+                  <h4>模型商管理</h4>
+                  <p>{{ proxyConfigModalSubtitle }}</p>
+                </div>
+
+                <div class="sidebar-settings-provider-actions">
+                  <button
+                    type="button"
+                    class="sidebar-settings-text-button"
+                    :disabled="proxyConfigLoading || proxyConfigSaving"
+                    @click="loadProxyConfigSnapshot(proxyConfigSelectedProviderId)"
+                  >
+                    刷新列表
+                  </button>
+                  <button type="button" class="sidebar-settings-text-button" :disabled="proxyConfigSaving" @click="handleProxyConfigCreate">
+                    添加自定义模型商
+                  </button>
+                </div>
+
+                <p v-if="proxyConfigNotice" class="sidebar-settings-panel__notice">{{ proxyConfigNotice }}</p>
+                <p v-if="proxyConfigError" class="sidebar-settings-panel__error">{{ proxyConfigError }}</p>
+
+                <div v-if="proxyConfigLoading" class="related-resource-modal__empty">正在读取模型商配置...</div>
+                <div v-else class="proxy-config-layout sidebar-settings-provider-layout">
+                  <aside class="proxy-config-nav-pane">
+                    <div class="proxy-config-nav-list">
+                      <button
+                        v-for="platform in proxyConfigPlatforms"
+                        :key="`settings-provider-${platform.providerId}`"
+                        class="proxy-config-nav-item"
+                        :class="{ active: equalsIgnoreCase(platform.providerId, proxyConfigSelectedProviderId) }"
+                        type="button"
+                        @click="handleProxyConfigSelect(platform.providerId)"
+                      >
+                        <strong>{{ platform.name || platform.providerId }}</strong>
+                        <p>{{ platform.providerId }} · {{ platform.model || "未配置模型" }}</p>
+                      </button>
+                      <div v-if="proxyConfigPlatforms.length === 0" class="related-resource-modal__empty related-resource-modal__empty--small">
+                        暂无已配置模型商，请点击“添加自定义模型商”创建。
+                      </div>
+                    </div>
+                  </aside>
+
+                  <section class="proxy-config-editor-pane">
+                    <form v-if="proxyConfigDraft" class="related-model-form" @submit.prevent="handleProxyConfigSave">
+                      <p class="related-model-form__meta">
+                        当前选择：{{ proxyConfigSelectedPlatform?.name || "新模型商" }} · {{ proxyConfigSelectedPlatform?.providerId || "custom" }}
+                      </p>
+                      <label class="related-model-form__field">
+                        <span>providerId</span>
+                        <input
+                          v-model="proxyConfigDraft.providerId"
+                          class="related-model-form__input"
+                          type="text"
+                          placeholder="openai / deepseek / custom"
+                          :disabled="proxyConfigSaving"
+                        />
+                      </label>
+                      <label class="related-model-form__field">
+                        <span>基础 URL</span>
+                        <input
+                          v-model="proxyConfigDraft.baseUrl"
+                          class="related-model-form__input"
+                          type="text"
+                          placeholder="https://api.example.com/v1"
+                          :disabled="proxyConfigSaving"
+                        />
+                      </label>
+                      <label class="related-model-form__field">
+                        <span>模型 ID</span>
+                        <input
+                          v-model="proxyConfigDraft.model"
+                          class="related-model-form__input"
+                          type="text"
+                          placeholder="gpt-5.4"
+                          :disabled="proxyConfigSaving"
+                        />
+                      </label>
+                      <label class="related-model-form__field">
+                        <span>协议</span>
+                        <select v-model="proxyConfigDraft.apiKind" class="related-model-form__select" :disabled="proxyConfigSaving">
+                          <option v-for="option in relatedModelProtocolOptions" :key="`settings-provider-protocol-${option.id}`" :value="option.id">
+                            {{ option.label }}
+                          </option>
+                        </select>
+                      </label>
+                      <label class="related-model-form__field">
+                        <span>API 密钥</span>
+                        <input
+                          v-model="proxyConfigDraft.apiKey"
+                          class="related-model-form__input"
+                          type="password"
+                          placeholder="sk-..."
+                          :disabled="proxyConfigSaving"
+                        />
+                      </label>
+                      <div class="related-model-form__actions">
+                        <small>当前协议：{{ getProviderApiKindLabel(proxyConfigDraft.apiKind) }}</small>
+                        <button class="related-resource-modal__refresh" type="submit" :disabled="proxyConfigSaving">
+                          {{ proxyConfigSaving ? "保存中..." : "保存配置" }}
+                        </button>
+                      </div>
+                    </form>
+                  </section>
+                </div>
               </article>
             </template>
 
@@ -7861,6 +9765,22 @@ watch(
   gap: 10px;
 }
 
+.chat-channel-pane__catalog-card--interactive {
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.chat-channel-pane__catalog-card--interactive:hover {
+  border-color: #f7b28b;
+  background: #fff8f2;
+  box-shadow: 0 8px 18px rgba(232, 108, 32, 0.12);
+  transform: translateY(-1px);
+}
+
 .chat-channel-pane__identity {
   min-width: 0;
   display: flex;
@@ -8342,6 +10262,13 @@ watch(
   gap: 4px;
 }
 
+.message-row--tool {
+  max-width: min(88%, 700px);
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+}
+
 .message-row--user {
   align-self: flex-end;
 }
@@ -8376,6 +10303,45 @@ watch(
   background: #eef4ff;
 }
 
+.message-bubble--typing {
+  width: fit-content;
+  min-width: 62px;
+  padding: 10px 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca9be;
+  border-color: #e5eaf3;
+  background: #ffffff;
+  box-shadow: 0 6px 14px rgba(61, 89, 130, 0.08);
+}
+
+.typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.typing-indicator__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #bcc6d7;
+  animation: typing-dot-pulse 1.15s ease-in-out infinite;
+}
+
+.typing-indicator__dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-indicator__dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.message-row--pending .message-time {
+  display: none;
+}
+
 .message-row--error .message-bubble {
   color: #b42318;
   background: #fff1f1;
@@ -8386,6 +10352,11 @@ watch(
   align-self: flex-end;
   font-size: 11px;
   color: #8ea1bc;
+}
+
+.message-row--tool .message-time {
+  align-self: center;
+  margin-left: 2px;
 }
 
 .chat-window__messages {
@@ -8456,6 +10427,19 @@ watch(
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+@keyframes typing-dot-pulse {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.38;
+  }
+  40% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
 }
 
 .chat-empty-action {
@@ -8640,6 +10624,23 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-model-chip--trigger {
+  cursor: pointer;
+  appearance: none;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.composer-model-chip--trigger:hover:not(:disabled) {
+  border-color: #96bbe9;
+  background: #eaf2ff;
+  color: #2f5f98;
+}
+
+.composer-model-chip--trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .composer-btn {
@@ -9255,6 +11256,384 @@ watch(
   background:
     radial-gradient(110% 62% at 100% 0%, rgba(43, 179, 134, 0.12) 0%, rgba(43, 179, 134, 0) 64%),
     linear-gradient(162deg, rgba(252, 254, 255, 0.98), rgba(243, 249, 255, 0.95));
+}
+
+.marketplace-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background:
+    radial-gradient(110% 64% at 100% 0%, rgba(88, 129, 222, 0.15) 0%, rgba(88, 129, 222, 0) 66%),
+    radial-gradient(120% 68% at 0% 100%, rgba(38, 173, 128, 0.12) 0%, rgba(38, 173, 128, 0) 70%),
+    linear-gradient(162deg, rgba(252, 254, 255, 0.98), rgba(242, 248, 255, 0.95));
+}
+
+.marketplace-block {
+  border: 1px solid #d3e1f5;
+  border-radius: 14px;
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.96), rgba(247, 251, 255, 0.94));
+  box-shadow: 0 10px 20px rgba(53, 82, 123, 0.09);
+  padding: 12px;
+}
+
+.marketplace-block__header strong {
+  display: block;
+  color: #223d63;
+  font-size: 16px;
+}
+
+.marketplace-block__header p {
+  margin: 5px 0 0;
+  color: #647fa6;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.marketplan-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.marketplan-card {
+  border: 1px solid #343c4b;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #202531 0%, #171c26 100%);
+  color: #eef2fa;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.marketplan-card--featured {
+  border-color: #4f8fff;
+  box-shadow: 0 12px 20px rgba(53, 96, 169, 0.28);
+}
+
+.marketplan-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.marketplan-card__head strong {
+  color: #f3f6ff;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+}
+
+.marketplan-card__head span {
+  border-radius: 999px;
+  border: 1px solid #5693ff;
+  background: rgba(86, 147, 255, 0.2);
+  color: #8dc4ff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+}
+
+.marketplan-card__price {
+  margin: 2px 0 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.marketplan-card__price-current {
+  color: #ffffff;
+  font-size: 37px;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.marketplan-card__price-original {
+  color: #7e899f;
+  text-decoration: line-through;
+  font-size: 18px;
+}
+
+.marketplan-card__price-unit {
+  color: #a8b3ca;
+  font-size: 15px;
+}
+
+.marketplan-card__yearly {
+  margin: 0;
+  color: #99a7c0;
+  font-size: 12px;
+}
+
+.marketplan-card__description {
+  margin: 2px 0 0;
+  color: #c6d0e4;
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 58px;
+}
+
+.marketplan-card__action {
+  margin-top: auto;
+  height: 38px;
+  border: 1px solid #f6f8fd;
+  border-radius: 11px;
+  background: #f4f7ff;
+  color: #273754;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.marketplan-card__action:hover {
+  background: #ffffff;
+}
+
+.market-team-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 10px;
+}
+
+.market-team-card {
+  border: 1px solid #d4e2f5;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.market-team-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.market-team-card__head strong {
+  color: #244163;
+  font-size: 14px;
+}
+
+.market-team-card__head span {
+  border-radius: 999px;
+  border: 1px solid #d5e3f7;
+  background: #f2f7ff;
+  color: #516f96;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+}
+
+.market-team-card p {
+  margin: 0;
+  color: #5f7b9f;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.market-team-card__roles,
+.market-team-card__skills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.market-team-card__roles span,
+.market-team-card__skills span {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.market-team-card__roles span {
+  border: 1px solid #d7e4f7;
+  background: #f3f8ff;
+  color: #45658f;
+}
+
+.market-team-card__skills span {
+  border: 1px solid #d3eadc;
+  background: #edf9f2;
+  color: #2f6f54;
+}
+
+.market-team-card__action {
+  margin-top: auto;
+  height: 32px;
+  border: 1px solid #88afe8;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #4f88de, #386fc7);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.market-flow-layout {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: minmax(240px, 0.9fr) minmax(0, 1.1fr);
+  gap: 11px;
+}
+
+.market-flow-templates {
+  display: grid;
+  gap: 8px;
+}
+
+.market-flow-template {
+  border: 1px solid #d6e3f6;
+  border-radius: 12px;
+  background: linear-gradient(160deg, #ffffff, #f5faff);
+  padding: 10px;
+  display: grid;
+  gap: 7px;
+}
+
+.market-flow-template__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.market-flow-template__head span {
+  border-radius: 999px;
+  border: 1px solid #cfe0f6;
+  background: #edf4ff;
+  color: #3f638f;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+}
+
+.market-flow-template__head button {
+  height: 26px;
+  border: 1px solid #d2deef;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #4f668a;
+  font-size: 11px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.market-flow-template strong {
+  color: #243f61;
+  font-size: 14px;
+}
+
+.market-flow-template p {
+  margin: 0;
+  color: #607ca1;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.market-flow-template__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.market-flow-template__chips span {
+  border-radius: 999px;
+  border: 1px solid #d8e5f7;
+  background: #f5f9ff;
+  color: #4f6e96;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+.market-flow-builder {
+  border: 1px solid #d8e4f7;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.market-flow-builder__field {
+  display: grid;
+  gap: 5px;
+}
+
+.market-flow-builder__field span {
+  color: #5f7a9f;
+  font-size: 12px;
+}
+
+.market-flow-builder__field input,
+.market-flow-builder__field textarea {
+  width: 100%;
+  border: 1px solid #d4e0f2;
+  border-radius: 9px;
+  background: #fdfefe;
+  color: #2d3d5b;
+  font-size: 12px;
+  outline: 0;
+  padding: 8px 9px;
+}
+
+.market-flow-builder__field textarea {
+  min-height: 130px;
+  resize: vertical;
+  font-family: "SFMono-Regular", "Consolas", "Menlo", monospace;
+}
+
+.market-flow-builder__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.market-flow-builder__actions button {
+  height: 32px;
+  border: 1px solid #84ace8;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #4f88de, #376fc8);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.market-flow-builder__notice {
+  margin: 0;
+  border-radius: 9px;
+  border: 1px solid #d8e5f7;
+  background: #f4f9ff;
+  color: #4f6e95;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 7px 9px;
+}
+
+.market-flow-builder__preview {
+  margin: 0;
+  border: 1px solid #e0e8f6;
+  border-radius: 9px;
+  background: #f9fbff;
+  color: #314869;
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 9px;
+  max-height: 196px;
+  overflow: auto;
 }
 
 .module-surface__toolbar {
@@ -10574,6 +12953,319 @@ watch(
   z-index: 1200;
 }
 
+.feishu-connect-modal {
+  width: min(500px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  border-radius: 16px;
+  border: 1px solid #e6e9f1;
+  background: #ffffff;
+  box-shadow: 0 22px 52px rgba(20, 27, 42, 0.3);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.feishu-connect-modal__header {
+  padding: 20px 26px 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.feishu-connect-modal__header strong {
+  display: block;
+  color: #1f2937;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.22;
+}
+
+.feishu-connect-modal__header p {
+  margin: 10px 0 0;
+  color: #7b7f8a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.feishu-connect-modal__header small {
+  display: block;
+  margin-top: 12px;
+  color: #9aa0ab;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.feishu-connect-modal__close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #3c3f46;
+  font-size: 25px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.feishu-connect-modal__close:hover {
+  background: #f4f6fa;
+}
+
+.feishu-connect-modal__body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 26px 20px;
+}
+
+.feishu-connect-modal__notice,
+.feishu-connect-modal__error {
+  margin: 0 0 10px;
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.feishu-connect-modal__notice {
+  border: 1px solid #bde0c8;
+  background: #edfff2;
+  color: #2d7c4d;
+}
+
+.feishu-connect-modal__error {
+  border: 1px solid #f1c2c2;
+  background: #fff3f3;
+  color: #a83b3b;
+}
+
+.feishu-connect-modal__scan-button {
+  width: 100%;
+  height: 52px;
+  border: 0;
+  border-radius: 10px;
+  background: #f85a1b;
+  color: #ffffff;
+  font-size: 19px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.feishu-connect-modal__scan-button:hover:not(:disabled) {
+  background: #ea4e12;
+}
+
+.feishu-connect-modal__scan-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.feishu-connect-qr {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.feishu-connect-qr__tip {
+  border: 1px solid #e5e9f1;
+  border-radius: 8px;
+  background: #f2f5fa;
+  color: #7f8797;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 9px 12px;
+}
+
+.feishu-connect-qr__panel {
+  border: 1px solid #dde2eb;
+  border-radius: 12px;
+  background: #f8f9fb;
+  padding: 14px;
+}
+
+.feishu-connect-qr__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.feishu-connect-qr__head strong {
+  display: block;
+  color: #2b2f38;
+  font-size: 17px;
+}
+
+.feishu-connect-qr__head p {
+  margin: 6px 0 0;
+  color: #8b92a1;
+  font-size: 11px;
+}
+
+.feishu-connect-qr__head button {
+  height: 30px;
+  border: 1px solid #d7dbe3;
+  border-radius: 8px;
+  background: #f1f3f6;
+  color: #747d8e;
+  font-size: 12px;
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+.feishu-connect-qr__head button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.feishu-connect-qr__code-shell {
+  margin: 14px auto 0;
+  width: 228px;
+  height: 228px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #eceff4;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+}
+
+.feishu-connect-qr__code-shell img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.feishu-connect-qr__code-label {
+  margin: 10px 0 0;
+  color: #7e8796;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  text-align: center;
+}
+
+.feishu-connect-qr__desc {
+  margin: 12px 0 0;
+  color: #9aa0ad;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.feishu-connect-qr__help {
+  margin-top: 10px;
+  border: 0;
+  background: transparent;
+  color: #8b93a2;
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.feishu-connect-manual {
+  margin-top: 14px;
+  border-top: 1px solid #eaedf4;
+  padding-top: 12px;
+}
+
+.feishu-connect-manual__toggle {
+  border: 0;
+  background: transparent;
+  color: #7e838d;
+  font-size: 13px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.feishu-connect-manual__form {
+  margin-top: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.feishu-connect-manual__field {
+  display: grid;
+  gap: 8px;
+}
+
+.feishu-connect-manual__field span {
+  color: #666d7a;
+  font-size: 13px;
+}
+
+.feishu-connect-manual__field input {
+  width: 100%;
+  height: 42px;
+  border: 1px solid #d9dee7;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #2b2f38;
+  padding: 0 14px;
+  font-size: 13px;
+  outline: 0;
+}
+
+.feishu-connect-manual__field input::placeholder {
+  color: #a1a8b5;
+}
+
+.feishu-connect-manual__field input:focus {
+  border-color: #f3a77d;
+  box-shadow: 0 0 0 3px rgba(248, 90, 27, 0.15);
+}
+
+.feishu-connect-manual__secret-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feishu-connect-manual__secret-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.feishu-connect-manual__secret-row button {
+  height: 36px;
+  min-width: 48px;
+  border: 1px solid #d9dee7;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #8790a0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.feishu-connect-manual__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.feishu-connect-manual__actions button {
+  min-width: 64px;
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: #f85a1b;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 16px;
+  cursor: pointer;
+}
+
+.feishu-connect-manual__actions button:hover:not(:disabled) {
+  background: #ea4e12;
+}
+
+.feishu-connect-manual__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .related-resource-modal {
   width: min(900px, calc(100vw - 40px));
   max-height: calc(100vh - 56px);
@@ -10584,6 +13276,10 @@ watch(
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
+}
+
+.related-resource-modal--schedule {
+  height: min(680px, calc(100vh - 56px));
 }
 
 .related-resource-modal__header {
@@ -10675,6 +13371,58 @@ watch(
   gap: 10px;
 }
 
+.related-model-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.related-model-quick-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.related-model-quick-item {
+  border: 1px solid #dfe8f6;
+  border-radius: 11px;
+  background: #fbfdff;
+  text-align: left;
+  padding: 9px 10px;
+  cursor: pointer;
+}
+
+.related-model-quick-item.is-active {
+  border-color: #99bbf3;
+  background: #eef5ff;
+}
+
+.related-model-quick-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.related-model-quick-item strong {
+  display: block;
+  color: #2f3f5b;
+  font-size: 13px;
+}
+
+.related-model-quick-item p {
+  margin: 3px 0 0;
+  color: #6f83a3;
+  font-size: 11px;
+  word-break: break-word;
+}
+
+.related-model-quick-item--custom {
+  border-style: dashed;
+}
+
+.related-model-form--custom {
+  margin-top: 2px;
+}
+
 .related-model-form__meta {
   margin: 0;
   color: #6f83a3;
@@ -10723,6 +13471,85 @@ watch(
 .related-model-form__actions small {
   color: #7b8ca7;
   font-size: 11px;
+}
+
+.channel-pane-config-modal {
+  width: min(760px, calc(100vw - 40px));
+}
+
+.channel-pane-config-form {
+  gap: 12px;
+}
+
+.channel-pane-config-form__steps {
+  border: 1px solid #dfe8f6;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.channel-pane-config-form__steps strong {
+  display: block;
+  color: #2f3f5b;
+  font-size: 13px;
+}
+
+.channel-pane-config-form__steps ol {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #637898;
+  font-size: 12px;
+}
+
+.channel-pane-config-form__steps li + li {
+  margin-top: 4px;
+}
+
+.channel-pane-config-form__required {
+  color: #d75b5b;
+  font-style: normal;
+  margin-left: 4px;
+}
+
+.channel-pane-config-form__input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-pane-config-form__input-row .related-model-form__input {
+  flex: 1;
+}
+
+.channel-pane-config-form__secret-toggle {
+  height: 34px;
+  border: 1px solid #d6dfef;
+  border-radius: 8px;
+  background: #f4f8ff;
+  color: #4d607f;
+  padding: 0 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.channel-pane-config-form__secret-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.channel-pane-config-form__field-hint {
+  color: #7b8ca7;
+  font-size: 11px;
+}
+
+.channel-pane-config-form__actions {
+  justify-content: flex-end;
+}
+
+.channel-pane-config-form__submit {
+  border-color: #8eb1ec;
+  background: #eaf3ff;
+  color: #36598f;
 }
 
 .related-memory-layout {
@@ -11050,36 +13877,178 @@ watch(
   font-size: 11px;
 }
 
-.related-resource-list {
+.related-schedule-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.related-resource-card {
-  border: 1px solid #e2eaf6;
-  border-radius: 10px;
+.related-schedule-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.related-schedule-filter__button {
+  height: 32px;
+  border: 1px solid #d8e0ec;
+  border-radius: 999px;
+  background: #f8fafd;
+  color: #8290a8;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.related-schedule-filter__button em {
+  margin-left: 4px;
+  font-style: normal;
+  opacity: 0.9;
+}
+
+.related-schedule-filter__button.is-active {
+  border-color: #1a1d23;
+  background: #1a1d23;
+  color: #ffffff;
+}
+
+.related-schedule-card {
+  border: 1px solid #dbe6f5;
+  border-radius: 12px;
   background: #fbfdff;
   padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 
-.related-resource-card strong {
+.related-schedule-card.is-due {
+  border-color: #f0d3a2;
+  background: #fff9ee;
+}
+
+.related-schedule-card.is-disabled {
+  border-color: #e0e7f1;
+  background: #f8fafd;
+}
+
+.related-schedule-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.related-schedule-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.related-schedule-switch {
+  width: 42px;
+  height: 24px;
+  border: 1px solid #d3deef;
+  border-radius: 999px;
+  background: #e6ecf7;
+  padding: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.related-schedule-switch i {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(67, 86, 118, 0.2);
+  transition: transform 160ms ease;
+}
+
+.related-schedule-switch.is-on {
+  border-color: #79c99d;
+  background: #43bf78;
+}
+
+.related-schedule-switch.is-on i {
+  transform: translateX(18px);
+}
+
+.related-schedule-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.related-schedule-delete {
+  height: 24px;
+  border: 1px solid #f0c8c8;
+  border-radius: 999px;
+  background: #fff6f6;
+  color: #bc4a4a;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.related-schedule-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.related-schedule-card__title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.related-schedule-card__title-row strong {
   display: block;
   color: #2f3f5b;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.35;
+  min-width: 0;
 }
 
-.related-resource-card p {
-  margin: 4px 0 0;
-  color: #6f83a3;
+.related-schedule-card__meta {
+  margin: 0;
+  color: #6d83a4;
   font-size: 12px;
+  min-width: 0;
 }
 
-.related-resource-card small {
-  display: block;
-  margin-top: 6px;
-  color: #8596b1;
+.related-schedule-card__meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.related-schedule-card__summary {
+  margin: 0;
+  color: #667894;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.related-schedule-card__updated {
+  color: #8798b2;
   font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .related-channel-row {
@@ -11423,6 +14392,18 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.sidebar-settings-provider-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sidebar-settings-provider-layout {
+  width: 100%;
+  min-height: 400px;
 }
 
 .utility-modal-backdrop {
@@ -11980,6 +14961,15 @@ watch(
     grid-template-columns: 200px minmax(0, 1fr);
   }
 
+  .marketplan-grid,
+  .market-team-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .market-flow-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .task-board-creator {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -12097,6 +15087,72 @@ watch(
     max-height: calc(100vh - 20px);
   }
 
+  .related-resource-modal--schedule {
+    height: calc(100vh - 20px);
+  }
+
+  .feishu-connect-modal {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .feishu-connect-modal__header {
+    padding: 16px 14px 10px;
+  }
+
+  .feishu-connect-modal__header strong {
+    font-size: 18px;
+  }
+
+  .feishu-connect-modal__header p {
+    margin-top: 8px;
+    font-size: 13px;
+  }
+
+  .feishu-connect-modal__header small {
+    margin-top: 10px;
+    font-size: 12px;
+  }
+
+  .feishu-connect-modal__body {
+    padding: 0 14px 14px;
+  }
+
+  .feishu-connect-modal__scan-button {
+    height: 44px;
+    font-size: 16px;
+  }
+
+  .feishu-connect-qr__head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .feishu-connect-qr__code-shell {
+    width: min(228px, 100%);
+    height: auto;
+    aspect-ratio: 1 / 1;
+  }
+
+  .feishu-connect-manual__secret-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .feishu-connect-manual__secret-row button {
+    width: 100%;
+    height: 34px;
+  }
+
+  .channel-pane-config-form__input-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .channel-pane-config-form__secret-toggle {
+    width: 100%;
+  }
+
   .related-resource-modal__header {
     padding: 12px;
   }
@@ -12132,9 +15188,19 @@ watch(
     align-items: flex-start;
   }
 
+  .related-model-quick-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .related-channel-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .related-schedule-card__meta-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .utility-modal {
@@ -12181,6 +15247,11 @@ watch(
   }
 
   .sidebar-settings-feedback__actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .sidebar-settings-provider-actions {
     flex-direction: column;
     align-items: flex-start;
   }
@@ -12342,7 +15413,8 @@ watch(
   }
 
   .recruitment-role-card__action,
-  .skill-market-card-v2__action {
+  .skill-market-card-v2__action,
+  .market-flow-builder__actions button {
     flex: 1 1 auto;
     justify-content: center;
   }
@@ -12352,8 +15424,14 @@ watch(
   }
 
   .recruitment-role-grid,
-  .skill-market-grid {
+  .skill-market-grid,
+  .marketplan-grid,
+  .market-team-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .market-flow-builder__actions {
+    width: 100%;
   }
 
   .module-board {

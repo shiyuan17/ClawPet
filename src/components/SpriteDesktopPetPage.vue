@@ -238,6 +238,15 @@ type ChatMessage = {
   kind?: ChatMessageKind;
   toolName?: string;
   toolStatus?: ChatToolStatus;
+  toolInput?: string;
+  toolOutput?: string;
+};
+
+type RuntimeToolSyncContext = {
+  pendingMessageId: string;
+  startedAtMs: number;
+  runtimeAgentId: string | null;
+  expiresAtMs: number;
 };
 
 type BoundPetAgentCapability = {
@@ -854,7 +863,7 @@ const activeLogAnalysisView = ref<LogAnalysisView>("timeline");
 const isSending = ref(false);
 const chatInput = ref("");
 const chatMessages = ref<ChatMessage[]>(createDefaultChatMessages());
-const runtimeToolSyncContext = ref<{ pendingMessageId: string; startedAtMs: number; runtimeAgentId: string | null } | null>(null);
+const runtimeToolSyncContext = ref<RuntimeToolSyncContext | null>(null);
 const expandedRuntimeToolMessages = ref<Record<string, boolean>>({});
 const chatAttachments = ref<ChatAttachment[]>([]);
 const isDragOver = ref(false);
@@ -4105,6 +4114,7 @@ const audioPayloadCache = new Map<string, AudioFilePayload>();
 const runtimeLogPollIntervalMs = 2500;
 const staffSnapshotPollIntervalMs = 3000;
 const runtimeLogFollowWindowMs = 4000;
+const runtimeToolSyncWindowMs = 15000;
 let systemThemeMediaQuery: MediaQueryList | null = null;
 let systemThemeMediaListener: ((event: MediaQueryListEvent) => void) | null = null;
 
@@ -4395,22 +4405,33 @@ function normalizeRuntimeToolName(log: RequestLog) {
   return raw || "tool";
 }
 
-function getRuntimeToolMessageSourceText(log: RequestLog) {
-  const text = (log.streamSummary?.trim() || log.responseBody?.trim() || log.error?.trim() || "").trim();
-  if (text) {
-    return text;
+function normalizeRuntimeToolPayloadText(value: string | undefined) {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return "";
   }
-  const requestBody = log.requestBody?.trim();
-  if (requestBody) {
-    return `参数：${requestBody}`;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return trimmed;
   }
-  return "工具执行完成。";
+}
+
+function getRuntimeToolInputText(log: RequestLog) {
+  return normalizeRuntimeToolPayloadText(log.requestBody);
+}
+
+function getRuntimeToolOutputText(log: RequestLog) {
+  const source = (log.streamSummary?.trim() || log.responseBody?.trim() || log.error?.trim() || "").trim();
+  return normalizeRuntimeToolPayloadText(source);
 }
 
 function buildRuntimeToolMessage(log: RequestLog): ChatMessage {
-  const text = getRuntimeToolMessageSourceText(log);
+  const toolInput = getRuntimeToolInputText(log);
+  const toolOutput = getRuntimeToolOutputText(log);
+  const text = toolOutput || toolInput || "工具执行完成。";
   const toolStatus: ChatToolStatus = isFailedLog(log) ? "error" : "done";
-  const hasAudioPayload = Boolean(extractAudioPath(text));
+  const hasAudioPayload = Boolean(extractAudioPath(toolOutput || text));
   return {
     id: `runtime-tool-${log.id}`,
     role: "assistant",
@@ -4419,7 +4440,9 @@ function buildRuntimeToolMessage(log: RequestLog): ChatMessage {
     createdAt: log.createdAt,
     kind: hasAudioPayload ? "default" : "runtime_tool",
     toolName: normalizeRuntimeToolName(log),
-    toolStatus
+    toolStatus,
+    toolInput: toolInput || undefined,
+    toolOutput: toolOutput || undefined
   };
 }
 
@@ -4490,7 +4513,23 @@ function getRuntimeToolLabel(message: ChatMessage) {
 }
 
 function getRuntimeToolMessageDetail(message: ChatMessage) {
+  const sections: string[] = [];
+  const input = message.toolInput?.trim() ?? "";
+  const output = message.toolOutput?.trim() ?? "";
+  if (input) {
+    sections.push(`输入\n${input}`);
+  }
+  if (output) {
+    sections.push(`结果\n${output}`);
+  }
+  if (sections.length > 0) {
+    return sections.join("\n\n");
+  }
   return message.text.trim();
+}
+
+function isRuntimeToolSyncExpired(syncContext: RuntimeToolSyncContext) {
+  return Date.now() > syncContext.expiresAtMs;
 }
 
 function isRuntimeToolMessageExpanded(messageId: string) {
@@ -4566,6 +4605,8 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
     message.toolStatus === "running" || message.toolStatus === "done" || message.toolStatus === "error"
       ? message.toolStatus
       : undefined;
+  const toolInput = typeof message.toolInput === "string" && message.toolInput.trim() ? message.toolInput.trim() : undefined;
+  const toolOutput = typeof message.toolOutput === "string" && message.toolOutput.trim() ? message.toolOutput.trim() : undefined;
 
   return {
     id: message.id,
@@ -4577,7 +4618,9 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
       : undefined,
     kind,
     toolName,
-    toolStatus
+    toolStatus,
+    toolInput,
+    toolOutput
   };
 }
 
@@ -5780,6 +5823,39 @@ function selectSkillMarketCategory(category: SkillMarketSectionCategory) {
   }
   activeSkillMarketCategory.value = category;
   void refreshSkillMarket();
+}
+
+function getSkillMarketCategoryTabId(category: SkillMarketSectionCategory) {
+  return `skill-market-tab-${category}`;
+}
+
+function getSkillMarketCategoryPanelId(category: SkillMarketSectionCategory) {
+  return `skill-market-panel-${category}`;
+}
+
+function handleSkillMarketCategoryTabKeydown(event: KeyboardEvent, category: SkillMarketSectionCategory) {
+  const currentIndex = skillMarketCategories.findIndex((item) => item.id === category);
+  if (currentIndex < 0) {
+    return;
+  }
+
+  const maxIndex = skillMarketCategories.length - 1;
+  let targetIndex = currentIndex;
+
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    targetIndex = currentIndex >= maxIndex ? 0 : currentIndex + 1;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    targetIndex = currentIndex <= 0 ? maxIndex : currentIndex - 1;
+  } else if (event.key === "Home") {
+    targetIndex = 0;
+  } else if (event.key === "End") {
+    targetIndex = maxIndex;
+  } else {
+    return;
+  }
+
+  event.preventDefault();
+  selectSkillMarketCategory(skillMarketCategories[targetIndex].id);
 }
 
 function handleSkillMarketSortChange() {
@@ -8444,7 +8520,8 @@ async function submitChat() {
   runtimeToolSyncContext.value = {
     pendingMessageId: pendingId,
     startedAtMs,
-    runtimeAgentId: agentId
+    runtimeAgentId: agentId,
+    expiresAtMs: Date.now() + runtimeToolSyncWindowMs
   };
   chatInput.value = "";
   chatAttachments.value = [];
@@ -8546,8 +8623,10 @@ async function submitChat() {
       } catch {
         // Ignore runtime log refresh errors in chat completion flow.
       }
+      if (isRuntimeToolSyncExpired(syncContext)) {
+        runtimeToolSyncContext.value = null;
+      }
     }
-    runtimeToolSyncContext.value = null;
     isSending.value = false;
     applyBaseAnimation();
     startBubbleAnimation();
@@ -10492,6 +10571,15 @@ watch(
   (logs) => {
     const syncContext = runtimeToolSyncContext.value;
     if (!syncContext) {
+      return;
+    }
+    if (isRuntimeToolSyncExpired(syncContext)) {
+      runtimeToolSyncContext.value = null;
+      return;
+    }
+    const hasAnchorMessage = chatMessages.value.some((message) => message.id === syncContext.pendingMessageId);
+    if (!hasAnchorMessage) {
+      runtimeToolSyncContext.value = null;
       return;
     }
     const inserted = insertRuntimeToolMessages(
@@ -12531,12 +12619,18 @@ onBeforeUnmount(() => {
               v-for="category in skillMarketCategories"
               :key="`skill-market-category-${category.id}`"
               class="skill-market-category-card"
+              role="tab"
+              :id="getSkillMarketCategoryTabId(category.id)"
+              :aria-controls="getSkillMarketCategoryPanelId(category.id)"
+              :aria-selected="activeSkillMarketCategory === category.id"
+              :tabindex="activeSkillMarketCategory === category.id ? 0 : -1"
               :class="{
                 active: activeSkillMarketCategory === category.id,
                 'skill-market-category-card--top': category.id === 'top'
               }"
               type="button"
               @click="selectSkillMarketCategory(category.id)"
+              @keydown="handleSkillMarketCategoryTabKeydown($event, category.id)"
             >
               <span class="skill-market-category-card__icon">{{ category.icon }}</span>
               <strong>{{ category.label }}</strong>
@@ -12544,91 +12638,98 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div class="skill-market-toolbar">
-            <input
-              v-model="skillMarketSearch"
-              class="management-filter-input skill-market-toolbar__search"
-              type="search"
-              placeholder="搜索关键词..."
-              @keydown.enter.prevent="refreshSkillMarket(true)"
-            />
-            <button class="desktop-console-panel__action desktop-console-panel__action--ghost skill-market-toolbar__refresh" type="button" @click="refreshSkillMarket(true)">
-              搜索
-            </button>
-          </div>
+          <section
+            class="skill-market-tab-panel"
+            role="tabpanel"
+            :id="getSkillMarketCategoryPanelId(activeSkillMarketCategory)"
+            :aria-labelledby="getSkillMarketCategoryTabId(activeSkillMarketCategory)"
+          >
+            <div class="skill-market-toolbar">
+              <input
+                v-model="skillMarketSearch"
+                class="management-filter-input skill-market-toolbar__search"
+                type="search"
+                placeholder="搜索关键词..."
+                @keydown.enter.prevent="refreshSkillMarket(true)"
+              />
+              <button class="desktop-console-panel__action desktop-console-panel__action--ghost skill-market-toolbar__refresh" type="button" @click="refreshSkillMarket(true)">
+                搜索
+              </button>
+            </div>
 
-          <p class="skill-market-summary">{{ skillMarketSummaryText }}</p>
+            <p class="skill-market-summary">{{ skillMarketSummaryText }}</p>
 
-          <div v-if="skillMarketLoading" class="empty-state">正在加载技能市场数据...</div>
-          <div v-else-if="skillMarketError" class="empty-state">{{ skillMarketError }}</div>
-          <div v-else-if="pagedSkillMarketSkills.length === 0" class="empty-state">没有匹配的技能，请调整关键词或分类。</div>
-          <div v-else class="skill-market-grid">
-            <article
-              v-for="(skill, index) in pagedSkillMarketSkills"
-              :key="`${skill.slug || skill.name}-${index}`"
-              class="skill-market-card"
-              role="button"
-              tabindex="0"
-              @click="openSkillMarketDetailModal(skill)"
-              @keydown.enter.prevent="openSkillMarketDetailModal(skill)"
-              @keydown.space.prevent="openSkillMarketDetailModal(skill)"
-            >
-              <div class="skill-market-card__head">
-                <div class="skill-market-card__avatar">{{ getSkillMarketInitial(skill.name) }}</div>
-                <div class="skill-market-card__title">
-                  <strong>{{ skill.name }}</strong>
-                  <p>{{ getSkillMarketDescription(skill) }}</p>
+            <div v-if="skillMarketLoading" class="empty-state">正在加载技能市场数据...</div>
+            <div v-else-if="skillMarketError" class="empty-state">{{ skillMarketError }}</div>
+            <div v-else-if="pagedSkillMarketSkills.length === 0" class="empty-state">没有匹配的技能，请调整关键词或分类。</div>
+            <div v-else class="skill-market-grid">
+              <article
+                v-for="(skill, index) in pagedSkillMarketSkills"
+                :key="`${skill.slug || skill.name}-${index}`"
+                class="skill-market-card"
+                role="button"
+                tabindex="0"
+                @click="openSkillMarketDetailModal(skill)"
+                @keydown.enter.prevent="openSkillMarketDetailModal(skill)"
+                @keydown.space.prevent="openSkillMarketDetailModal(skill)"
+              >
+                <div class="skill-market-card__head">
+                  <div class="skill-market-card__avatar">{{ getSkillMarketInitial(skill.name) }}</div>
+                  <div class="skill-market-card__title">
+                    <strong>{{ skill.name }}</strong>
+                    <p>{{ getSkillMarketDescription(skill) }}</p>
+                  </div>
                 </div>
-              </div>
-              <div class="skill-market-card__chips">
-                <span>{{ getSkillMarketCategoryLabel(skill.category) }}</span>
-                <span v-if="skill.ownerName">@{{ skill.ownerName }}</span>
-              </div>
-              <div class="skill-market-card__meta">
-                <span>↓ {{ formatSkillMarketCount(skill.downloads) }}</span>
-                <span>☆ {{ formatSkillMarketCount(skill.stars) }}</span>
-                <span>{{ formatSkillMarketVersion(skill.version) }}</span>
-              </div>
-            </article>
-          </div>
-          <div v-if="!skillMarketLoading && !skillMarketError && skillMarketCurrentTotalPages > 1" class="skill-market-pagination">
-            <button
-              class="skill-market-pagination__button"
-              type="button"
-              :disabled="!skillMarketCanPrevPage"
-              @click="goPrevSkillMarketPage"
-            >
-              上一页
-            </button>
-            <button
-              v-for="page in skillMarketPageNumbers"
-              :key="`skill-market-page-${page}`"
-              class="skill-market-pagination__page"
-              :class="{ active: page === skillMarketPage }"
-              type="button"
-              @click="goToSkillMarketPage(page)"
-            >
-              {{ page }}
-            </button>
-            <button
-              class="skill-market-pagination__button"
-              type="button"
-              :disabled="!skillMarketCanNextPage"
-              @click="goNextSkillMarketPage"
-            >
-              下一页
-            </button>
-          </div>
-          <p class="skill-market-copyright">
-            数据来源于
-            <button
-              class="skill-market-copyright__link"
-              type="button"
-              @click="openCodingPlanPlatform('https://skillhub.tencent.com/')"
-            >
-              腾讯云 SkillHub
-            </button>
-          </p>
+                <div class="skill-market-card__chips">
+                  <span>{{ getSkillMarketCategoryLabel(skill.category) }}</span>
+                  <span v-if="skill.ownerName">@{{ skill.ownerName }}</span>
+                </div>
+                <div class="skill-market-card__meta">
+                  <span>↓ {{ formatSkillMarketCount(skill.downloads) }}</span>
+                  <span>☆ {{ formatSkillMarketCount(skill.stars) }}</span>
+                  <span>{{ formatSkillMarketVersion(skill.version) }}</span>
+                </div>
+              </article>
+            </div>
+            <div v-if="!skillMarketLoading && !skillMarketError && skillMarketCurrentTotalPages > 1" class="skill-market-pagination">
+              <button
+                class="skill-market-pagination__button"
+                type="button"
+                :disabled="!skillMarketCanPrevPage"
+                @click="goPrevSkillMarketPage"
+              >
+                上一页
+              </button>
+              <button
+                v-for="page in skillMarketPageNumbers"
+                :key="`skill-market-page-${page}`"
+                class="skill-market-pagination__page"
+                :class="{ active: page === skillMarketPage }"
+                type="button"
+                @click="goToSkillMarketPage(page)"
+              >
+                {{ page }}
+              </button>
+              <button
+                class="skill-market-pagination__button"
+                type="button"
+                :disabled="!skillMarketCanNextPage"
+                @click="goNextSkillMarketPage"
+              >
+                下一页
+              </button>
+            </div>
+            <p class="skill-market-copyright">
+              数据来源于
+              <button
+                class="skill-market-copyright__link"
+                type="button"
+                @click="openCodingPlanPlatform('https://skillhub.tencent.com/')"
+              >
+                腾讯云 SkillHub
+              </button>
+            </p>
+          </section>
         </section>
       </div>
 
