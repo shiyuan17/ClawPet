@@ -102,6 +102,7 @@ struct LobsterSnapshotResponse {
     backup_dir: String,
     detail: String,
     backups: Vec<LobsterBackupItem>,
+    install_wizard_open_every_launch: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -504,6 +505,19 @@ fn set_app_resource_dir(path: PathBuf) {
 fn load_env_file(path: &Path) {
     if path.exists() {
         let _ = dotenvy::from_path(path);
+    }
+}
+
+fn read_env_bool(name: &str, default: bool) -> bool {
+    let raw = match std::env::var(name) {
+        Ok(value) => value,
+        Err(_) => return default,
+    };
+
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        _ => default,
     }
 }
 
@@ -5901,30 +5915,57 @@ fn collect_lobster_backups() -> Vec<LobsterBackupItem> {
     backups
 }
 
-fn find_command_path(command_name: &str) -> Option<String> {
+fn find_command_paths(command_name: &str) -> Vec<String> {
     #[cfg(target_os = "windows")]
     let output = {
         let mut command = Command::new("where");
         suppress_windows_command_window(&mut command);
-        command.arg(command_name).output().ok()?
+        match command.arg(command_name).output() {
+            Ok(value) => value,
+            Err(_) => return Vec::new(),
+        }
     };
 
     #[cfg(not(target_os = "windows"))]
     let output = {
-        let mut command = Command::new("which");
-        suppress_windows_command_window(&mut command);
-        command.arg(command_name).output().ok()?
+        let mut with_all = Command::new("which");
+        suppress_windows_command_window(&mut with_all);
+        if let Ok(value) = with_all.arg("-a").arg(command_name).output() {
+            if value.status.success() {
+                value
+            } else {
+                let mut fallback = Command::new("which");
+                suppress_windows_command_window(&mut fallback);
+                match fallback.arg(command_name).output() {
+                    Ok(value) => value,
+                    Err(_) => return Vec::new(),
+                }
+            }
+        } else {
+            let mut fallback = Command::new("which");
+            suppress_windows_command_window(&mut fallback);
+            match fallback.arg(command_name).output() {
+                Ok(value) => value,
+                Err(_) => return Vec::new(),
+            }
+        }
     };
 
     if !output.status.success() {
-        return None;
+        return Vec::new();
     }
 
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
+    let mut dedup = std::collections::HashSet::new();
+    let mut output_paths = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines().map(str::trim) {
+        if line.is_empty() {
+            continue;
+        }
+        if dedup.insert(line.to_string()) {
+            output_paths.push(line.to_string());
+        }
+    }
+    output_paths
 }
 
 fn resolve_project_root() -> PathBuf {
@@ -6059,7 +6100,7 @@ fn collect_node_binary_candidates() -> Vec<PathBuf> {
         }
     }
 
-    if let Some(path) = find_command_path("node") {
+    for path in find_command_paths("node") {
         let candidate = PathBuf::from(path);
         if candidate.exists() {
             candidates.push(candidate);
@@ -6165,7 +6206,8 @@ fn resolve_openclaw_node_runtime() -> Result<(PathBuf, String), String> {
     }
 
     let mut diagnostics: Vec<String> = Vec::new();
-    let mut best_effort_candidate: Option<(PathBuf, String, (u32, u32, u32))> = None;
+    let mut inspected_versions: Vec<String> = Vec::new();
+    let mut highest_unsupported_candidate: Option<(PathBuf, String, (u32, u32, u32))> = None;
 
     for node in candidates {
         match read_node_binary_version(&node) {
@@ -6174,18 +6216,13 @@ fn resolve_openclaw_node_runtime() -> Result<(PathBuf, String), String> {
                     return Ok((node, version));
                 }
 
-                diagnostics.push(format!(
-                    "Node 版本较低：{}（{}），推荐 >= {}",
-                    version,
-                    node.display(),
-                    openclaw_required_node_version_label()
-                ));
+                inspected_versions.push(format!("{}（{}）", version, node.display()));
 
                 let parsed = parse_node_version_triplet(&version).unwrap_or((0, 0, 0));
-                match &best_effort_candidate {
+                match &highest_unsupported_candidate {
                     Some((_best_path, _best_version, best_triplet)) if parsed <= *best_triplet => {}
                     _ => {
-                        best_effort_candidate = Some((node, version, parsed));
+                        highest_unsupported_candidate = Some((node, version, parsed));
                     }
                 }
             }
@@ -6193,13 +6230,25 @@ fn resolve_openclaw_node_runtime() -> Result<(PathBuf, String), String> {
         }
     }
 
-    if let Some((node, version, _)) = best_effort_candidate {
-        eprintln!(
-            "[clawpet] Node 版本低于推荐值，已启用兜底运行时：{}（{}）",
+    if let Some((node, version, _)) = highest_unsupported_candidate {
+        let inspected = if inspected_versions.is_empty() {
+            String::new()
+        } else {
+            format!(" 已检测到候选 Node：{}。", inspected_versions.join("；"))
+        };
+        let diagnostics_detail = if diagnostics.is_empty() {
+            String::new()
+        } else {
+            format!(" 其他候选检查异常：{}。", diagnostics.join("；"))
+        };
+        return Err(format!(
+            "OpenClaw 运行条件不满足：Node 版本过低（当前 {}，路径 {}），要求 >= {}。请升级 Node 后重试，或通过 OPENCLAW_NODE_PATH 指向符合要求的 Node。{}{}",
+            version,
             node.display(),
-            version
-        );
-        return Ok((node, version));
+            openclaw_required_node_version_label(),
+            inspected,
+            diagnostics_detail
+        ));
     }
 
     Err(format!(
@@ -8686,7 +8735,7 @@ fn reinforce_main_window_overlay(app: tauri::AppHandle) {
             let _ = window.set_shadow(false);
             let _ = window.set_always_on_top(true);
             let _ = window.set_resizable(false);
-            fit_window_to_current_monitor(&window);
+            center_window_on_current_monitor(&window);
 
             unsafe {
                 use windows::Win32::Foundation::HWND;
@@ -9063,6 +9112,10 @@ fn load_lobster_snapshot() -> Result<LobsterSnapshotResponse, String> {
         backup_dir: backup_dir.display().to_string(),
         detail,
         backups: collect_lobster_backups(),
+        install_wizard_open_every_launch: read_env_bool(
+            "CLAWPET_INSTALL_WIZARD_OPEN_EVERY_LAUNCH",
+            false,
+        ),
     })
 }
 
@@ -9087,7 +9140,7 @@ fn load_lobster_install_guide() -> Result<LobsterInstallGuideResponse, String> {
     });
 
     let node_check = match resolve_openclaw_node_runtime() {
-        Ok((path, version)) if check_node_version_supported(&version) => LobsterInstallCheckItem {
+        Ok((path, version)) => LobsterInstallCheckItem {
             id: "nodejs".to_string(),
             title: "Node.js 执行器".to_string(),
             status: "success".to_string(),
@@ -9095,17 +9148,6 @@ fn load_lobster_install_guide() -> Result<LobsterInstallGuideResponse, String> {
                 "已找到 Node 可执行文件：{}（版本 {}）",
                 path.display(),
                 version
-            ),
-        },
-        Ok((path, version)) => LobsterInstallCheckItem {
-            id: "nodejs".to_string(),
-            title: "Node.js 执行器".to_string(),
-            status: "warning".to_string(),
-            detail: format!(
-                "Node 版本较低：{}（版本 {}），推荐 >= {}。将继续尝试安装。",
-                path.display(),
-                version,
-                openclaw_required_node_version_label()
             ),
         },
         Err(error) => LobsterInstallCheckItem {
@@ -9134,6 +9176,8 @@ fn load_lobster_install_guide() -> Result<LobsterInstallGuideResponse, String> {
             openclaw_version
                 .map(|value| format!("可执行，当前版本：{value}"))
                 .unwrap_or_else(|| "可执行，版本号待确认。".to_string())
+        } else if cli_blocking {
+            format!("尚未通过 OpenClaw CLI 自检，安装步骤已阻断。{openclaw_detail}")
         } else {
             format!("尚未通过 OpenClaw CLI 自检，安装步骤仍可继续。{openclaw_detail}")
         },
@@ -9453,6 +9497,268 @@ async fn open_openclaw_control_ui() -> Result<String, String> {
         .map_err(|error| format!("打开 OpenClaw 控制台任务执行失败：{error}"))?
 }
 
+fn normalize_skill_market_install_version(raw: Option<String>) -> Option<String> {
+    let trimmed = raw
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+
+    let mut chars = trimmed.chars();
+    if let Some(head) = chars.next() {
+        if (head == 'v' || head == 'V')
+            && chars
+                .clone()
+                .next()
+                .map(|ch| ch.is_ascii_digit())
+                .unwrap_or(false)
+        {
+            let normalized = chars.collect::<String>().trim().to_string();
+            if !normalized.is_empty() {
+                return Some(normalized);
+            }
+        }
+    }
+
+    Some(trimmed)
+}
+
+fn trim_skill_market_output(raw: &str, max_chars: usize) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    for (index, ch) in trimmed.chars().enumerate() {
+        if index >= max_chars {
+            output.push('…');
+            break;
+        }
+        output.push(ch);
+    }
+    output
+}
+
+fn resolve_skill_market_clawhub_install_root() -> PathBuf {
+    resolve_openclaw_home_path().join("tools").join("clawhub-cli")
+}
+
+fn resolve_skill_market_clawhub_binary_path() -> PathBuf {
+    let mut path = resolve_skill_market_clawhub_install_root()
+        .join("node_modules")
+        .join(".bin");
+    #[cfg(target_os = "windows")]
+    {
+        path = path.join("clawhub.cmd");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        path = path.join("clawhub");
+    }
+    path
+}
+
+fn stringify_command_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    format!("{}\n{}", stdout.trim(), stderr.trim())
+        .trim()
+        .to_string()
+}
+
+fn resolve_global_clawhub_path() -> Option<PathBuf> {
+    find_command_paths("clawhub")
+        .into_iter()
+        .find(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+}
+
+fn install_clawhub_cli_for_skill_market() -> Result<bool, String> {
+    let local_bin = resolve_skill_market_clawhub_binary_path();
+    if local_bin.exists() {
+        return Ok(false);
+    }
+    if resolve_global_clawhub_path().is_some() {
+        return Ok(false);
+    }
+
+    let install_root = resolve_skill_market_clawhub_install_root();
+    std::fs::create_dir_all(&install_root).map_err(|error| {
+        format!(
+            "创建 ClawHub CLI 目录失败（{}）：{error}",
+            install_root.display()
+        )
+    })?;
+
+    let npm_path = find_command_paths("npm")
+        .into_iter()
+        .find(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "未找到 npm，无法自动安装 ClawHub CLI。请先安装 Node.js/npm。".to_string())?;
+
+    let mut command = Command::new(&npm_path);
+    suppress_windows_command_window(&mut command);
+    command
+        .arg("install")
+        .arg("--prefix")
+        .arg(&install_root)
+        .arg("--no-audit")
+        .arg("--no-fund")
+        .arg("clawhub@latest")
+        .env("npm_config_update_notifier", "false")
+        .env("npm_config_fund", "false")
+        .env("npm_config_audit", "false");
+
+    let command_display = format!(
+        "{} install --prefix {} --no-audit --no-fund clawhub@latest",
+        npm_path.display(),
+        install_root.display()
+    );
+    let output = command
+        .output()
+        .map_err(|error| format!("自动安装 ClawHub CLI 失败（{command_display}）：{error}"))?;
+
+    if !output.status.success() {
+        let detail = trim_skill_market_output(&stringify_command_output(&output), 1200);
+        return Err(if detail.is_empty() {
+            format!(
+                "自动安装 ClawHub CLI 失败（{command_display}，exit: {}）。",
+                output.status.code().unwrap_or(-1)
+            )
+        } else {
+            format!("自动安装 ClawHub CLI 失败（{command_display}）：{detail}")
+        });
+    }
+
+    if local_bin.exists() || resolve_global_clawhub_path().is_some() {
+        Ok(true)
+    } else {
+        Err(format!(
+            "ClawHub CLI 安装已执行，但未找到可执行文件。预期路径：{}",
+            local_bin.display()
+        ))
+    }
+}
+
+fn resolve_clawhub_command_for_skill_market() -> Result<(PathBuf, bool), String> {
+    let installed_now = install_clawhub_cli_for_skill_market()?;
+    let local_bin = resolve_skill_market_clawhub_binary_path();
+    if local_bin.exists() {
+        return Ok((local_bin, installed_now));
+    }
+    if let Some(global) = resolve_global_clawhub_path() {
+        return Ok((global, installed_now));
+    }
+    Err("未找到 ClawHub CLI，可尝试在终端手动执行 `npm i -g clawhub` 后重试。".to_string())
+}
+
+fn install_skill_market_skill_blocking(
+    skill_slug: String,
+    version: Option<String>,
+) -> Result<String, String> {
+    let normalized_slug = skill_slug.trim().to_string();
+    if normalized_slug.is_empty() {
+        return Err("技能 slug 不能为空。".to_string());
+    }
+    if normalized_slug
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return Err("技能 slug 格式无效，请检查后重试。".to_string());
+    }
+
+    let normalized_version = normalize_skill_market_install_version(version);
+    let workspace = resolve_workspace_main_root();
+    std::fs::create_dir_all(&workspace).map_err(|error| {
+        format!(
+            "创建 OpenClaw 主工作区失败（{}）：{error}",
+            workspace.display()
+        )
+    })?;
+
+    let workspace_arg = normalize_windows_path_for_child_process(&workspace)
+        .display()
+        .to_string();
+    let (clawhub_path, cli_installed_now) = resolve_clawhub_command_for_skill_market()?;
+
+    let mut command = Command::new(&clawhub_path);
+    suppress_windows_command_window(&mut command);
+    command
+        .arg("install")
+        .arg(&normalized_slug)
+        .arg("--workdir")
+        .arg(&workspace_arg)
+        .arg("--no-input")
+        .current_dir(&workspace);
+    if let Some(version_value) = normalized_version.as_deref() {
+        command.arg("--version").arg(version_value);
+    }
+
+    let version_display = normalized_version
+        .as_deref()
+        .map(|value| format!(" --version {value}"))
+        .unwrap_or_default();
+    let command_display = format!(
+        "{} install {} --workdir {} --no-input{}",
+        clawhub_path.display(),
+        normalized_slug,
+        workspace_arg,
+        version_display
+    );
+    let output = command
+        .output()
+        .map_err(|error| format!("执行 ClawHub 安装命令失败（{command_display}）：{error}"))?;
+    let merged_detail = stringify_command_output(&output);
+
+    if output.status.success() {
+        let version_hint = normalized_version
+            .as_deref()
+            .map(|value| format!("（版本 {value}）"))
+            .unwrap_or_default();
+        let cli_hint = if cli_installed_now {
+            "已自动完成 ClawHub CLI 首次安装。"
+        } else {
+            ""
+        };
+        return Ok(format!(
+            "{}技能「{}」{}安装成功。目录：{}/skills。请开启新会话以确保能力刷新。",
+            cli_hint, normalized_slug, version_hint, workspace_arg
+        ));
+    }
+
+    let merged_lower = merged_detail.to_ascii_lowercase();
+    if merged_lower.contains("already exists")
+        || merged_lower.contains("already installed")
+        || merged_lower.contains("has been installed")
+    {
+        return Ok(format!(
+            "技能「{}」已存在于 {}/skills，无需重复安装。",
+            normalized_slug, workspace_arg
+        ));
+    }
+
+    let exit_code = output.status.code().unwrap_or(-1);
+    let clipped_detail = trim_skill_market_output(&merged_detail, 1200);
+    Err(if clipped_detail.is_empty() {
+        format!("技能安装失败（{command_display}，exit: {exit_code}）。")
+    } else {
+        format!("技能安装失败（{command_display}）：{clipped_detail}")
+    })
+}
+
+#[tauri::command]
+async fn install_skill_market_skill(
+    skill_slug: String,
+    version: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        install_skill_market_skill_blocking(skill_slug, version)
+    })
+    .await
+    .map_err(|error| format!("技能安装任务执行失败：{error}"))?
+}
+
 async fn fetch_skill_market_json(url: &str) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
@@ -9663,7 +9969,8 @@ pub fn run() {
             build_openclaw_control_ui_url,
             open_openclaw_control_ui,
             load_skill_market_top,
-            load_skill_market_by_category
+            load_skill_market_by_category,
+            install_skill_market_skill
         ])
         .setup(|app| {
             if let Ok(resource_dir) = app.path().resource_dir() {
