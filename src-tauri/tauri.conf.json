@@ -22,20 +22,17 @@
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-        "maximizable": false,
-        "minimizable": false,
+        "maximizable": true,
+        "minimizable": true,
         "closable": true,
         "decorations": false,
         "transparent": true,
         "shadow": false,
-        "alwaysOnTop": true,
+        "alwaysOnTop": false,
         "skipTaskbar": false,
         "visible": true,
-        "focus": false,
-        "center": false,
-        "x": 0,
-        "y": 0,
-        "backgroundColor": [0, 0, 0, 0]
+        "focus": true,
+        "center": true
       }
     ],
     "security": {

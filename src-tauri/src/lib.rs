@@ -445,10 +445,10 @@ struct LocalProxyPlatform {
 #[serde(rename_all = "camelCase")]
 struct OpenClawProviderConfigPayload {
     provider_id: String,
-    protocol: String,
+    protocol: Option<String>,
     api_kind: Option<String>,
     base_url: String,
-    model: String,
+    model: Option<String>,
     api_key: String,
 }
 
@@ -5204,11 +5204,12 @@ fn save_openclaw_provider_config(config: OpenClawProviderConfigPayload) -> Resul
         return Err("baseUrl 不能为空".to_string());
     }
     let normalized_base_url = normalize_local_proxy_base_url_for_persist(base_url);
-
-    let model = config.model.trim().to_string();
-    if model.is_empty() {
-        return Err("model 不能为空".to_string());
-    }
+    let requested_model = config
+        .model
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     let requested_api_kind = config
         .api_kind
@@ -5216,17 +5217,12 @@ fn save_openclaw_provider_config(config: OpenClawProviderConfigPayload) -> Resul
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
-    let api_kind = if requested_api_kind == "openai-responses" {
-        "openai-responses"
-    } else if requested_api_kind == "anthropic-messages" {
-        "anthropic-messages"
-    } else if requested_api_kind == "openai-completions" {
-        "openai-completions"
-    } else if config.protocol.trim().eq_ignore_ascii_case("anthropic") {
-        "anthropic-messages"
-    } else {
-        "openai-completions"
-    };
+    let requested_protocol = config
+        .protocol
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     let api_key = config.api_key.trim().to_string();
 
     let source_path = resolve_openclaw_config_path();
@@ -5240,97 +5236,139 @@ fn save_openclaw_provider_config(config: OpenClawProviderConfigPayload) -> Resul
     let root = parsed
         .as_object_mut()
         .ok_or("openclaw.json 根节点不是对象")?;
-    let providers = root
-        .entry("models")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .and_then(|models| {
-            Some(
-                models
-                    .entry("providers")
-                    .or_insert_with(|| serde_json::json!({}))
-                    .as_object_mut()?,
-            )
-        })
-        .ok_or("openclaw.json 的 models.providers 不是对象")?;
 
-    let target_key = providers
-        .keys()
-        .find(|key| key.eq_ignore_ascii_case(&normalized_provider_id))
-        .cloned()
-        .unwrap_or_else(|| normalized_provider_id.to_string());
-    let provider = providers
-        .entry(target_key.clone())
-        .or_insert_with(|| serde_json::json!({}));
-    let provider_obj = provider.as_object_mut().ok_or("provider 配置不是对象")?;
-    provider_obj.remove("name");
-    provider_obj.insert("api".to_string(), Value::String(api_kind.to_string()));
-    provider_obj.insert("baseUrl".to_string(), Value::String(normalized_base_url));
-    provider_obj.insert("apiKey".to_string(), Value::String(api_key));
-    let existing_models = provider_obj
-        .get("models")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut next_models = Vec::new();
-    let mut seen_model_ids = std::collections::HashSet::new();
-    for item in existing_models {
-        let Some(model_id) = item
-            .as_object()
-            .and_then(|obj| obj.get("id"))
+    let target_key = {
+        let providers = root
+            .entry("models")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .and_then(|models| {
+                Some(
+                    models
+                        .entry("providers")
+                        .or_insert_with(|| serde_json::json!({}))
+                        .as_object_mut()?,
+                )
+            })
+            .ok_or("openclaw.json 的 models.providers 不是对象")?;
+
+        let target_key = providers
+            .keys()
+            .find(|key| key.eq_ignore_ascii_case(&normalized_provider_id))
+            .cloned()
+            .unwrap_or_else(|| normalized_provider_id.to_string());
+        let provider = providers
+            .entry(target_key.clone())
+            .or_insert_with(|| serde_json::json!({}));
+        let provider_obj = provider.as_object_mut().ok_or("provider 配置不是对象")?;
+
+        let existing_api_kind = provider_obj
+            .get("api")
             .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
+            .and_then(|value| {
+                let normalized = value.trim().to_ascii_lowercase();
+                if normalized == "openai-responses" {
+                    Some("openai-responses")
+                } else if normalized == "anthropic-messages" {
+                    Some("anthropic-messages")
+                } else if normalized == "openai-completions" {
+                    Some("openai-completions")
+                } else {
+                    None
+                }
+            });
+        let api_kind = if requested_api_kind == "openai-responses" {
+            "openai-responses"
+        } else if requested_api_kind == "anthropic-messages" {
+            "anthropic-messages"
+        } else if requested_api_kind == "openai-completions" {
+            "openai-completions"
+        } else if requested_protocol == "anthropic" {
+            "anthropic-messages"
+        } else if requested_protocol == "openai" {
+            "openai-completions"
+        } else if let Some(existing_kind) = existing_api_kind {
+            existing_kind
+        } else {
+            "openai-completions"
         };
-        if seen_model_ids.insert(model_id.to_string()) {
-            next_models.push(item);
+
+        provider_obj.remove("name");
+        provider_obj.insert("api".to_string(), Value::String(api_kind.to_string()));
+        provider_obj.insert("baseUrl".to_string(), Value::String(normalized_base_url));
+        provider_obj.insert("apiKey".to_string(), Value::String(api_key));
+
+        if !requested_model.is_empty() {
+            let existing_models = provider_obj
+                .get("models")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let mut next_models = Vec::new();
+            let mut seen_model_ids = std::collections::HashSet::new();
+            for item in existing_models {
+                let Some(model_id) = item
+                    .as_object()
+                    .and_then(|obj| obj.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    continue;
+                };
+                if seen_model_ids.insert(model_id.to_string()) {
+                    next_models.push(item);
+                }
+            }
+            if seen_model_ids.insert(requested_model.clone()) {
+                next_models.push(serde_json::json!({
+                    "id": requested_model.clone(),
+                    "name": requested_model.clone()
+                }));
+            }
+            provider_obj.insert("models".to_string(), Value::Array(next_models));
         }
-    }
-    if seen_model_ids.insert(model.clone()) {
-        next_models.push(serde_json::json!({
-            "id": model,
-            "name": model
-        }));
-    }
-    provider_obj.insert("models".to_string(), Value::Array(next_models));
 
-    if let Some(models_obj) = root.get_mut("models").and_then(Value::as_object_mut) {
-        models_obj.remove("default");
-    }
-
-    if !matches!(root.get("agents"), Some(Value::Object(_))) {
-        root.insert("agents".to_string(), serde_json::json!({}));
-    }
-    let agents_obj = root
-        .get_mut("agents")
-        .and_then(Value::as_object_mut)
-        .ok_or("openclaw.json 的 agents 不是对象")?;
-    if !matches!(agents_obj.get("defaults"), Some(Value::Object(_))) {
-        agents_obj.insert("defaults".to_string(), serde_json::json!({}));
-    }
-    let defaults_obj = agents_obj
-        .get_mut("defaults")
-        .and_then(Value::as_object_mut)
-        .ok_or("openclaw.json 的 agents.defaults 不是对象")?;
-    let existing_fallbacks = defaults_obj
-        .get("model")
-        .and_then(Value::as_object)
-        .and_then(|obj| obj.get("fallbacks"))
-        .cloned();
-    let fallbacks = match existing_fallbacks {
-        Some(Value::Array(items)) => Value::Array(items),
-        _ => Value::Array(Vec::new()),
+        target_key
     };
-    let primary_model_ref = format!("{}/{}", target_key, model);
-    defaults_obj.insert(
-        "model".to_string(),
-        serde_json::json!({
-            "primary": primary_model_ref,
-            "fallbacks": fallbacks
-        }),
-    );
+
+    if !requested_model.is_empty() {
+        if let Some(models_obj) = root.get_mut("models").and_then(Value::as_object_mut) {
+            models_obj.remove("default");
+        }
+
+        if !matches!(root.get("agents"), Some(Value::Object(_))) {
+            root.insert("agents".to_string(), serde_json::json!({}));
+        }
+        let agents_obj = root
+            .get_mut("agents")
+            .and_then(Value::as_object_mut)
+            .ok_or("openclaw.json 的 agents 不是对象")?;
+        if !matches!(agents_obj.get("defaults"), Some(Value::Object(_))) {
+            agents_obj.insert("defaults".to_string(), serde_json::json!({}));
+        }
+        let defaults_obj = agents_obj
+            .get_mut("defaults")
+            .and_then(Value::as_object_mut)
+            .ok_or("openclaw.json 的 agents.defaults 不是对象")?;
+        let existing_fallbacks = defaults_obj
+            .get("model")
+            .and_then(Value::as_object)
+            .and_then(|obj| obj.get("fallbacks"))
+            .cloned();
+        let fallbacks = match existing_fallbacks {
+            Some(Value::Array(items)) => Value::Array(items),
+            _ => Value::Array(Vec::new()),
+        };
+        let primary_model_ref = format!("{}/{}", target_key, requested_model);
+        defaults_obj.insert(
+            "model".to_string(),
+            serde_json::json!({
+                "primary": primary_model_ref,
+                "fallbacks": fallbacks
+            }),
+        );
+    }
 
     write_openclaw_config_value(&source_path, &parsed)
 }
@@ -5987,13 +6025,15 @@ fn resolve_openclaw_cli_wrapper_source() -> Option<PathBuf> {
         .find(|path| path.exists() && path.is_file())
 }
 
-fn resolve_node_binary_path() -> Option<PathBuf> {
+fn collect_node_binary_candidates() -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
     if let Ok(explicit) = std::env::var("OPENCLAW_NODE_PATH") {
         let trimmed = explicit.trim();
         if !trimmed.is_empty() {
             let candidate = PathBuf::from(trimmed);
             if candidate.exists() {
-                return Some(candidate);
+                candidates.push(candidate);
             }
         }
     }
@@ -6014,12 +6054,31 @@ fn resolve_node_binary_path() -> Option<PathBuf> {
 
         for candidate in node_candidates {
             if candidate.exists() {
-                return Some(candidate);
+                candidates.push(candidate);
             }
         }
     }
 
-    find_command_path("node").map(PathBuf::from)
+    if let Some(path) = find_command_path("node") {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            candidates.push(candidate);
+        }
+    }
+
+    let mut dedup = std::collections::HashSet::new();
+    let mut output = Vec::new();
+    for candidate in candidates {
+        let key = candidate.display().to_string();
+        if dedup.insert(key) {
+            output.push(candidate);
+        }
+    }
+    output
+}
+
+fn resolve_node_binary_path() -> Option<PathBuf> {
+    collect_node_binary_candidates().into_iter().next()
 }
 
 const OPENCLAW_MIN_NODE_MAJOR: u32 = 22;
@@ -6100,18 +6159,57 @@ fn read_node_binary_version(node_path: &Path) -> Result<String, String> {
 }
 
 fn resolve_openclaw_node_runtime() -> Result<(PathBuf, String), String> {
-    let node = resolve_node_binary_path()
-        .ok_or("未找到 Node.js 可执行文件（可通过 OPENCLAW_NODE_PATH 指定）。".to_string())?;
-    let version = read_node_binary_version(&node)?;
-    if !check_node_version_supported(&version) {
-        return Err(format!(
-            "Node.js 版本过低：当前 {}（{}），OpenClaw 需要 >= {}。请升级 Node，或通过 OPENCLAW_NODE_PATH 指向更高版本。",
-            version,
-            node.display(),
-            openclaw_required_node_version_label()
-        ));
+    let candidates = collect_node_binary_candidates();
+    if candidates.is_empty() {
+        return Err("未找到 Node.js 可执行文件（可通过 OPENCLAW_NODE_PATH 指定）。".to_string());
     }
-    Ok((node, version))
+
+    let mut diagnostics: Vec<String> = Vec::new();
+    let mut best_effort_candidate: Option<(PathBuf, String, (u32, u32, u32))> = None;
+
+    for node in candidates {
+        match read_node_binary_version(&node) {
+            Ok(version) => {
+                if check_node_version_supported(&version) {
+                    return Ok((node, version));
+                }
+
+                diagnostics.push(format!(
+                    "Node 版本较低：{}（{}），推荐 >= {}",
+                    version,
+                    node.display(),
+                    openclaw_required_node_version_label()
+                ));
+
+                let parsed = parse_node_version_triplet(&version).unwrap_or((0, 0, 0));
+                match &best_effort_candidate {
+                    Some((_best_path, _best_version, best_triplet)) if parsed <= *best_triplet => {}
+                    _ => {
+                        best_effort_candidate = Some((node, version, parsed));
+                    }
+                }
+            }
+            Err(error) => diagnostics.push(error),
+        }
+    }
+
+    if let Some((node, version, _)) = best_effort_candidate {
+        eprintln!(
+            "[clawpet] Node 版本低于推荐值，已启用兜底运行时：{}（{}）",
+            node.display(),
+            version
+        );
+        return Ok((node, version));
+    }
+
+    Err(format!(
+        "未找到可用 Node.js 运行时。{}",
+        if diagnostics.is_empty() {
+            "请安装 Node，或通过 OPENCLAW_NODE_PATH 指向可执行文件。".to_string()
+        } else {
+            diagnostics.join("；")
+        }
+    ))
 }
 
 fn read_json_version_field(path: &Path) -> Option<String> {
@@ -8370,13 +8468,22 @@ fn move_window_to_monitor(app: tauri::AppHandle, index: usize) -> Result<(), Str
         .into_iter()
         .nth(index)
         .ok_or_else(|| format!("monitor index out of range: {}", index))?;
-    let position = monitor.position();
-    let size = monitor.size();
+
+    // Keep current window size and move it to the target monitor center,
+    // matching common system window move behavior.
+    let window_size = window.outer_size().map_err(|e| e.to_string())?;
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+
+    let centered_x =
+        monitor_position.x + ((monitor_size.width as i32 - window_size.width as i32).max(0) / 2);
+    let centered_y =
+        monitor_position.y + ((monitor_size.height as i32 - window_size.height as i32).max(0) / 2);
+
     window
-        .set_position(tauri::Position::Physical(*position))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_size(tauri::Size::Physical(*size))
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            centered_x, centered_y,
+        )))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -8405,9 +8512,9 @@ fn get_window_inner_position(app: tauri::AppHandle) -> Result<WindowInnerPositio
     })
 }
 
-fn keep_main_window_always_on_top(app: &tauri::AppHandle) {
+fn sync_main_window_window_level(app: &tauri::AppHandle) {
     if let Some(main_window) = app.get_webview_window("main") {
-        let _ = main_window.set_always_on_top(true);
+        let _ = main_window.set_always_on_top(false);
     }
 }
 
@@ -8437,25 +8544,9 @@ fn center_window_on_current_monitor(window: &tauri::WebviewWindow) {
     )));
 }
 
-fn fit_window_to_current_monitor(window: &tauri::WebviewWindow) {
-    let monitor = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| window.primary_monitor().ok().flatten());
-    let Some(monitor) = monitor else {
-        return;
-    };
-
-    let monitor_position = monitor.position();
-    let monitor_size = monitor.size();
-    let _ = window.set_position(tauri::Position::Physical(*monitor_position));
-    let _ = window.set_size(tauri::Size::Physical(*monitor_size));
-}
-
 #[tauri::command]
 fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result<(), String> {
-    keep_main_window_always_on_top(&app);
+    sync_main_window_window_level(&app);
 
     let section = section
         .as_deref()
@@ -8463,7 +8554,14 @@ fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result
         .filter(|value| {
             matches!(
                 *value,
-                "overview" | "platforms" | "staff" | "channels" | "bindings" | "tasks"
+                "overview"
+                    | "platforms"
+                    | "staff"
+                    | "role-workflow"
+                    | "skill-market"
+                    | "channels"
+                    | "bindings"
+                    | "tasks"
             )
         })
         .unwrap_or("platforms");
@@ -8476,7 +8574,7 @@ fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.emit("clawpet://console-open", payload);
-        keep_main_window_always_on_top(&app);
+        sync_main_window_window_level(&app);
         return Ok(());
     }
 
@@ -8519,7 +8617,7 @@ fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result
     let _ = window.show();
     let _ = window.set_focus();
     let _ = window.emit("clawpet://console-open", payload);
-    keep_main_window_always_on_top(&app);
+    sync_main_window_window_level(&app);
     Ok(())
 }
 
@@ -8539,6 +8637,14 @@ fn start_console_window_drag(app: tauri::AppHandle) -> Result<(), String> {
     window.start_dragging().map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn start_main_window_drag(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    window.start_dragging().map_err(|error| error.to_string())
+}
+
 fn toggle_main_window_visibility(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -8550,9 +8656,20 @@ fn toggle_main_window_visibility(app: &tauri::AppHandle) {
         return;
     }
 
-    fit_window_to_current_monitor(&window);
+    let _ = window.unminimize();
     let _ = window.show();
-    let _ = window.set_always_on_top(true);
+    let _ = window.set_focus();
+}
+
+fn open_main_chat_panel(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    let _ = window.emit("clawpet://chat-open", "main");
 }
 
 #[cfg(target_os = "windows")]
@@ -8969,48 +9086,39 @@ fn load_lobster_install_guide() -> Result<LobsterInstallGuideResponse, String> {
             }),
     });
 
-    let node_check = match resolve_node_binary_path() {
-        Some(path) => match read_node_binary_version(&path) {
-            Ok(version) if check_node_version_supported(&version) => LobsterInstallCheckItem {
-                id: "nodejs".to_string(),
-                title: "Node.js 执行器".to_string(),
-                status: "success".to_string(),
-                detail: format!(
-                    "已找到 Node 可执行文件：{}（版本 {}）",
-                    path.display(),
-                    version
-                ),
-            },
-            Ok(version) => LobsterInstallCheckItem {
-                id: "nodejs".to_string(),
-                title: "Node.js 执行器".to_string(),
-                status: "failed".to_string(),
-                detail: format!(
-                    "Node 版本过低：{}（版本 {}），OpenClaw 需要 >= {}。",
-                    path.display(),
-                    version,
-                    openclaw_required_node_version_label()
-                ),
-            },
-            Err(error) => LobsterInstallCheckItem {
-                id: "nodejs".to_string(),
-                title: "Node.js 执行器".to_string(),
-                status: "failed".to_string(),
-                detail: error,
-            },
+    let node_check = match resolve_openclaw_node_runtime() {
+        Ok((path, version)) if check_node_version_supported(&version) => LobsterInstallCheckItem {
+            id: "nodejs".to_string(),
+            title: "Node.js 执行器".to_string(),
+            status: "success".to_string(),
+            detail: format!(
+                "已找到 Node 可执行文件：{}（版本 {}）",
+                path.display(),
+                version
+            ),
         },
-        None => LobsterInstallCheckItem {
+        Ok((path, version)) => LobsterInstallCheckItem {
+            id: "nodejs".to_string(),
+            title: "Node.js 执行器".to_string(),
+            status: "warning".to_string(),
+            detail: format!(
+                "Node 版本较低：{}（版本 {}），推荐 >= {}。将继续尝试安装。",
+                path.display(),
+                version,
+                openclaw_required_node_version_label()
+            ),
+        },
+        Err(error) => LobsterInstallCheckItem {
             id: "nodejs".to_string(),
             title: "Node.js 执行器".to_string(),
             status: "failed".to_string(),
-            detail: "未找到 Node.js，可通过 OPENCLAW_NODE_PATH 指定，或安装系统 node。".to_string(),
+            detail: error,
         },
     };
     checks.push(node_check);
 
     let (openclaw_installed, openclaw_version, _, openclaw_detail) = detect_openclaw_installation();
-    let cli_blocking = openclaw_detail.contains("版本过低")
-        || openclaw_detail.contains("未找到 Node.js")
+    let cli_blocking = openclaw_detail.contains("未找到 Node.js")
         || openclaw_detail.contains("运行条件不满足");
     checks.push(LobsterInstallCheckItem {
         id: "openclaw-cli".to_string(),
@@ -9490,17 +9598,23 @@ mod tests {
 pub fn run() {
     load_openclaw_env();
 
-    // WebView2 必须在创建前设置透明背景，否则会显示默认灰底
     #[cfg(target_os = "windows")]
     std::env::set_var("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", "0x00000000");
 
     tauri::Builder::default()
         .plugin(
             GlobalShortcutBuilder::new()
-                .with_shortcuts(["Ctrl+`", "Alt+`"])
+                .with_shortcuts(["Ctrl+`", "Alt+`", "Alt+1"])
                 .expect("failed to configure global shortcuts")
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == ShortcutState::Pressed {
+                        let shortcut_text = shortcut.to_string().to_ascii_lowercase();
+                        let is_open_chat_shortcut = shortcut_text.ends_with("+1")
+                            && (shortcut_text.contains("alt") || shortcut_text.contains("option"));
+                        if is_open_chat_shortcut {
+                            open_main_chat_panel(app);
+                            return;
+                        }
                         toggle_main_window_visibility(app);
                     }
                 })
@@ -9514,6 +9628,7 @@ pub fn run() {
             open_console_window,
             close_console_window,
             start_console_window_drag,
+            start_main_window_drag,
             openclaw_chat,
             sync_local_proxy,
             load_lobster_snapshot,
@@ -9568,16 +9683,14 @@ pub fn run() {
                 .map_err(|error| error.to_string())?;
 
             if let Some(window) = app.get_webview_window("main") {
-                fit_window_to_current_monitor(&window);
                 let _ = window.set_decorations(false);
-                let _ = window.set_always_on_top(true);
+                let _ = window.set_always_on_top(false);
                 let _ = window.set_shadow(false);
                 let _ = window.set_skip_taskbar(false);
-                let _ = window.set_resizable(false);
+                let _ = window.set_resizable(true);
+                let _ = window.set_maximizable(true);
+                let _ = window.set_minimizable(true);
             }
-
-            #[cfg(target_os = "windows")]
-            reinforce_main_window_overlay(app.handle().clone());
 
             Ok(())
         })

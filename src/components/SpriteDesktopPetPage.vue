@@ -3136,6 +3136,12 @@ const activeChatAgent = computed(() =>
     ? staffMembers.value.find((m) => m.agentId === activeChatAgentId.value) ?? null
     : null
 );
+const chatAgentSelectValue = computed({
+  get: () => activeChatAgentId.value ?? "__main__",
+  set: (value: string) => {
+    switchChatAgent(value === "__main__" ? null : value);
+  }
+});
 const activeBoundPet = computed(() => {
   const key = activeChatAgentId.value;
   if (!key || !key.startsWith(BOUND_PET_CHAT_PREFIX)) {
@@ -4089,6 +4095,7 @@ let runtimeLogFollowActiveUntil = 0;
 let roleWorkflowDetailRequestToken = 0;
 let lastSelectInteractionAt = 0;
 let unlistenConsoleOpenEvent: (() => void) | null = null;
+let unlistenChatOpenEvent: (() => void) | null = null;
 let activeVoiceAudio: HTMLAudioElement | null = null;
 const activeVoiceMessageId = ref<string | null>(null);
 const audioPayloadCache = new Map<string, AudioFilePayload>();
@@ -5252,6 +5259,11 @@ function openChatPanel() {
   applyBaseAnimation();
   startBubbleAnimation();
   scrollMessagesToBottom();
+}
+
+function openMainChatPanel() {
+  switchChatAgent(null);
+  openChatPanel();
 }
 
 function toggleChatPanel(nextValue?: boolean) {
@@ -10675,6 +10687,17 @@ onMounted(async () => {
     }
   }
 
+  if (listen && !isConsoleWindowMode) {
+    try {
+      const unlisten = await listen("clawpet://chat-open", () => {
+        openMainChatPanel();
+      });
+      unlistenChatOpenEvent = unlisten;
+    } catch {
+      unlistenChatOpenEvent = null;
+    }
+  }
+
   chatMessages.value = loadChatHistory();
   currentSessionId.value = loadStoredSessionId();
   proxyPort.value = loadProxyPort();
@@ -10760,6 +10783,10 @@ onBeforeUnmount(() => {
     unlistenConsoleOpenEvent();
     unlistenConsoleOpenEvent = null;
   }
+  if (unlistenChatOpenEvent) {
+    unlistenChatOpenEvent();
+    unlistenChatOpenEvent = null;
+  }
   stopVoicePlayback();
   window.cancelAnimationFrame(rafId);
   window.cancelAnimationFrame(chatAnimationFrame);
@@ -10834,64 +10861,7 @@ onBeforeUnmount(() => {
           <span class="chat-header__title">
             {{ chatHeaderTitle }}
           </span>
-          <div class="chat-header__actions">
-            <button
-              class="chat-header__btn"
-              type="button"
-              aria-label="新建会话"
-              title="新会话"
-              @click="handleNewConversation"
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
-            </button>
-            <button
-              class="chat-header__btn"
-              type="button"
-              aria-label="收起对话窗口"
-              title="收起"
-              @click="toggleChatPanel(false)"
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10h10" /></svg>
-            </button>
-          </div>
         </div>
-        <nav class="chat-tags" @pointerdown.stop>
-          <button
-            class="chat-tag"
-            :class="{ 'chat-tag--active': activeChatAgentId === null }"
-            type="button"
-            @click="switchChatAgent(null)"
-          >
-            <svg class="chat-tag__icon" viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M3 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H8l-4 3v-3a2 2 0 0 1-1-1.73V5Z" />
-            </svg>
-            主对话
-          </button>
-          <button
-            v-for="member in staffMembers"
-            :key="member.agentId"
-            class="chat-tag"
-            :class="{ 'chat-tag--active': activeChatAgentId === member.agentId }"
-            type="button"
-            :title="member.roleLabel"
-            @click="switchChatAgent(member.agentId)"
-          >
-            <span class="chat-tag__dot" aria-hidden="true">{{ member.displayName.charAt(0) }}</span>
-            {{ stripRoleLabel(member.displayName) }}
-          </button>
-          <button
-            v-for="petPeer in boundPets"
-            :key="petPeer.id"
-            class="chat-tag"
-            :class="{ 'chat-tag--active': activeChatAgentId === buildBoundPetChatAgentId(petPeer.id) }"
-            type="button"
-            :title="`绑定码 ${petPeer.bindingCode}`"
-            @click="switchChatAgent(buildBoundPetChatAgentId(petPeer.id))"
-          >
-            <span class="chat-tag__dot" aria-hidden="true">{{ petPeer.petName.charAt(0) }}</span>
-            {{ petPeer.petName }}
-          </button>
-        </nav>
       </header>
 
       <div class="desktop-console-body desktop-console-body--chat">
@@ -11045,18 +11015,16 @@ onBeforeUnmount(() => {
                 @keydown="handleComposerKeydown"
                 @paste="handlePaste"
               />
-              <div class="composer__toolbar">
-                <button
-                  class="composer__tool-btn"
-                  type="button"
-                  aria-label="添加附件"
-                  title="添加附件"
-                  @click="triggerFileInput"
-                >
-                  <svg viewBox="0 0 20 20" aria-hidden="true">
-                    <path d="M15.5 10l-5.5 5.5a4.24 4.24 0 0 1-6-6L10 3.5a2.83 2.83 0 0 1 4 4l-6 6a1.41 1.41 0 0 1-2-2l5.5-5.5" />
-                  </svg>
-                </button>
+              <div class="composer__toolbar" @pointerdown.stop>
+                <select v-model="chatAgentSelectValue" class="composer__agent-select" aria-label="选择会话 Agent">
+                  <option value="__main__">主对话 Agent</option>
+                  <option v-for="member in staffMembers" :key="member.agentId" :value="member.agentId">
+                    {{ stripRoleLabel(member.displayName) }}
+                  </option>
+                  <option v-for="petPeer in boundPets" :key="petPeer.id" :value="buildBoundPetChatAgentId(petPeer.id)">
+                    {{ petPeer.petName }}
+                  </option>
+                </select>
                 <button
                   class="composer__send-btn"
                   type="button"

@@ -27,8 +27,286 @@
   --app-modal-input-bg: #fff;
   --app-modal-input-text: #27272a;
   --app-modal-input-border: rgba(209, 213, 219, 0.9);
+  --app-select-border: rgba(121, 73, 34, 0.22);
+  --app-select-border-hover: rgba(121, 73, 34, 0.32);
+  --app-select-border-focus: rgba(140, 84, 40, 0.58);
+  --app-select-bg: rgba(255, 255, 255, 0.92);
+  --app-select-bg-hover: rgba(255, 255, 255, 0.98);
+  --app-select-text: rgba(56, 34, 21, 0.94);
+  --app-select-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  --app-select-focus-ring: 0 0 0 3px rgba(191, 124, 74, 0.18);
+  --app-select-disabled-bg: rgba(244, 237, 229, 0.82);
+  --app-select-disabled-border: rgba(121, 73, 34, 0.16);
+  --app-select-disabled-text: rgba(99, 66, 45, 0.52);
+  --app-select-caret-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238c5428' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background: transparent !important;
   background-color: transparent !important;
+}
+
+.startup-openclaw-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(243, 244, 247, 0.96);
+  backdrop-filter: blur(2px);
+}
+
+.startup-openclaw-card {
+  width: min(560px, calc(100vw - 36px));
+  max-height: min(86vh, 720px);
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 22px 26px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(26, 33, 45, 0.1);
+  background: #f4f5f8;
+  box-shadow: 0 20px 56px rgba(25, 33, 44, 0.2);
+}
+
+.startup-openclaw-orbit {
+  position: relative;
+  width: 72px;
+  height: 72px;
+}
+
+.startup-openclaw-orbit__arc {
+  position: absolute;
+  border-radius: 999px;
+  border: 2px solid transparent;
+}
+
+.startup-openclaw-orbit__arc--outer {
+  inset: 4px;
+  border-top-color: rgba(28, 35, 46, 0.9);
+  border-right-color: rgba(28, 35, 46, 0.9);
+}
+
+.startup-openclaw-orbit__arc--inner {
+  inset: 0;
+  border-left-color: rgba(170, 179, 196, 0.52);
+  border-bottom-color: rgba(170, 179, 196, 0.52);
+}
+
+.startup-openclaw-orbit.is-spinning .startup-openclaw-orbit__arc--outer {
+  animation: startup-openclaw-orbit-spin-outer 1.2s linear infinite;
+}
+
+.startup-openclaw-orbit.is-spinning .startup-openclaw-orbit__arc--inner {
+  animation: startup-openclaw-orbit-spin-inner 1.6s linear infinite;
+}
+
+.startup-openclaw-orbit__core {
+  position: absolute;
+  inset: 20px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  border: 1px solid rgba(26, 33, 45, 0.12);
+}
+
+.startup-openclaw-orbit__logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.startup-openclaw-card h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.1;
+  color: #1f2633;
+  letter-spacing: -0.02em;
+}
+
+.startup-openclaw-status {
+  margin: -1px 0 6px;
+  color: #7f8898;
+  font-size: 13px;
+}
+
+.startup-openclaw-step-list {
+  width: min(360px, 100%);
+  display: grid;
+  gap: 8px;
+}
+
+.startup-openclaw-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #a0a7b4;
+}
+
+.startup-openclaw-step__main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.startup-openclaw-step strong {
+  color: #353f4f;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.startup-openclaw-step em {
+  min-width: 54px;
+  text-align: right;
+  font-style: normal;
+  font-size: 12px;
+  color: #a0a7b4;
+}
+
+.startup-openclaw-step__icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(160, 167, 180, 0.62);
+}
+
+.startup-openclaw-step__icon.is-pending {
+  width: 8px;
+  height: 8px;
+  border: 0;
+  background: rgba(160, 167, 180, 0.5);
+}
+
+.startup-openclaw-step__icon.is-installing {
+  border-color: rgba(38, 45, 56, 0.24);
+  border-top-color: #222b36;
+  animation: startup-openclaw-spin 0.88s linear infinite;
+}
+
+.startup-openclaw-step__icon.is-done {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  background: #75c898;
+  position: relative;
+}
+
+.startup-openclaw-step__icon.is-done::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.startup-openclaw-step__icon.is-failed {
+  border-color: rgba(198, 72, 61, 0.6);
+  background: rgba(198, 72, 61, 0.18);
+  position: relative;
+}
+
+.startup-openclaw-step__icon.is-failed::after {
+  content: "!";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #c6483d;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.startup-openclaw-step.is-failed strong,
+.startup-openclaw-step.is-failed em {
+  color: #c6483d;
+}
+
+.startup-openclaw-progress {
+  width: min(340px, 100%);
+  height: 5px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(157, 163, 175, 0.34);
+}
+
+.startup-openclaw-progress i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  transition: width 0.25s ease;
+  background: linear-gradient(90deg, #1f2a35, #4eb67c);
+}
+
+.startup-openclaw-error {
+  margin: 2px 0 0;
+  width: min(420px, 100%);
+  color: #c6483d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.startup-openclaw-logs {
+  margin: 0;
+  width: min(420px, 100%);
+  max-height: 148px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(26, 33, 45, 0.12);
+  color: #495364;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.startup-openclaw-actions {
+  width: min(420px, 100%);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.startup-openclaw-actions button {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: #273341;
+  cursor: pointer;
+}
+
+.startup-openclaw-actions button.is-ghost {
+  color: #5b6577;
+  background: rgba(91, 101, 119, 0.14);
+}
+
+@keyframes startup-openclaw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes startup-openclaw-orbit-spin-outer {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes startup-openclaw-orbit-spin-inner {
+  to {
+    transform: rotate(-360deg);
+  }
 }
 
 html[data-app-theme-resolved="dark"] {
@@ -61,6 +339,18 @@ html[data-app-theme-resolved="dark"] {
   --app-modal-input-bg: rgba(21, 27, 39, 0.94);
   --app-modal-input-text: #edf2ff;
   --app-modal-input-border: rgba(108, 126, 163, 0.6);
+  --app-select-border: rgba(112, 131, 168, 0.58);
+  --app-select-border-hover: rgba(135, 156, 197, 0.74);
+  --app-select-border-focus: rgba(153, 176, 224, 0.78);
+  --app-select-bg: rgba(24, 31, 45, 0.92);
+  --app-select-bg-hover: rgba(30, 39, 56, 0.96);
+  --app-select-text: #edf2ff;
+  --app-select-shadow: inset 0 1px 0 rgba(156, 176, 215, 0.16);
+  --app-select-focus-ring: 0 0 0 3px rgba(126, 148, 191, 0.28);
+  --app-select-disabled-bg: rgba(31, 38, 52, 0.72);
+  --app-select-disabled-border: rgba(99, 116, 150, 0.42);
+  --app-select-disabled-text: rgba(176, 193, 224, 0.5);
+  --app-select-caret-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23b8c9eb' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 * {
@@ -291,6 +581,18 @@ html[data-app-theme-resolved="dark"] .chat-header__btn:hover {
   color: rgba(243, 248, 255, 0.95);
 }
 
+html[data-app-theme-resolved="dark"] .composer__agent-select {
+  border-color: var(--app-select-border);
+  background-color: var(--app-select-bg);
+  color: var(--app-select-text);
+  box-shadow: var(--app-select-shadow);
+}
+
+html[data-app-theme-resolved="dark"] .composer__agent-select:focus {
+  border-color: var(--app-select-border-focus);
+  box-shadow: var(--app-select-focus-ring);
+}
+
 html[data-app-theme-resolved="dark"] .desktop-console-nav__item {
   border-color: rgba(128, 148, 190, 0.32);
   background: rgba(28, 35, 51, 0.86);
@@ -403,9 +705,10 @@ html[data-app-theme-resolved="dark"] .configured-channel-account-row {
 }
 
 html[data-app-theme-resolved="dark"] .configured-channel-account-row__binding select {
-  border-color: rgba(112, 132, 169, 0.56);
-  background: rgba(24, 31, 45, 0.94);
-  color: #edf3ff;
+  border-color: var(--app-select-border);
+  background-color: var(--app-select-bg);
+  color: var(--app-select-text);
+  box-shadow: var(--app-select-shadow);
 }
 
 html[data-app-theme-resolved="dark"] .platform-form-error {
@@ -8440,6 +8743,26 @@ html[data-app-theme-resolved="dark"] .system-settings-footer {
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px 6px;
+  gap: 8px;
+}
+
+.composer__agent-select {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 30px 0 12px;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #334155;
+  font-size: 12px;
+  font-weight: 500;
+  outline: none;
+}
+
+.composer__agent-select:focus {
+  border-color: rgba(59, 130, 246, 0.58);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14);
 }
 
 .composer__tool-btn {
@@ -9751,9 +10074,10 @@ html[data-app-theme-resolved="dark"] .skill-market-toolbar__sort {
 }
 
 html[data-app-theme-resolved="dark"] .skill-market-toolbar__select {
-  border-color: rgba(112, 131, 168, 0.58);
-  background: rgba(24, 31, 45, 0.92);
-  color: #eaf1ff;
+  border-color: var(--app-select-border);
+  background-color: var(--app-select-bg);
+  color: var(--app-select-text);
+  box-shadow: var(--app-select-shadow);
 }
 
 html[data-app-theme-resolved="dark"] .skill-market-pagination__button,
@@ -10314,4 +10638,124 @@ html[data-app-theme-resolved="dark"] .skill-market-detail-modal__stat strong {
   .subscription-col-status-spatial {
     width: 160px;
   }
+}
+
+/* Unified dropdown style system */
+select.module-surface__select,
+select.task-board-creator__select,
+select.related-model-form__select,
+select.sidebar-settings-select,
+select.skill-market-toolbar__select,
+select.log-filter-select,
+select.ptask-agent-select,
+.configured-channel-account-row__binding select,
+select.platform-select,
+.platform-modal__form select,
+.platform-form select,
+select.openclaw-tools-control__select,
+select.composer__agent-select,
+.lobster-install-wizard__field select,
+.management-form-grid select,
+.tasks-editor__grid select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--app-select-border);
+  background-color: var(--app-select-bg);
+  color: var(--app-select-text);
+  box-shadow: var(--app-select-shadow);
+  background-image: var(--app-select-caret-icon);
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 10px 6px;
+  padding-right: 34px;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background-color 0.18s ease,
+    color 0.18s ease;
+  cursor: pointer;
+}
+
+select.module-surface__select:hover:not(:disabled),
+select.task-board-creator__select:hover:not(:disabled),
+select.related-model-form__select:hover:not(:disabled),
+select.sidebar-settings-select:hover:not(:disabled),
+select.skill-market-toolbar__select:hover:not(:disabled),
+select.log-filter-select:hover:not(:disabled),
+select.ptask-agent-select:hover:not(:disabled),
+.configured-channel-account-row__binding select:hover:not(:disabled),
+select.platform-select:hover:not(:disabled),
+.platform-modal__form select:hover:not(:disabled),
+.platform-form select:hover:not(:disabled),
+select.openclaw-tools-control__select:hover:not(:disabled),
+select.composer__agent-select:hover:not(:disabled),
+.lobster-install-wizard__field select:hover:not(:disabled),
+.management-form-grid select:hover:not(:disabled),
+.tasks-editor__grid select:hover:not(:disabled) {
+  border-color: var(--app-select-border-hover);
+  background-color: var(--app-select-bg-hover);
+}
+
+select.module-surface__select:focus,
+select.task-board-creator__select:focus,
+select.related-model-form__select:focus,
+select.sidebar-settings-select:focus,
+select.skill-market-toolbar__select:focus,
+select.log-filter-select:focus,
+select.ptask-agent-select:focus,
+.configured-channel-account-row__binding select:focus,
+select.platform-select:focus,
+.platform-modal__form select:focus,
+.platform-form select:focus,
+select.openclaw-tools-control__select:focus,
+select.composer__agent-select:focus,
+.lobster-install-wizard__field select:focus,
+.management-form-grid select:focus,
+.tasks-editor__grid select:focus,
+select.module-surface__select:focus-visible,
+select.task-board-creator__select:focus-visible,
+select.related-model-form__select:focus-visible,
+select.sidebar-settings-select:focus-visible,
+select.skill-market-toolbar__select:focus-visible,
+select.log-filter-select:focus-visible,
+select.ptask-agent-select:focus-visible,
+.configured-channel-account-row__binding select:focus-visible,
+select.platform-select:focus-visible,
+.platform-modal__form select:focus-visible,
+.platform-form select:focus-visible,
+select.openclaw-tools-control__select:focus-visible,
+select.composer__agent-select:focus-visible,
+.lobster-install-wizard__field select:focus-visible,
+.management-form-grid select:focus-visible,
+.tasks-editor__grid select:focus-visible {
+  outline: none;
+  border-color: var(--app-select-border-focus);
+  box-shadow: var(--app-select-focus-ring);
+}
+
+select.module-surface__select:disabled,
+select.task-board-creator__select:disabled,
+select.related-model-form__select:disabled,
+select.sidebar-settings-select:disabled,
+select.skill-market-toolbar__select:disabled,
+select.log-filter-select:disabled,
+select.ptask-agent-select:disabled,
+.configured-channel-account-row__binding select:disabled,
+select.platform-select:disabled,
+.platform-modal__form select:disabled,
+.platform-form select:disabled,
+select.openclaw-tools-control__select:disabled,
+select.composer__agent-select:disabled,
+.lobster-install-wizard__field select:disabled,
+.management-form-grid select:disabled,
+.tasks-editor__grid select:disabled {
+  border-color: var(--app-select-disabled-border);
+  background-color: var(--app-select-disabled-bg);
+  color: var(--app-select-disabled-text);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.lobster-install-wizard__provider-select {
+  background-image: none;
 }
