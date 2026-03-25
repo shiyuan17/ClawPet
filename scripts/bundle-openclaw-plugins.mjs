@@ -13,7 +13,7 @@ const PLUGINS = [
   { npmName: '@soimy/dingtalk', pluginId: 'dingtalk' },
   { npmName: '@wecom/wecom-openclaw-plugin', pluginId: 'wecom' },
   { npmName: '@sliverp/qqbot', pluginId: 'qqbot' },
-  { npmName: '@larksuite/openclaw-lark', pluginId: 'feishu-openclaw-plugin' },
+  { npmName: '@larksuite/openclaw-lark', pluginId: 'openclaw-lark' },
 ];
 
 function cleanDir(dir) {

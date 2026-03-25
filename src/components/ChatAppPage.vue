@@ -94,36 +94,21 @@ type SidebarItem = {
   label: string;
 };
 
-type MarketModelPlan = {
-  id: string;
-  name: string;
-  badge?: string;
-  monthlyPrice: number;
-  monthlyOriginalPrice: number;
-  yearlyPrice: number;
-  description: string;
+type MarketTabId = "fuel-pack" | "monthly-membership";
+
+type MarketTabOption = {
+  id: MarketTabId;
+  label: string;
 };
 
-type MarketTeamBundle = {
+type MarketPlanCard = {
   id: string;
-  name: string;
-  summary: string;
-  roles: string[];
-  skills: string[];
-  actionLabel: string;
-};
-
-type MarketFlowKind = "publish" | "purchase";
-
-type MarketFlowTemplate = {
-  id: string;
-  kind: MarketFlowKind;
   title: string;
-  summary: string;
-  roleOrTeam: string;
-  skills: string[];
-  platform: string;
-  configJson: string;
+  price: number;
+  description: string;
+  points: number;
+  pointsLabel: string;
+  actionLabel: string;
 };
 
 type StaffMemberSnapshot = {
@@ -362,6 +347,23 @@ type GatewayHealthSnapshotResponse = {
   gatewayPort: number | null;
 };
 
+type FeishuOnboardingQrResponse = {
+  qrUrl: string;
+  userCode: string;
+  deviceCode: string;
+  pollIntervalSeconds: number;
+  expiresInSeconds: number;
+  expiresAtMs: number;
+};
+
+type FeishuOnboardingPollResponse = {
+  status: string;
+  message: string | null;
+  appId: string | null;
+  appSecret: string | null;
+  tenantBrand: string | null;
+};
+
 type LobsterSnapshotResponse = {
   openclawInstalled: boolean;
   openclawVersion: string | null;
@@ -529,8 +531,6 @@ const FEISHU_CHANNEL_ID = "feishu";
 const FEISHU_DEFAULT_ACCOUNT_ID = "default";
 const FEISHU_PLUGIN_PACKAGE_NAME = "@larksuite/openclaw-lark";
 const FEISHU_DOCS_URL = "https://www.feishu.cn/content/article/7613711414611463386";
-const FEISHU_OPENCLAW_PAGE_URL = "https://open.feishu.cn/page/openclaw";
-const FEISHU_OPENCLAW_FROM = "autoclaw";
 const FEISHU_APP_ID_PLACEHOLDER = "cli_xxxxxxxxxxxxxxxx";
 const FEISHU_APP_SECRET_PLACEHOLDER = "请输入飞书应用的 Secret";
 
@@ -799,8 +799,14 @@ const feishuAppId = ref("");
 const feishuAppSecret = ref("");
 const feishuAppSecretVisible = ref(false);
 const feishuQrVisible = ref(false);
-const feishuQrRefreshNonce = ref(0);
+const feishuQrRequesting = ref(false);
+const feishuQrTargetUrl = ref("");
+const feishuQrDeviceCode = ref("");
+const feishuQrPollIntervalSeconds = ref(5);
+const feishuQrExpiresAtMs = ref<number | null>(null);
+const feishuQrTickMs = ref(Date.now());
 const feishuOpenclawUserCode = ref("");
+let feishuQrCountdownTimer = 0;
 const isChannelConfigModalOpen = ref(false);
 const channelConfigCatalogId = ref("");
 const channelConfigBackendType = ref("");
@@ -868,16 +874,7 @@ const skillMarketGlobalCache = new Map<string, SkillMarketListResultSnapshot>();
 const activeSkillMarketDetail = ref<SkillMarketSkill | null>(null);
 const skillMarketActionNotice = ref("");
 const skillMarketInstallingSlug = ref("");
-const marketFlowRoleTeam = ref("增长突击队");
-const marketFlowSkills = ref("选题规划, 内容生成, 质量审核, 多平台分发");
-const marketFlowPlatform = ref("OpenClaw + 飞书 + 公众号");
-const marketFlowConfigJson = ref(`{
-  "trigger": "daily",
-  "publishAt": "09:30",
-  "needsApproval": true,
-  "channels": ["feishu", "wechat_official_account"]
-}`);
-const marketFlowNotice = ref("可先点击模板卡片，自动填充流程配置项。");
+const activeMarketTab = ref<MarketTabId>("fuel-pack");
 let skillMarketRequestToken = 0;
 let roleWorkflowDetailRequestToken = 0;
 const utilityRuntimeCategories: Array<{ id: UtilityLogCategory; label: string }> = [
@@ -901,103 +898,90 @@ const skillMarketCategories: SkillMarketCategoryOption[] = [
   { id: "security-compliance", label: "安全合规", hint: "风险与治理", apiCategory: "security-compliance" },
   { id: "communication-collaboration", label: "沟通协同", hint: "协作与集成", apiCategory: "communication-collaboration" }
 ];
-const marketModelPlans: MarketModelPlan[] = [
-  {
-    id: "andante",
-    name: "Andante",
-    monthlyPrice: 39,
-    monthlyOriginalPrice: 49,
-    yearlyPrice: 468,
-    description: "提供专属 Kimi Code 使用额度，旗舰模型优先体验，支持多个编程会话。"
-  },
-  {
-    id: "moderato",
-    name: "Moderato",
-    badge: "推荐",
-    monthlyPrice: 79,
-    monthlyOriginalPrice: 99,
-    yearlyPrice: 948,
-    description: "每周更新的使用额度，允许多种设备登录分享你的套餐额度，支持多项目协作。"
-  },
-  {
-    id: "allegretto",
-    name: "Allegretto",
-    monthlyPrice: 159,
-    monthlyOriginalPrice: 199,
-    yearlyPrice: 1908,
-    description: "充足的每周额度与更高并发上限，为高级用户提供稳定的超值选择。"
-  },
-  {
-    id: "allegro",
-    name: "Allegro",
-    monthlyPrice: 559,
-    monthlyOriginalPrice: 699,
-    yearlyPrice: 6708,
-    description: "尊享澎湃额度，完整适配日常办公与高强度开发的复合场景。"
-  }
+const marketTabs: MarketTabOption[] = [
+  { id: "fuel-pack", label: "加油包" },
+  { id: "monthly-membership", label: "月度会员" }
 ];
-const marketTeamBundles: MarketTeamBundle[] = [
-  {
-    id: "growth-strike",
-    name: "增长突击队",
-    summary: "产品、运营、内容、数据四角色协同，适合新品冷启动与增长试验。",
-    roles: ["产品经理", "增长运营", "内容策划", "数据分析师"],
-    skills: ["需求拆解", "AB 测试", "内容投放", "复盘看板"],
-    actionLabel: "配置增长团队"
-  },
-  {
-    id: "commerce-ops",
-    name: "电商运营战队",
-    summary: "覆盖商品上新、渠道分发、客服响应与订单跟踪的一体化团队。",
-    roles: ["选品经理", "渠道运营", "客服专家", "供应链跟单"],
-    skills: ["选品评估", "渠道分发", "自动回复", "库存预警"],
-    actionLabel: "配置运营战队"
-  },
-  {
-    id: "delivery-factory",
-    name: "交付工厂",
-    summary: "研发与测试角色打包交付，支持需求到发布的短链路自动协作。",
-    roles: ["架构师", "前端开发", "后端开发", "测试工程师"],
-    skills: ["任务拆分", "代码评审", "自动化测试", "发布审批"],
-    actionLabel: "配置交付团队"
-  }
-];
-const marketFlowTemplates: MarketFlowTemplate[] = [
-  {
-    id: "publish-flow",
-    kind: "publish",
-    title: "内容发布流程",
-    summary: "从选题、生成、审核到多平台分发的一站式发布流程。",
-    roleOrTeam: "增长突击队",
-    skills: ["选题规划", "内容生成", "质量审核", "多平台分发"],
-    platform: "OpenClaw + 飞书 + 公众号",
-    configJson: `{
-  "trigger": "daily",
-  "publishAt": "09:30",
-  "needsApproval": true,
-  "channels": ["feishu", "wechat_official_account"]
-}`
-  },
-  {
-    id: "purchase-flow",
-    kind: "purchase",
-    title: "采购下单流程",
-    summary: "需求确认后自动比价、审批并在目标平台发起采购。",
-    roleOrTeam: "电商运营战队",
-    skills: ["需求收集", "供应商比价", "风险校验", "自动下单"],
-    platform: "OpenClaw + ERP + 钉钉审批",
-    configJson: `{
-  "trigger": "event",
-  "eventName": "inventory_low",
-  "needsApproval": true,
-  "maxBudget": 50000
-}`
-  }
-];
-const marketFlowKindLabelMap: Record<MarketFlowKind, string> = {
-  publish: "发布流程",
-  purchase: "购买流程"
+const marketPlansByTab: Record<MarketTabId, MarketPlanCard[]> = {
+  "fuel-pack": [
+    {
+      id: "fuel-starter",
+      title: "入门包",
+      price: 29,
+      description: "适合轻度使用和临时补充，低门槛购买，快速满足基础积分需求。",
+      points: 5000,
+      pointsLabel: "积分",
+      actionLabel: "购买"
+    },
+    {
+      id: "fuel-standard",
+      title: "标准包",
+      price: 109,
+      description: "适合有稳定使用需求的用户，积分更充足，性价比更高，用起来更省心。",
+      points: 20000,
+      pointsLabel: "积分",
+      actionLabel: "购买"
+    },
+    {
+      id: "fuel-advanced",
+      title: "进阶包",
+      price: 249,
+      description: "适合高频使用场景，补充更耐用，单次覆盖更久，整体更划算。",
+      points: 48000,
+      pointsLabel: "积分",
+      actionLabel: "购买"
+    },
+    {
+      id: "fuel-flagship",
+      title: "旗舰开发者包",
+      price: 499,
+      description: "适合重度与长期使用需求，积分最充足，性价比最高，使用体验更从容。",
+      points: 100000,
+      pointsLabel: "积分",
+      actionLabel: "购买"
+    }
+  ],
+  "monthly-membership": [
+    {
+      id: "member-starter",
+      title: "月度入门会员",
+      price: 59,
+      description: "适合新用户稳定试用，享受每月自动补充积分与基础会员权益。",
+      points: 8000,
+      pointsLabel: "积分 / 月",
+      actionLabel: "开通"
+    },
+    {
+      id: "member-standard",
+      title: "月度标准会员",
+      price: 129,
+      description: "适合日常高频使用，每月积分更充足，兼顾成本与持续体验。",
+      points: 22000,
+      pointsLabel: "积分 / 月",
+      actionLabel: "开通"
+    },
+    {
+      id: "member-pro",
+      title: "月度进阶会员",
+      price: 289,
+      description: "适合团队协作和多任务场景，提供更高额度与更稳定的持续补给。",
+      points: 52000,
+      pointsLabel: "积分 / 月",
+      actionLabel: "开通"
+    },
+    {
+      id: "member-flagship",
+      title: "月度旗舰会员",
+      price: 559,
+      description: "适合专业开发与重度场景，每月高额积分和优先体验，覆盖长期需求。",
+      points: 120000,
+      pointsLabel: "积分 / 月",
+      actionLabel: "开通"
+    }
+  ]
 };
+const activeMarketPlans = computed(() => marketPlansByTab[activeMarketTab.value]);
+const marketPointsFormatter = new Intl.NumberFormat("zh-CN");
 const SKILL_MARKET_SKILLHUB_URL = "https://skillhub.tencent.com/";
 
 function getStorage() {
@@ -3698,19 +3682,60 @@ async function openExternalUrl(url: string) {
   }
 }
 
-function generateFeishuOpenclawUserCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let buffer = "";
-  for (let index = 0; index < 8; index += 1) {
-    const randomIndex = Math.floor(Math.random() * alphabet.length);
-    buffer += alphabet.charAt(randomIndex);
+function stopFeishuQrCountdown() {
+  if (feishuQrCountdownTimer) {
+    window.clearInterval(feishuQrCountdownTimer);
+    feishuQrCountdownTimer = 0;
   }
-  return `${buffer.slice(0, 4)}-${buffer.slice(4)}`;
 }
 
-function refreshFeishuOpenclawQrContext() {
-  feishuOpenclawUserCode.value = generateFeishuOpenclawUserCode();
-  feishuQrRefreshNonce.value = Date.now();
+function startFeishuQrCountdown(expiresAtMs: number | null) {
+  stopFeishuQrCountdown();
+  feishuQrTickMs.value = Date.now();
+  if (!expiresAtMs || expiresAtMs <= feishuQrTickMs.value) {
+    return;
+  }
+
+  feishuQrCountdownTimer = window.setInterval(() => {
+    feishuQrTickMs.value = Date.now();
+    if (feishuQrTickMs.value >= expiresAtMs) {
+      stopFeishuQrCountdown();
+    }
+  }, 1000);
+}
+
+function resetFeishuQrState() {
+  stopFeishuQrCountdown();
+  feishuQrTargetUrl.value = "";
+  feishuQrDeviceCode.value = "";
+  feishuQrPollIntervalSeconds.value = 5;
+  feishuQrExpiresAtMs.value = null;
+  feishuQrTickMs.value = Date.now();
+  feishuOpenclawUserCode.value = "";
+  feishuQrVisible.value = false;
+}
+
+async function requestFeishuQrContext() {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    throw new Error("当前环境不支持获取飞书创建二维码。");
+  }
+  const response = (await invoke("request_feishu_openclaw_qr")) as FeishuOnboardingQrResponse;
+  const targetUrl = typeof response.qrUrl === "string" ? response.qrUrl.trim() : "";
+  const userCode = typeof response.userCode === "string" ? response.userCode.trim() : "";
+  const deviceCode = typeof response.deviceCode === "string" ? response.deviceCode.trim() : "";
+  if (!targetUrl || !userCode || !deviceCode) {
+    throw new Error("飞书创建二维码返回为空，请稍后重试。");
+  }
+
+  feishuQrTargetUrl.value = targetUrl;
+  feishuOpenclawUserCode.value = userCode;
+  feishuQrDeviceCode.value = deviceCode;
+  feishuQrPollIntervalSeconds.value = Number.isFinite(response.pollIntervalSeconds)
+    ? Math.max(1, Math.min(30, Math.floor(response.pollIntervalSeconds)))
+    : 5;
+  feishuQrExpiresAtMs.value = Number.isFinite(response.expiresAtMs) ? response.expiresAtMs : null;
+  startFeishuQrCountdown(feishuQrExpiresAtMs.value);
 }
 
 function getFeishuChannelGroup(snapshot: OpenClawChannelAccountsSnapshotResponse | null | undefined) {
@@ -3754,8 +3779,8 @@ async function openFeishuConnectModal() {
   feishuConnectNotice.value = "";
   feishuManualExpanded.value = false;
   feishuAppSecretVisible.value = false;
-  feishuQrVisible.value = false;
-  refreshFeishuOpenclawQrContext();
+  feishuQrRequesting.value = false;
+  resetFeishuQrState();
 
   try {
     await loadFeishuChannelFormValues();
@@ -3779,21 +3804,69 @@ function closeFeishuConnectModal() {
   feishuConnectNotice.value = "";
   feishuManualExpanded.value = false;
   feishuAppSecretVisible.value = false;
-  feishuQrVisible.value = false;
-  feishuOpenclawUserCode.value = "";
+  feishuQrRequesting.value = false;
+  resetFeishuQrState();
   feishuAppId.value = "";
   feishuAppSecret.value = "";
 }
 
-function handleFeishuQrConnect() {
-  refreshFeishuOpenclawQrContext();
-  feishuQrVisible.value = true;
+function notifyFeishuConfiguredAndClose() {
+  if (typeof window !== "undefined") {
+    window.alert("飞书已配置完成。");
+  }
+  closeFeishuConnectModal();
+}
+
+async function handleFeishuQrConnect() {
+  if (feishuConnectChecking.value || feishuQrRequesting.value) {
+    return;
+  }
+
+  feishuQrRequesting.value = true;
   feishuConnectError.value = "";
   feishuConnectNotice.value = "";
+  try {
+    await requestFeishuQrContext();
+    feishuQrVisible.value = true;
+    feishuConnectNotice.value = "创建码已更新，请尽快扫码完成机器人创建。";
+  } catch (error) {
+    feishuConnectError.value = error instanceof Error ? error.message : "获取飞书创建二维码失败。";
+  } finally {
+    feishuQrRequesting.value = false;
+  }
 }
 
 async function handleFeishuOpenDocs() {
   await openExternalUrl(FEISHU_DOCS_URL);
+}
+
+async function handleFeishuOpenQrLink() {
+  if (!feishuQrTargetUrl.value.trim()) {
+    return;
+  }
+  await openExternalUrl(feishuQrTargetUrl.value);
+}
+
+async function saveFeishuCredentials(
+  appId: string,
+  appSecret: string,
+  domain: "feishu" | "lark" = "feishu"
+) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    throw new Error("当前环境不支持写入飞书配置。");
+  }
+  await invoke("save_openclaw_channel_config", {
+    payload: {
+      channelType: FEISHU_CHANNEL_ID,
+      accountId: FEISHU_DEFAULT_ACCOUNT_ID,
+      config: {
+        appId,
+        appSecret,
+        domain
+      }
+    }
+  });
 }
 
 async function handleFeishuManualSave() {
@@ -3820,19 +3893,10 @@ async function handleFeishuManualSave() {
   feishuConnectError.value = "";
   feishuConnectNotice.value = "";
   try {
-    await invoke("save_openclaw_channel_config", {
-      payload: {
-        channelType: FEISHU_CHANNEL_ID,
-        accountId: FEISHU_DEFAULT_ACCOUNT_ID,
-        config: {
-          appId,
-          appSecret,
-          domain: "feishu"
-        }
-      }
-    });
+    await saveFeishuCredentials(appId, appSecret, "feishu");
     feishuConnectNotice.value = "飞书凭证已保存。";
     await refreshDashboardData();
+    notifyFeishuConfiguredAndClose();
   } catch (error) {
     feishuConnectError.value = error instanceof Error ? error.message : "保存飞书配置失败。";
   } finally {
@@ -3853,6 +3917,42 @@ async function handleFeishuConnectionCheck() {
   feishuConnectError.value = "";
   feishuConnectNotice.value = "";
   try {
+    const deviceCode = feishuQrDeviceCode.value.trim();
+    if (deviceCode) {
+      const pollResult = (await invoke("poll_feishu_openclaw_qr_result", {
+        deviceCode
+      })) as FeishuOnboardingPollResponse;
+      const normalizedStatus = (pollResult.status ?? "").trim().toLowerCase();
+      const appId = typeof pollResult.appId === "string" ? pollResult.appId.trim() : "";
+      const appSecret = typeof pollResult.appSecret === "string" ? pollResult.appSecret.trim() : "";
+      const tenantBrand = typeof pollResult.tenantBrand === "string" ? pollResult.tenantBrand.trim().toLowerCase() : "";
+      const pollMessage = typeof pollResult.message === "string" ? pollResult.message.trim() : "";
+
+      if (normalizedStatus === "success" && appId && appSecret) {
+        feishuAppId.value = appId;
+        feishuAppSecret.value = appSecret;
+        feishuManualExpanded.value = true;
+        const domain: "feishu" | "lark" = tenantBrand === "lark" ? "lark" : "feishu";
+        await saveFeishuCredentials(appId, appSecret, domain);
+        feishuConnectNotice.value = "已自动获取并保存飞书凭证。";
+        await refreshDashboardData();
+        notifyFeishuConfiguredAndClose();
+        return;
+      } else if (normalizedStatus === "pending") {
+        feishuConnectNotice.value =
+          pollMessage || `尚未拿到飞书凭证，请先完成扫码创建后再检查（建议间隔 ${feishuQrPollIntervalSeconds.value} 秒）。`;
+      } else if (normalizedStatus === "denied") {
+        feishuConnectError.value = pollMessage || "你已拒绝授权，请重新获取创建码并扫码。";
+        return;
+      } else if (normalizedStatus === "expired") {
+        feishuConnectError.value = pollMessage || "创建码已过期，请重新获取创建码。";
+        return;
+      } else if (normalizedStatus === "error") {
+        feishuConnectError.value = pollMessage || "获取飞书凭证失败，请稍后重试。";
+        return;
+      }
+    }
+
     const snapshot = (await invoke("load_openclaw_channel_accounts_snapshot")) as OpenClawChannelAccountsSnapshotResponse;
     dashboardChannelSnapshot.value = snapshot;
     if (relatedResourceModalTarget.value === "channel") {
@@ -3861,18 +3961,22 @@ async function handleFeishuConnectionCheck() {
 
     const group = getFeishuChannelGroup(snapshot);
     if (!group || group.accounts.length === 0) {
-      feishuConnectNotice.value = "尚未检测到飞书账号配置，可展开“手动输入”先保存 App ID 和 App Secret。";
+      if (!feishuConnectNotice.value) {
+        feishuConnectNotice.value = "尚未检测到飞书账号配置，可展开“手动输入”先保存 App ID 和 App Secret。";
+      }
       return;
     }
 
     const defaultAccount = group.accounts.find((account) => account.isDefault) ?? group.accounts[0];
     if (!defaultAccount.configured) {
-      feishuConnectNotice.value = "已检测到飞书账号，但凭证尚未配置完整，请检查 App ID / App Secret。";
+      if (!feishuConnectNotice.value) {
+        feishuConnectNotice.value = "已检测到飞书账号，但凭证尚未配置完整，请检查 App ID / App Secret。";
+      }
       return;
     }
 
-    const normalizedStatus = defaultAccount.status.trim().toLowerCase();
-    const statusLabel = normalizedStatus === "connected" ? "已连接" : "已配置";
+    const normalizedAccountStatus = defaultAccount.status.trim().toLowerCase();
+    const statusLabel = normalizedAccountStatus === "connected" ? "已连接" : "已配置";
     feishuConnectNotice.value = `检查完成：${defaultAccount.accountId} ${statusLabel}。`;
   } catch (error) {
     feishuConnectError.value = error instanceof Error ? error.message : "检查飞书状态失败。";
@@ -4658,59 +4762,9 @@ function handleSidebarSectionChange(section: SidebarSection) {
   }
 }
 
-function normalizeMarketSkillsInput(value: string) {
-  return value
-    .split(/[\n,，]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+function formatMarketPoints(value: number) {
+  return marketPointsFormatter.format(Math.max(0, Math.floor(value)));
 }
-
-function applyMarketFlowTemplate(template: MarketFlowTemplate) {
-  marketFlowRoleTeam.value = template.roleOrTeam;
-  marketFlowSkills.value = template.skills.join(", ");
-  marketFlowPlatform.value = template.platform;
-  marketFlowConfigJson.value = template.configJson;
-  marketFlowNotice.value = `已载入「${template.title}」模板，可继续编辑后构建。`;
-}
-
-function handleMarketFlowBuild(kind: MarketFlowKind) {
-  const roleOrTeam = marketFlowRoleTeam.value.trim();
-  const platform = marketFlowPlatform.value.trim();
-  if (!roleOrTeam || !platform) {
-    marketFlowNotice.value = "请先填写角色/团队与平台。";
-    return;
-  }
-  const configRaw = marketFlowConfigJson.value.trim() || "{}";
-  try {
-    JSON.parse(configRaw);
-  } catch {
-    marketFlowNotice.value = "配置 JSON 不是有效格式，请检查后再构建。";
-    return;
-  }
-  marketFlowNotice.value = `${marketFlowKindLabelMap[kind]}已构建，可用于发布与购买流程编排。`;
-}
-
-const marketFlowPayloadPreview = computed(() => {
-  const configRaw = marketFlowConfigJson.value.trim() || "{}";
-  let config: unknown;
-  try {
-    config = JSON.parse(configRaw);
-  } catch {
-    config = {
-      raw: configRaw
-    };
-  }
-  return JSON.stringify(
-    {
-      roleOrTeam: marketFlowRoleTeam.value.trim() || "待填写",
-      skills: normalizeMarketSkillsInput(marketFlowSkills.value),
-      platform: marketFlowPlatform.value.trim() || "待填写",
-      config
-    },
-    null,
-    2
-  );
-});
 
 function openTaskProjectsHome() {
   taskModuleView.value = "projects";
@@ -5585,18 +5639,39 @@ const feishuPluginVersionText = computed(() => {
   const normalizedVersion = rawVersion.trim().replace(/^[~^]/, "");
   return `${FEISHU_PLUGIN_PACKAGE_NAME}@${normalizedVersion || "unknown"}`;
 });
-const feishuQrPayload = computed(() => {
-  const params = new URLSearchParams({
-    user_code: feishuOpenclawUserCode.value || "WAIT-CODE",
-    lpv: feishuPluginVersionText.value.replace(`${FEISHU_PLUGIN_PACKAGE_NAME}@`, ""),
-    ocv: packageVersionFallback,
-    from: FEISHU_OPENCLAW_FROM
-  });
-  return `${FEISHU_OPENCLAW_PAGE_URL}?${params.toString()}`;
+const feishuQrRemainingSeconds = computed(() => {
+  const expiresAt = feishuQrExpiresAtMs.value;
+  if (!expiresAt) {
+    return null;
+  }
+  const remaining = Math.ceil((expiresAt - feishuQrTickMs.value) / 1000);
+  return Math.max(0, remaining);
 });
-const feishuQrImageUrl = computed(
-  () => `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=${encodeURIComponent(feishuQrPayload.value)}`
+const feishuQrExpired = computed(
+  () => feishuQrRemainingSeconds.value !== null && feishuQrRemainingSeconds.value <= 0
 );
+const feishuQrStatusText = computed(() => {
+  if (!feishuQrVisible.value) {
+    return "";
+  }
+  if (feishuQrRemainingSeconds.value === null) {
+    return "创建码有效期未知，请尽快扫码。";
+  }
+  if (feishuQrRemainingSeconds.value <= 0) {
+    return "创建码已过期，请点击上方“重新获取创建码”。";
+  }
+  const minutes = Math.floor(feishuQrRemainingSeconds.value / 60);
+  const seconds = feishuQrRemainingSeconds.value % 60;
+  return `创建码剩余有效期：${minutes}分${String(seconds).padStart(2, "0")}秒`;
+});
+const feishuQrImageUrl = computed(() => {
+  const targetUrl = feishuQrTargetUrl.value.trim();
+  if (!targetUrl) {
+    return "";
+  }
+  const cacheBuster = feishuQrExpiresAtMs.value ?? Date.now();
+  return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=${encodeURIComponent(targetUrl)}&t=${cacheBuster}`;
+});
 const feishuManualSaveDisabled = computed(
   () => feishuConnectLoading.value || feishuConnectSaving.value || !feishuAppId.value.trim() || !feishuAppSecret.value.trim()
 );
@@ -6531,6 +6606,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearRuntimeToolSyncRetryTimer();
+  stopFeishuQrCountdown();
 });
 
 watch(
@@ -7630,114 +7706,35 @@ watch(
 
             <template v-else-if="activeSection === 'market'">
               <section class="module-surface marketplace-surface">
-                <section class="marketplace-block">
-                  <header class="marketplace-block__header">
-                    <div>
-                      <strong>模型方案</strong>
-                      <p>按预算和并发强度选择套餐，支持团队协作与高频调用。</p>
-                    </div>
-                  </header>
-                  <div class="marketplan-grid">
-                    <article
-                      v-for="plan in marketModelPlans"
-                      :key="plan.id"
-                      class="marketplan-card"
-                      :class="{ 'marketplan-card--featured': Boolean(plan.badge) }"
-                    >
-                      <div class="marketplan-card__head">
-                        <strong>{{ plan.name }}</strong>
-                        <span v-if="plan.badge">{{ plan.badge }}</span>
-                      </div>
-                      <p class="marketplan-card__price">
-                        <span class="marketplan-card__price-current">¥{{ plan.monthlyPrice }}</span>
-                        <span class="marketplan-card__price-original">¥{{ plan.monthlyOriginalPrice }}</span>
-                        <span class="marketplan-card__price-unit">/ 月</span>
-                      </p>
-                      <p class="marketplan-card__yearly">按年计费 ¥{{ plan.yearlyPrice }} / 年</p>
-                      <p class="marketplan-card__description">{{ plan.description }}</p>
-                      <button class="marketplan-card__action" type="button">订阅 {{ plan.name }}</button>
-                    </article>
-                  </div>
-                </section>
+                <div class="marketplace-toggle" role="tablist" aria-label="商城类型">
+                  <button
+                    v-for="tab in marketTabs"
+                    :key="tab.id"
+                    class="marketplace-toggle__button"
+                    :class="{ active: activeMarketTab === tab.id }"
+                    type="button"
+                    role="tab"
+                    :aria-selected="activeMarketTab === tab.id"
+                    @click="activeMarketTab = tab.id"
+                  >
+                    {{ tab.label }}
+                  </button>
+                </div>
 
-                <section class="marketplace-block">
-                  <header class="marketplace-block__header">
-                    <div>
-                      <strong>智慧团队</strong>
-                      <p>多个角色打包成团队卡片，一键加载协作分工与技能组合。</p>
-                    </div>
-                  </header>
-                  <div class="market-team-grid">
-                    <article v-for="team in marketTeamBundles" :key="team.id" class="market-team-card">
-                      <div class="market-team-card__head">
-                        <strong>{{ team.name }}</strong>
-                        <span>{{ team.roles.length }} 角色</span>
-                      </div>
-                      <p>{{ team.summary }}</p>
-                      <div class="market-team-card__roles">
-                        <span v-for="role in team.roles" :key="`${team.id}-${role}`">{{ role }}</span>
-                      </div>
-                      <div class="market-team-card__skills">
-                        <span v-for="skill in team.skills" :key="`${team.id}-${skill}`">#{{ skill }}</span>
-                      </div>
-                      <button class="market-team-card__action" type="button">{{ team.actionLabel }}</button>
-                    </article>
-                  </div>
-                </section>
-
-                <section class="marketplace-block">
-                  <header class="marketplace-block__header">
-                    <div>
-                      <strong>流程自动化办</strong>
-                      <p>可构建发布和购买流程，统一配置角色/团队、skills、平台与 JSON 参数。</p>
-                    </div>
-                  </header>
-
-                  <div class="market-flow-layout">
-                    <div class="market-flow-templates">
-                      <article v-for="flow in marketFlowTemplates" :key="flow.id" class="market-flow-template">
-                        <div class="market-flow-template__head">
-                          <span>{{ marketFlowKindLabelMap[flow.kind] }}</span>
-                          <button type="button" @click="applyMarketFlowTemplate(flow)">载入模板</button>
-                        </div>
-                        <strong>{{ flow.title }}</strong>
-                        <p>{{ flow.summary }}</p>
-                        <div class="market-flow-template__chips">
-                          <span>{{ flow.roleOrTeam }}</span>
-                          <span>{{ flow.platform }}</span>
-                          <span v-for="skill in flow.skills.slice(0, 2)" :key="`${flow.id}-${skill}`">#{{ skill }}</span>
-                        </div>
-                      </article>
-                    </div>
-
-                    <div class="market-flow-builder">
-                      <label class="market-flow-builder__field">
-                        <span>角色/团队</span>
-                        <input v-model="marketFlowRoleTeam" type="text" placeholder="例如：增长突击队" />
-                      </label>
-                      <label class="market-flow-builder__field">
-                        <span>skills</span>
-                        <input v-model="marketFlowSkills" type="text" placeholder="例如：内容生成, 自动审核, 多平台分发" />
-                      </label>
-                      <label class="market-flow-builder__field">
-                        <span>平台</span>
-                        <input v-model="marketFlowPlatform" type="text" placeholder="例如：OpenClaw + 飞书 + ERP" />
-                      </label>
-                      <label class="market-flow-builder__field">
-                        <span>配置 JSON</span>
-                        <textarea v-model="marketFlowConfigJson" rows="8" placeholder='{"trigger":"daily","needsApproval":true}'></textarea>
-                      </label>
-                      <div class="market-flow-builder__actions">
-                        <button type="button" @click="handleMarketFlowBuild('publish')">构建发布流程</button>
-                        <button type="button" @click="handleMarketFlowBuild('purchase')">构建购买流程</button>
-                      </div>
-                      <p class="market-flow-builder__notice">{{ marketFlowNotice }}</p>
-                      <pre class="market-flow-builder__preview">{{ marketFlowPayloadPreview }}</pre>
-                    </div>
-                  </div>
-                </section>
+                <div class="marketplan-grid">
+                  <article v-for="plan in activeMarketPlans" :key="`${activeMarketTab}-${plan.id}`" class="marketplan-card">
+                    <strong class="marketplan-card__title">{{ plan.title }}</strong>
+                    <p class="marketplan-card__price">
+                      <span class="marketplan-card__price-currency">¥</span>
+                      <span class="marketplan-card__price-value">{{ plan.price }}</span>
+                    </p>
+                    <p class="marketplan-card__description">{{ plan.description }}</p>
+                    <p class="marketplan-card__points">{{ formatMarketPoints(plan.points) }} {{ plan.pointsLabel }}</p>
+                    <button class="marketplan-card__action" type="button">{{ plan.actionLabel }}</button>
+                  </article>
+                </div>
               </section>
-              <p class="module-board__detail">商城模块提供模型套餐、智慧团队卡与流程自动化配置入口。</p>
+              <p class="module-board__detail">商城模块提供加油包与月度会员套餐。</p>
             </template>
 
             <template v-else-if="activeSection === 'tasks'">
@@ -8014,7 +8011,7 @@ watch(
         <header class="feishu-connect-modal__header">
           <div>
             <strong>连接飞书</strong>
-            <p>扫码进入飞书 OpenClaw 页面创建机器人。完成后将 App ID / App Secret 填回本窗口保存即可。</p>
+            <p>扫码进入飞书 OpenClaw 页面创建机器人。完成后点击“检查结果”，系统会自动回填并保存 App ID / App Secret。</p>
             <small>官方插件版本: {{ feishuPluginVersionText }}</small>
           </div>
           <button class="feishu-connect-modal__close" type="button" aria-label="关闭" @click="closeFeishuConnectModal">×</button>
@@ -8027,19 +8024,19 @@ watch(
           <button
             class="feishu-connect-modal__scan-button"
             type="button"
-            :disabled="feishuConnectLoading || feishuConnectChecking"
+            :disabled="feishuConnectLoading || feishuConnectChecking || feishuQrRequesting"
             @click="handleFeishuQrConnect"
           >
-            {{ feishuQrVisible ? "重新获取创建码" : "获取创建二维码" }}
+            {{ feishuQrRequesting ? "获取中..." : feishuQrVisible ? "重新获取创建码" : "获取创建二维码" }}
           </button>
 
           <section v-if="feishuQrVisible" class="feishu-connect-qr">
-            <div class="feishu-connect-qr__tip">请用飞书扫码打开创建页面。创建完成后，请在下方手动填写 App ID / App Secret 并保存。</div>
+            <div class="feishu-connect-qr__tip">请尽快用飞书扫码打开创建页面。创建完成后点击“检查结果”即可自动回填，手动输入仅作兜底。</div>
             <div class="feishu-connect-qr__panel">
               <header class="feishu-connect-qr__head">
                 <div>
                   <strong>第 1 步：用手机飞书扫码创建机器人</strong>
-                  <p>若手机扫码不便，可在电脑浏览器打开飞书 OpenClaw 页面</p>
+                  <p>若手机扫码不便，可直接在电脑浏览器打开本次创建链接</p>
                 </div>
                 <button type="button" :disabled="feishuConnectChecking" @click="handleFeishuConnectionCheck">
                   {{ feishuConnectChecking ? "检查中..." : "检查结果" }}
@@ -8047,11 +8044,16 @@ watch(
               </header>
 
               <div class="feishu-connect-qr__code-shell">
-                <img :src="feishuQrImageUrl" alt="飞书连接二维码" loading="lazy" decoding="async" />
+                <img v-if="feishuQrImageUrl" :src="feishuQrImageUrl" alt="飞书连接二维码" loading="lazy" decoding="async" />
+                <p v-else class="feishu-connect-qr__fallback">二维码生成中...</p>
               </div>
-              <p class="feishu-connect-qr__code-label">创建码：{{ feishuOpenclawUserCode }}</p>
+              <p class="feishu-connect-qr__code-label">创建码：{{ feishuOpenclawUserCode || "--" }}</p>
+              <p class="feishu-connect-qr__expiry" :class="{ 'is-expired': feishuQrExpired }">{{ feishuQrStatusText }}</p>
 
-              <p class="feishu-connect-qr__desc">创建完成后，回到此处填写凭证并保存，再点击“检查结果”。</p>
+              <p class="feishu-connect-qr__desc">创建完成后点击“检查结果”，系统会自动回填并保存 App ID / App Secret。</p>
+              <button class="feishu-connect-qr__help" type="button" :disabled="!feishuQrTargetUrl" @click="handleFeishuOpenQrLink">
+                在浏览器打开本次创建链接
+              </button>
               <button class="feishu-connect-qr__help" type="button" @click="handleFeishuOpenDocs">打开飞书 OpenClaw 指南</button>
             </div>
           </section>
@@ -11261,379 +11263,124 @@ watch(
 .marketplace-surface {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  background:
-    radial-gradient(110% 64% at 100% 0%, rgba(88, 129, 222, 0.15) 0%, rgba(88, 129, 222, 0) 66%),
-    radial-gradient(120% 68% at 0% 100%, rgba(38, 173, 128, 0.12) 0%, rgba(38, 173, 128, 0) 70%),
-    linear-gradient(162deg, rgba(252, 254, 255, 0.98), rgba(242, 248, 255, 0.95));
+  gap: 20px;
+  padding: 18px 16px 20px;
+  border-color: #e5e6e9;
+  background: #f4f4f5;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76);
 }
 
-.marketplace-block {
-  border: 1px solid #d3e1f5;
+.marketplace-toggle {
+  width: fit-content;
+  margin: 0 auto;
   border-radius: 14px;
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.96), rgba(247, 251, 255, 0.94));
-  box-shadow: 0 10px 20px rgba(53, 82, 123, 0.09);
-  padding: 12px;
+  border: 1px solid #dddddf;
+  background: #ebebed;
+  padding: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.marketplace-block__header strong {
-  display: block;
-  color: #223d63;
-  font-size: 16px;
+.marketplace-toggle__button {
+  height: 36px;
+  min-width: 124px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: #9a9ba0;
+  font-size: 18px;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
-.marketplace-block__header p {
-  margin: 5px 0 0;
-  color: #647fa6;
-  font-size: 12px;
-  line-height: 1.45;
+.marketplace-toggle__button.active {
+  background: #ffffff;
+  color: #26272b;
+  box-shadow: 0 1px 2px rgba(33, 35, 40, 0.12);
 }
 
 .marketplan-grid {
-  margin-top: 10px;
+  margin-top: 4px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
 }
 
 .marketplan-card {
-  border: 1px solid #343c4b;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #202531 0%, #171c26 100%);
-  color: #eef2fa;
-  padding: 12px;
+  border: 1px solid #ececee;
+  border-radius: 20px;
+  background: #ffffff;
+  color: #1f2228;
+  min-height: 340px;
+  padding: 20px 22px 22px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 14px;
+  box-shadow: 0 8px 24px rgba(41, 42, 46, 0.05);
 }
 
-.marketplan-card--featured {
-  border-color: #4f8fff;
-  box-shadow: 0 12px 20px rgba(53, 96, 169, 0.28);
-}
-
-.marketplan-card__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.marketplan-card__head strong {
-  color: #f3f6ff;
-  font-size: 15px;
-  letter-spacing: 0.01em;
-}
-
-.marketplan-card__head span {
-  border-radius: 999px;
-  border: 1px solid #5693ff;
-  background: rgba(86, 147, 255, 0.2);
-  color: #8dc4ff;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 8px;
+.marketplan-card__title {
+  color: #2c2e33;
+  font-size: 37px;
+  font-weight: 500;
 }
 
 .marketplan-card__price {
-  margin: 2px 0 0;
+  margin: 0;
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 10px;
 }
 
-.marketplan-card__price-current {
-  color: #ffffff;
-  font-size: 37px;
+.marketplan-card__price-currency {
+  color: #1f2228;
+  font-size: 48px;
   line-height: 1;
-  font-weight: 800;
+  font-weight: 600;
 }
 
-.marketplan-card__price-original {
-  color: #7e899f;
-  text-decoration: line-through;
-  font-size: 18px;
-}
-
-.marketplan-card__price-unit {
-  color: #a8b3ca;
-  font-size: 15px;
-}
-
-.marketplan-card__yearly {
-  margin: 0;
-  color: #99a7c0;
-  font-size: 12px;
+.marketplan-card__price-value {
+  color: #1f2228;
+  font-size: 72px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .marketplan-card__description {
-  margin: 2px 0 0;
-  color: #c6d0e4;
-  font-size: 12px;
-  line-height: 1.5;
-  min-height: 58px;
+  margin: 0;
+  color: #8f9094;
+  font-size: 26px;
+  line-height: 1.52;
+  min-height: 122px;
+}
+
+.marketplan-card__points {
+  margin: 0;
+  color: #2f3034;
+  font-size: 35px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .marketplan-card__action {
   margin-top: auto;
-  height: 38px;
-  border: 1px solid #f6f8fd;
-  border-radius: 11px;
-  background: #f4f7ff;
-  color: #273754;
-  font-size: 14px;
-  font-weight: 700;
+  width: 100%;
+  height: 68px;
+  border: 0;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #2e3036, #202228);
+  color: #f7f7f8;
+  font-size: 33px;
+  font-weight: 500;
   cursor: pointer;
+  transition: filter 160ms ease, transform 160ms ease;
 }
 
 .marketplan-card__action:hover {
-  background: #ffffff;
-}
-
-.market-team-grid {
-  margin-top: 10px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 10px;
-}
-
-.market-team-card {
-  border: 1px solid #d4e2f5;
-  border-radius: 13px;
-  background: #ffffff;
-  padding: 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.market-team-card__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.market-team-card__head strong {
-  color: #244163;
-  font-size: 14px;
-}
-
-.market-team-card__head span {
-  border-radius: 999px;
-  border: 1px solid #d5e3f7;
-  background: #f2f7ff;
-  color: #516f96;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 8px;
-}
-
-.market-team-card p {
-  margin: 0;
-  color: #5f7b9f;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.market-team-card__roles,
-.market-team-card__skills {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.market-team-card__roles span,
-.market-team-card__skills span {
-  border-radius: 999px;
-  padding: 2px 8px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.market-team-card__roles span {
-  border: 1px solid #d7e4f7;
-  background: #f3f8ff;
-  color: #45658f;
-}
-
-.market-team-card__skills span {
-  border: 1px solid #d3eadc;
-  background: #edf9f2;
-  color: #2f6f54;
-}
-
-.market-team-card__action {
-  margin-top: auto;
-  height: 32px;
-  border: 1px solid #88afe8;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #4f88de, #386fc7);
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.market-flow-layout {
-  margin-top: 10px;
-  display: grid;
-  grid-template-columns: minmax(240px, 0.9fr) minmax(0, 1.1fr);
-  gap: 11px;
-}
-
-.market-flow-templates {
-  display: grid;
-  gap: 8px;
-}
-
-.market-flow-template {
-  border: 1px solid #d6e3f6;
-  border-radius: 12px;
-  background: linear-gradient(160deg, #ffffff, #f5faff);
-  padding: 10px;
-  display: grid;
-  gap: 7px;
-}
-
-.market-flow-template__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.market-flow-template__head span {
-  border-radius: 999px;
-  border: 1px solid #cfe0f6;
-  background: #edf4ff;
-  color: #3f638f;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 8px;
-}
-
-.market-flow-template__head button {
-  height: 26px;
-  border: 1px solid #d2deef;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #4f668a;
-  font-size: 11px;
-  padding: 0 8px;
-  cursor: pointer;
-}
-
-.market-flow-template strong {
-  color: #243f61;
-  font-size: 14px;
-}
-
-.market-flow-template p {
-  margin: 0;
-  color: #607ca1;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.market-flow-template__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.market-flow-template__chips span {
-  border-radius: 999px;
-  border: 1px solid #d8e5f7;
-  background: #f5f9ff;
-  color: #4f6e96;
-  font-size: 11px;
-  padding: 2px 8px;
-}
-
-.market-flow-builder {
-  border: 1px solid #d8e4f7;
-  border-radius: 12px;
-  background: #ffffff;
-  padding: 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.market-flow-builder__field {
-  display: grid;
-  gap: 5px;
-}
-
-.market-flow-builder__field span {
-  color: #5f7a9f;
-  font-size: 12px;
-}
-
-.market-flow-builder__field input,
-.market-flow-builder__field textarea {
-  width: 100%;
-  border: 1px solid #d4e0f2;
-  border-radius: 9px;
-  background: #fdfefe;
-  color: #2d3d5b;
-  font-size: 12px;
-  outline: 0;
-  padding: 8px 9px;
-}
-
-.market-flow-builder__field textarea {
-  min-height: 130px;
-  resize: vertical;
-  font-family: "SFMono-Regular", "Consolas", "Menlo", monospace;
-}
-
-.market-flow-builder__actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.market-flow-builder__actions button {
-  height: 32px;
-  border: 1px solid #84ace8;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #4f88de, #376fc8);
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 0 10px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.market-flow-builder__notice {
-  margin: 0;
-  border-radius: 9px;
-  border: 1px solid #d8e5f7;
-  background: #f4f9ff;
-  color: #4f6e95;
-  font-size: 12px;
-  line-height: 1.45;
-  padding: 7px 9px;
-}
-
-.market-flow-builder__preview {
-  margin: 0;
-  border: 1px solid #e0e8f6;
-  border-radius: 9px;
-  background: #f9fbff;
-  color: #314869;
-  font-size: 11px;
-  line-height: 1.45;
-  padding: 9px;
-  max-height: 196px;
-  overflow: auto;
+  filter: brightness(1.06);
+  transform: translateY(-1px);
 }
 
 .module-surface__toolbar {
@@ -13136,6 +12883,12 @@ watch(
   display: block;
 }
 
+.feishu-connect-qr__fallback {
+  margin: 0;
+  color: #8f97a6;
+  font-size: 12px;
+}
+
 .feishu-connect-qr__code-label {
   margin: 10px 0 0;
   color: #7e8796;
@@ -13151,6 +12904,17 @@ watch(
   line-height: 1.5;
 }
 
+.feishu-connect-qr__expiry {
+  margin: 6px 0 0;
+  color: #6f7990;
+  font-size: 12px;
+  text-align: center;
+}
+
+.feishu-connect-qr__expiry.is-expired {
+  color: #b14444;
+}
+
 .feishu-connect-qr__help {
   margin-top: 10px;
   border: 0;
@@ -13160,6 +12924,11 @@ watch(
   padding: 0;
   cursor: pointer;
   text-align: left;
+}
+
+.feishu-connect-qr__help:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .feishu-connect-manual {
@@ -14961,13 +14730,43 @@ watch(
     grid-template-columns: 200px minmax(0, 1fr);
   }
 
-  .marketplan-grid,
-  .market-team-grid {
+  .marketplace-surface {
+    padding: 14px;
+    gap: 16px;
+  }
+
+  .marketplan-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .market-flow-layout {
-    grid-template-columns: minmax(0, 1fr);
+  .marketplan-card {
+    min-height: 300px;
+  }
+
+  .marketplan-card__title {
+    font-size: 32px;
+  }
+
+  .marketplan-card__price-currency {
+    font-size: 42px;
+  }
+
+  .marketplan-card__price-value {
+    font-size: 64px;
+  }
+
+  .marketplan-card__description {
+    font-size: 20px;
+    min-height: 100px;
+  }
+
+  .marketplan-card__points {
+    font-size: 30px;
+  }
+
+  .marketplan-card__action {
+    height: 62px;
+    font-size: 28px;
   }
 
   .task-board-creator {
@@ -15413,8 +15212,7 @@ watch(
   }
 
   .recruitment-role-card__action,
-  .skill-market-card-v2__action,
-  .market-flow-builder__actions button {
+  .skill-market-card-v2__action {
     flex: 1 1 auto;
     justify-content: center;
   }
@@ -15423,15 +15221,52 @@ watch(
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .marketplace-toggle {
+    width: 100%;
+  }
+
+  .marketplace-toggle__button {
+    flex: 1 1 0;
+    min-width: 0;
+    font-size: 16px;
+  }
+
   .recruitment-role-grid,
   .skill-market-grid,
-  .marketplan-grid,
-  .market-team-grid {
+  .marketplan-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .market-flow-builder__actions {
-    width: 100%;
+  .marketplan-card {
+    min-height: 0;
+    padding: 16px;
+    gap: 11px;
+  }
+
+  .marketplan-card__title {
+    font-size: 27px;
+  }
+
+  .marketplan-card__price-currency {
+    font-size: 34px;
+  }
+
+  .marketplan-card__price-value {
+    font-size: 52px;
+  }
+
+  .marketplan-card__description {
+    font-size: 16px;
+    min-height: 0;
+  }
+
+  .marketplan-card__points {
+    font-size: 24px;
+  }
+
+  .marketplan-card__action {
+    height: 52px;
+    font-size: 22px;
   }
 
   .module-board {
