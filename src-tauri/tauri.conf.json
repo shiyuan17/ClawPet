@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ClawPet",
+  "productName": "DragonClaw",
   "version": "0.2.0",
   "identifier": "com.keai.desktop-pet",
   "build": {

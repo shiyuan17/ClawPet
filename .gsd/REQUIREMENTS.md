@@ -149,7 +149,7 @@
 ### R013 — 角色安装命令化与测试优化
 - Class: install-automation
 - Status: active
-- Description: 支持通过 `/clawpet-agent-skill-install xxx` 按角色信息执行安装，并优化角色安装测试。
+- Description: 支持通过 `/dragonclaw-agent-skill-install xxx` 按角色信息执行安装，并优化角色安装测试。
 - Why it matters: 角色批量装配是规模化交付基础。
 - Source: user-directive (2026-03-25)
 - Primary owning slice: M003-S02

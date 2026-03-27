@@ -6,7 +6,7 @@
 
 | # | When | Scope | Decision | Choice | Rationale | Revisable? |
 |---|------|-------|----------|--------|-----------|------------|
-| D001 | 2026-03-19 | process | 在现有 ClawPet 仓库初始化 GSD 工件 | 先建立 project/requirements/state 基线，再进入首个里程碑规划 | 先明确契约与可追踪性，避免后续执行漂移 | Yes |
+| D001 | 2026-03-19 | process | 在现有 DragonClaw 仓库初始化 GSD 工件 | 先建立 project/requirements/state 基线，再进入首个里程碑规划 | 先明确契约与可追踪性，避免后续执行漂移 | Yes |
 | D002 | 2026-03-25 | architecture | 项目主线重构为 chat-first 结构 | 采用“左侧功能菜单 + 聊天承载内容”作为统一壳层，功能面板在壳层内切换 | 与用户目标一致，降低入口分散与认知负担 | Yes |
 | D003 | 2026-03-25 | delivery | 采用渐进式里程碑迁移策略 | 按 M001-M006 分阶段交付，先建立壳层与兼容路径，再逐步替换旧实现 | 避免一次性大迁移导致回归和验证失控 | Yes |
 | D004 | 2026-03-25 | quality | 激活前端超大组件拆分需求（R021） | 将 `SpriteDesktopPetPage.vue` 拆分纳入本轮主计划，不再延期 | 当前重构目标与该工作高度耦合，延期会放大后续维护成本 | Yes |

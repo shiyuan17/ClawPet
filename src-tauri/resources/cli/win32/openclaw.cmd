@@ -2,7 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 if /i "%1"=="update" (
-  echo openclaw is managed by ClawPet ^(bundled runtime^).
+  echo openclaw is managed by DragonClaw ^(bundled runtime^).
   exit /b 0
 )
 
@@ -34,7 +34,7 @@ if not defined NODE_BIN (
   exit /b 1
 )
 
-set OPENCLAW_EMBEDDED_IN=ClawPet
+set OPENCLAW_EMBEDDED_IN=DragonClaw
 set OPENCLAW_NO_RESPAWN=1
 "%NODE_BIN%" "%ENTRY%" %*
 set _EXIT=%ERRORLEVEL%

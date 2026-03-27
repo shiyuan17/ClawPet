@@ -24,7 +24,7 @@
 
 ### M003-S02 — 角色安装命令化
 
-- [ ] T-M003-S02-001：实现 /clawpet-agent-skill-install 命令入口。
+- [ ] T-M003-S02-001：实现 /dragonclaw-agent-skill-install 命令入口。
 - [ ] T-M003-S02-002：完成角色信息解析、参数校验、幂等处理。
 - [ ] T-M003-S02-003：安装失败自动回退并输出诊断信息。
 

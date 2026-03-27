@@ -10,7 +10,7 @@
 
 ## Recent Decisions
 
-- D001：在现有 ClawPet 仓库初始化 GSD 工件。
+- D001：在现有 DragonClaw 仓库初始化 GSD 工件。
 - D002：采用 chat-first 壳层重构作为主线，左侧固定菜单承载核心功能。
 - D003：采用里程碑渐进式迁移（先兼容后替换），避免一次性重写导致回归。
 

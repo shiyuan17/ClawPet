@@ -1,5 +1,5 @@
 #!/bin/sh
-# OpenClaw CLI wrapper managed by ClawPet
+# OpenClaw CLI wrapper managed by DragonClaw
 
 SCRIPT="$0"
 while [ -L "$SCRIPT" ]; do
@@ -132,12 +132,12 @@ fi
 
 case "$1" in
   update)
-    echo "openclaw is managed by ClawPet (bundled runtime)."
+    echo "openclaw is managed by DragonClaw (bundled runtime)."
     "$NODE_BIN" "$ENTRY" --version 2>/dev/null || true
     exit 0
     ;;
 esac
 
-export OPENCLAW_EMBEDDED_IN="ClawPet"
+export OPENCLAW_EMBEDDED_IN="DragonClaw"
 export OPENCLAW_NO_RESPAWN="1"
 exec "$NODE_BIN" "$ENTRY" "$@"

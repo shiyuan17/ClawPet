@@ -2,7 +2,7 @@
 
 ## 这是什么
 
-ClawPet 是一个基于 Tauri 的桌面 AI 助手应用，将桌宠交互与 OpenClaw 控制台能力融合在同一 UI 中。
+DragonClaw 是一个基于 Tauri 的桌面 AI 助手应用，将桌宠交互与 OpenClaw 控制台能力融合在同一 UI 中。
 
 ## 核心价值
 
