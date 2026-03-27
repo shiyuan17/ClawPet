@@ -273,10 +273,10 @@ onBeforeUnmount(() => {
         <aside class="brand-panel">
           <header class="brand-header">
             <div class="brand-logo-wrap">
-              <img :src="appLogoUrl" alt="ClawPet Logo" />
+              <img :src="appLogoUrl" alt="DragonClaw Logo" />
             </div>
             <div class="brand-title-row">
-              <strong>ClawPet</strong>
+              <strong>DragonClaw</strong>
               <span class="brand-badge">AI 协作工作台</span>
             </div>
           </header>
@@ -359,11 +359,28 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .login-shell {
-  --theme-accent: #f35a1e;
-  --theme-accent-soft: rgba(243, 90, 30, 0.14);
-  --theme-border: rgba(39, 36, 44, 0.08);
-  --theme-text: #2f2d33;
-  --theme-muted: rgba(72, 69, 78, 0.58);
+  --theme-accent: #5d82ff;
+  --theme-accent-strong: #4c70ef;
+  --theme-accent-soft: rgba(93, 130, 255, 0.14);
+  --theme-border: rgba(98, 122, 171, 0.18);
+  --theme-border-soft: rgba(98, 122, 171, 0.12);
+  --theme-text: #2a3d5f;
+  --theme-muted: rgba(83, 104, 143, 0.64);
+  --theme-card-bg: rgba(249, 252, 255, 0.93);
+  --theme-card-shadow: 0 14px 30px rgba(57, 84, 137, 0.12);
+  --theme-surface: rgba(255, 255, 255, 0.92);
+  --theme-surface-muted: rgba(255, 255, 255, 0.88);
+  --theme-surface-hover: rgba(255, 255, 255, 0.94);
+  --theme-input-focus-bg: #fff;
+  --theme-label: rgba(60, 80, 121, 0.78);
+  --theme-body-subtle: rgba(83, 104, 143, 0.62);
+  --theme-hint: rgba(83, 104, 143, 0.56);
+  --theme-success: #2e8a58;
+  --theme-error: #cb4b42;
+  --theme-focus-border: rgba(93, 130, 255, 0.56);
+  --theme-focus-ring: 0 0 0 3px rgba(93, 130, 255, 0.16);
+  --theme-primary-btn-bg: linear-gradient(180deg, #7397ff, #4c70ef);
+  --theme-primary-btn-shadow: 0 10px 20px rgba(76, 112, 239, 0.26);
   position: relative;
   width: 100%;
   min-height: 100%;
@@ -375,14 +392,39 @@ onBeforeUnmount(() => {
   background: transparent;
 }
 
+:global(html[data-app-theme-resolved="dark"]) .login-shell {
+  --theme-accent: #9cb6ff;
+  --theme-accent-strong: #8ca7f5;
+  --theme-accent-soft: rgba(121, 151, 241, 0.24);
+  --theme-border: rgba(122, 147, 198, 0.3);
+  --theme-border-soft: rgba(122, 147, 198, 0.24);
+  --theme-text: #eaf0ff;
+  --theme-muted: rgba(187, 204, 236, 0.76);
+  --theme-card-bg: rgba(15, 22, 36, 0.82);
+  --theme-card-shadow: 0 20px 44px rgba(4, 8, 16, 0.52);
+  --theme-surface: rgba(24, 32, 47, 0.9);
+  --theme-surface-muted: rgba(20, 28, 42, 0.86);
+  --theme-surface-hover: rgba(30, 40, 58, 0.94);
+  --theme-input-focus-bg: rgba(30, 39, 56, 0.95);
+  --theme-label: rgba(202, 216, 245, 0.76);
+  --theme-body-subtle: rgba(179, 197, 232, 0.74);
+  --theme-hint: rgba(168, 188, 226, 0.7);
+  --theme-success: #7ad09f;
+  --theme-error: #ff8f88;
+  --theme-focus-border: rgba(141, 167, 226, 0.78);
+  --theme-focus-ring: 0 0 0 3px rgba(128, 153, 213, 0.28);
+  --theme-primary-btn-bg: linear-gradient(180deg, #7093f6, #4f71d9);
+  --theme-primary-btn-shadow: 0 10px 20px rgba(56, 80, 156, 0.42);
+}
+
 .login-card {
   position: relative;
   z-index: 1;
   width: min(1040px, 100%);
   border-radius: 24px;
   border: 1px solid var(--theme-border);
-  box-shadow: 0 12px 28px rgba(40, 37, 46, 0.1);
-  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--theme-card-shadow);
+  background: var(--theme-card-bg);
   overflow: hidden;
   backdrop-filter: blur(4px);
 }
@@ -392,7 +434,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   padding: 0 12px;
-  border-bottom: 1px solid rgba(39, 36, 44, 0.08);
+  border-bottom: 1px solid var(--theme-border-soft);
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
@@ -448,7 +490,7 @@ onBeforeUnmount(() => {
 
 .brand-panel {
   padding: clamp(20px, 2.8vw, 34px);
-  border-right: 1px solid rgba(39, 36, 44, 0.08);
+  border-right: 1px solid var(--theme-border-soft);
 }
 
 .brand-header {
@@ -479,8 +521,8 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(39, 36, 44, 0.08);
-  background: #fff;
+  border: 1px solid var(--theme-border-soft);
+  background: var(--theme-surface);
   overflow: hidden;
 }
 
@@ -527,7 +569,7 @@ onBeforeUnmount(() => {
   gap: 10px;
   align-items: flex-start;
   padding: 10px 0;
-  border-bottom: 1px solid rgba(39, 36, 44, 0.08);
+  border-bottom: 1px solid var(--theme-border-soft);
 }
 
 .brand-list li span {
@@ -540,8 +582,8 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-weight: 600;
   color: var(--theme-accent);
-  border: 1px solid rgba(39, 36, 44, 0.08);
-  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--theme-border-soft);
+  background: var(--theme-surface);
 }
 
 .brand-list li strong {
@@ -556,7 +598,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
   line-height: 1.65;
   letter-spacing: 0.008em;
-  color: rgba(72, 69, 78, 0.56);
+  color: var(--theme-body-subtle);
 }
 
 .form-panel {
@@ -593,7 +635,7 @@ onBeforeUnmount(() => {
 
 .form-panel label {
   font-size: 13px;
-  color: rgba(52, 49, 58, 0.74);
+  color: var(--theme-label);
 }
 
 .form-panel input[type="text"] {
@@ -601,8 +643,8 @@ onBeforeUnmount(() => {
   height: 42px;
   padding: 0 12px;
   border-radius: 12px;
-  border: 1px solid rgba(39, 36, 44, 0.1);
-  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--theme-border-soft);
+  background: var(--theme-surface);
   font-size: 14px;
   color: var(--theme-text);
   outline: none;
@@ -613,9 +655,9 @@ onBeforeUnmount(() => {
 }
 
 .form-panel input[type="text"]:focus {
-  border-color: rgba(243, 90, 30, 0.56);
-  box-shadow: 0 0 0 3px rgba(243, 90, 30, 0.16);
-  background: #fff;
+  border-color: var(--theme-focus-border);
+  box-shadow: var(--theme-focus-ring);
+  background: var(--theme-input-focus-bg);
 }
 
 .code-row {
@@ -626,10 +668,10 @@ onBeforeUnmount(() => {
 
 .code-row button {
   height: 42px;
-  border: 1px solid rgba(39, 36, 44, 0.1);
+  border: 1px solid var(--theme-border-soft);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.88);
-  color: rgba(72, 69, 78, 0.58);
+  background: var(--theme-surface-muted);
+  color: var(--theme-muted);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -642,9 +684,9 @@ onBeforeUnmount(() => {
 }
 
 .code-row button:not(:disabled):hover {
-  border-color: rgba(243, 90, 30, 0.32);
+  border-color: rgba(93, 130, 255, 0.34);
   color: var(--theme-accent);
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--theme-surface-hover);
 }
 
 .submit-btn {
@@ -652,7 +694,7 @@ onBeforeUnmount(() => {
   height: 44px;
   border: 0;
   border-radius: 12px;
-  background: linear-gradient(180deg, #ff7442, #ef4f14);
+  background: var(--theme-primary-btn-bg);
   color: #fff;
   font-size: 16px;
   font-weight: 700;
@@ -665,7 +707,7 @@ onBeforeUnmount(() => {
 
 .submit-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 10px 20px rgba(239, 79, 20, 0.24);
+  box-shadow: var(--theme-primary-btn-shadow);
 }
 
 .submit-btn:disabled {
@@ -680,12 +722,12 @@ onBeforeUnmount(() => {
   gap: 8px;
   font-size: 12px;
   line-height: 1.5;
-  color: rgba(72, 69, 78, 0.64);
+  color: var(--theme-muted);
 }
 
 .agreement input {
   margin-top: 3px;
-  accent-color: #f35a1e;
+  accent-color: var(--theme-accent);
 }
 
 .agreement a {
@@ -696,7 +738,7 @@ onBeforeUnmount(() => {
 .hint {
   margin: 0;
   font-size: 12px;
-  color: rgba(72, 69, 78, 0.5);
+  color: var(--theme-hint);
 }
 
 .notice {
@@ -706,11 +748,11 @@ onBeforeUnmount(() => {
 }
 
 .notice.is-success {
-  color: #2e8a58;
+  color: var(--theme-success);
 }
 
 .notice.is-error {
-  color: #d3532f;
+  color: var(--theme-error);
 }
 
 @media (max-width: 980px) {
@@ -729,7 +771,7 @@ onBeforeUnmount(() => {
 
   .brand-panel {
     border-right: 0;
-    border-bottom: 1px solid rgba(39, 36, 44, 0.08);
+    border-bottom: 1px solid var(--theme-border-soft);
   }
 
   .brand-panel h2 {

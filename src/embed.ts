@@ -1,9 +1,9 @@
 import { createApp, type Component } from "vue";
 import { createPinia } from "pinia";
-import SpriteDesktopPetPage from "./components/SpriteDesktopPetPage.vue";
+import DesktopPetWidget from "./components/DesktopPetWidget.vue";
 import "./style.css";
 
-export function createDesktopPet(target: string | Element, component: Component = SpriteDesktopPetPage) {
+export function createDesktopPet(target: string | Element, component: Component = DesktopPetWidget) {
   const host = typeof target === "string" ? document.querySelector(target) : target;
   if (!host) {
     throw new Error("Desktop pet mount target not found.");
@@ -20,4 +20,4 @@ export function createDesktopPet(target: string | Element, component: Component 
   };
 }
 
-export { SpriteDesktopPetPage };
+export { DesktopPetWidget };

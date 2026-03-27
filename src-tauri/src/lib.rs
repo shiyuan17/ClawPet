@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha1::Sha1;
 use std::collections::{BTreeMap, HashMap};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -139,6 +139,31 @@ struct FeishuOnboardingPollResponse {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct OpenClawChannelQrBindingSessionSnapshot {
+    session_id: String,
+    channel_type: String,
+    status: String,
+    qr_url: Option<String>,
+    detail: Option<String>,
+    logs: Vec<String>,
+    started_at_ms: u128,
+    updated_at_ms: u128,
+}
+
+#[derive(Debug, Clone)]
+struct OpenClawChannelQrBindingSessionState {
+    session_id: String,
+    channel_type: String,
+    status: String,
+    qr_url: Option<String>,
+    detail: Option<String>,
+    logs: Vec<String>,
+    started_at_ms: u128,
+    updated_at_ms: u128,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct LobsterBackupItem {
     name: String,
     path: String,
@@ -171,6 +196,21 @@ struct LobsterActionResult {
     stderr: String,
     duration_ms: u128,
     backup_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawChannelPluginInstallResult {
+    channel_type: String,
+    plugin_id: Option<String>,
+    plugin_spec: Option<String>,
+    command: String,
+    success: bool,
+    detail: String,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    duration_ms: u128,
 }
 
 #[derive(Debug, Serialize)]
@@ -550,6 +590,9 @@ struct SmsVerifyResponse {
 static LOCAL_PROXY_STATE: OnceLock<Mutex<LocalProxyState>> = OnceLock::new();
 static APP_RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
 static SMS_CODE_STORE: OnceLock<Mutex<HashMap<String, SmsCodeRecord>>> = OnceLock::new();
+static OPENCLAW_CHANNEL_QR_BINDING_SESSIONS: OnceLock<
+    Mutex<HashMap<String, Arc<Mutex<OpenClawChannelQrBindingSessionState>>>>,
+> = OnceLock::new();
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -589,6 +632,11 @@ fn local_proxy_state() -> &'static Mutex<LocalProxyState> {
 
 fn sms_code_store() -> &'static Mutex<HashMap<String, SmsCodeRecord>> {
     SMS_CODE_STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn openclaw_channel_qr_binding_sessions(
+) -> &'static Mutex<HashMap<String, Arc<Mutex<OpenClawChannelQrBindingSessionState>>>> {
+    OPENCLAW_CHANNEL_QR_BINDING_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn set_app_resource_dir(path: PathBuf) {
@@ -1547,6 +1595,13 @@ fn ensure_channel_plugin_allowlist(
     Ok(())
 }
 
+fn resolve_channel_plugin_install_spec(channel_type: &str) -> Option<(&'static str, &'static str)> {
+    match normalize_channel_identifier(channel_type).as_str() {
+        "dingtalk" => Some(("dingtalk", "@soimy/dingtalk")),
+        _ => None,
+    }
+}
+
 fn clear_all_channel_bindings(root: &mut serde_json::Map<String, Value>, channel_type: &str) {
     let normalized_channel = normalize_channel_identifier(channel_type);
     let Some(bindings) = root.get_mut("bindings").and_then(Value::as_array_mut) else {
@@ -1698,6 +1753,15 @@ fn build_channel_account_config(
     let normalized_channel = normalize_channel_identifier(channel_type);
 
     if normalized_channel == "telegram" {
+        let dm_policy = config
+            .get("dmPolicy")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("pairing")
+            .to_string();
+        config.insert("dmPolicy".to_string(), Value::String(dm_policy));
+
         if let Some(allowed_users) = incoming.get("allowedUsers") {
             let users = allowed_users
                 .split(',')
@@ -1714,20 +1778,35 @@ fn build_channel_account_config(
     }
 
     if normalized_channel == "discord" {
-        config.insert(
-            "groupPolicy".to_string(),
-            Value::String("allowlist".to_string()),
-        );
-        config.insert("dm".to_string(), serde_json::json!({ "enabled": false }));
-        config.insert(
-            "retry".to_string(),
-            serde_json::json!({
-                "attempts": 3,
-                "minDelayMs": 500,
-                "maxDelayMs": 30000,
-                "jitter": 0.1
-            }),
-        );
+        let dm_policy = config
+            .get("dmPolicy")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("pairing")
+            .to_string();
+        config.insert("dmPolicy".to_string(), Value::String(dm_policy));
+
+        let group_policy = config
+            .get("groupPolicy")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("allowlist")
+            .to_string();
+        config.insert("groupPolicy".to_string(), Value::String(group_policy));
+
+        if !matches!(config.get("retry"), Some(Value::Object(_))) {
+            config.insert(
+                "retry".to_string(),
+                serde_json::json!({
+                    "attempts": 3,
+                    "minDelayMs": 500,
+                    "maxDelayMs": 30000,
+                    "jitter": 0.1
+                }),
+            );
+        }
 
         let guild_id = incoming
             .get("guildId")
@@ -1761,6 +1840,7 @@ fn build_channel_account_config(
         }
         config.remove("guildId");
         config.remove("channelId");
+        config.remove("dm");
     }
 
     if normalized_channel == "feishu" || normalized_channel == "wecom" {
@@ -4042,7 +4122,7 @@ fn install_role_workflow_agent(
         .unwrap_or("unknown");
     let raw_markdown = if content.trim().is_empty() {
         format!(
-            "# {name}\n\n来源：{source}\n\n> 该角色由 ClawPet 安装，请补充具体职责内容。\n",
+            "# {name}\n\n来源：{source}\n\n> 该角色由 DragonClaw 安装，请补充具体职责内容。\n",
             name = display_name.trim(),
             source = source_label
         )
@@ -4354,6 +4434,12 @@ fn remove_role_workflow_agent(agent_id: String, delete_files: bool) -> Result<St
             };
             candidates.push(candidate);
         }
+        let runtime_agents_root = resolve_openclaw_config_path()
+            .parent()
+            .map(|path| path.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from(".openclaw"))
+            .join("agents");
+        candidates.push(runtime_agents_root.join(&normalized_id));
         candidates.push(resolve_openclaw_home_path().join(format!("workspace-{normalized_id}")));
         candidates.push(resolve_workspace_agents_root().join(&normalized_id));
 
@@ -4573,6 +4659,21 @@ fn value_as_i64(value: Option<&Value>) -> Option<i64> {
     })
 }
 
+fn extract_agent_id_from_session_key(value: Option<&Value>) -> Option<String> {
+    let session_key = value.and_then(Value::as_str).map(str::trim)?;
+    if session_key.is_empty() {
+        return None;
+    }
+
+    let rest = session_key.strip_prefix("agent:")?;
+    let candidate = rest.split(':').next().map(str::trim).unwrap_or("");
+    if candidate.is_empty() {
+        return None;
+    }
+
+    Some(candidate.to_string())
+}
+
 fn extract_task_payload_summary(payload: Option<&Value>) -> String {
     let Some(payload) = payload.and_then(Value::as_object) else {
         return "未提供任务说明。".to_string();
@@ -4612,7 +4713,15 @@ fn derive_task_status(enabled: bool, next_run_at_ms: Option<i64>, now_ms: i64) -
 }
 
 #[tauri::command]
-fn load_task_snapshot() -> Result<TaskSnapshotResponse, String> {
+fn load_task_snapshot(agent_id: Option<String>) -> Result<TaskSnapshotResponse, String> {
+    let requested_agent_id = agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let requested_agent_lower = requested_agent_id
+        .as_deref()
+        .map(|value| value.to_ascii_lowercase());
     let source_path = resolve_openclaw_config_path()
         .parent()
         .map(|path| path.to_path_buf())
@@ -4675,11 +4784,23 @@ fn load_task_snapshot() -> Result<TaskSnapshotResponse, String> {
         let agent_id = obj
             .get("agentId")
             .and_then(Value::as_str)
-            .or_else(|| obj.get("ownerAgentId").and_then(Value::as_str))
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .unwrap_or("未标注")
-            .to_string();
+            .map(str::to_string)
+            .or_else(|| {
+                obj.get("ownerAgentId")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+            .or_else(|| extract_agent_id_from_session_key(obj.get("sessionKey")))
+            .unwrap_or_else(|| "未标注".to_string());
+        if let Some(expected_agent) = requested_agent_lower.as_deref() {
+            if agent_id.to_ascii_lowercase() != expected_agent {
+                continue;
+            }
+        }
         let session_target = obj
             .get("sessionTarget")
             .and_then(Value::as_str)
@@ -4763,9 +4884,19 @@ fn load_task_snapshot() -> Result<TaskSnapshotResponse, String> {
             })
     });
 
+    let detail = if let Some(requested_agent_id) = requested_agent_id {
+        format!(
+            "已从 cron/jobs.json 读取 {} 条任务（角色：{}）。",
+            jobs.len(),
+            requested_agent_id
+        )
+    } else {
+        format!("已从 cron/jobs.json 读取 {} 条任务。", jobs.len())
+    };
+
     Ok(TaskSnapshotResponse {
         source_path: source_path.display().to_string(),
-        detail: format!("已从 cron/jobs.json 读取 {} 条任务。", jobs.len()),
+        detail,
         jobs,
     })
 }
@@ -6750,7 +6881,7 @@ fn run_openclaw_cli_output(args: &[&str]) -> Result<(String, std::process::Outpu
         .args(args)
         .current_dir(&runtime_dir)
         .env("OPENCLAW_NO_RESPAWN", "1")
-        .env("OPENCLAW_EMBEDDED_IN", "ClawPet")
+        .env("OPENCLAW_EMBEDDED_IN", "DragonClaw")
         .env("OPENCLAW_HOME", openclaw_home)
         .env("OPENCLAW_CONFIG_PATH", openclaw_config);
 
@@ -8921,98 +9052,7 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-#[derive(Debug, Serialize)]
-struct MonitorInfo {
-    /// Logical position (physical / scale_factor) for comparison with screenX/screenY
-    position: (f64, f64),
-    /// Logical size (physical / scale_factor)
-    size: (f64, f64),
-    #[serde(rename = "scaleFactor")]
-    scale_factor: f64,
-}
-
-#[tauri::command]
-fn get_available_monitors(app: tauri::AppHandle) -> Result<Vec<MonitorInfo>, String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-    let monitors = window.available_monitors().map_err(|e| e.to_string())?;
-    let list: Vec<MonitorInfo> = monitors
-        .into_iter()
-        .map(|m| {
-            let pos = m.position();
-            let size = m.size();
-            let scale = m.scale_factor();
-            MonitorInfo {
-                position: (pos.x as f64 / scale, pos.y as f64 / scale),
-                size: (size.width as f64 / scale, size.height as f64 / scale),
-                scale_factor: scale,
-            }
-        })
-        .collect();
-    Ok(list)
-}
-
-#[tauri::command]
-fn move_window_to_monitor(app: tauri::AppHandle, index: usize) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-    let monitors = window.available_monitors().map_err(|e| e.to_string())?;
-    let monitor = monitors
-        .into_iter()
-        .nth(index)
-        .ok_or_else(|| format!("monitor index out of range: {}", index))?;
-
-    // Keep current window size and move it to the target monitor center,
-    // matching common system window move behavior.
-    let window_size = window.outer_size().map_err(|e| e.to_string())?;
-    let monitor_position = monitor.position();
-    let monitor_size = monitor.size();
-
-    let centered_x =
-        monitor_position.x + ((monitor_size.width as i32 - window_size.width as i32).max(0) / 2);
-    let centered_y =
-        monitor_position.y + ((monitor_size.height as i32 - window_size.height as i32).max(0) / 2);
-
-    window
-        .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-            centered_x, centered_y,
-        )))
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[derive(Debug, Serialize)]
-struct WindowInnerPosition {
-    x: f64,
-    y: f64,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct ConsoleWindowOpenPayload {
-    section: String,
-}
-
-#[tauri::command]
-fn get_window_inner_position(app: tauri::AppHandle) -> Result<WindowInnerPosition, String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-    let pos = window.inner_position().map_err(|e| e.to_string())?;
-    Ok(WindowInnerPosition {
-        x: pos.x as f64,
-        y: pos.y as f64,
-    })
-}
-
-fn sync_main_window_window_level(app: &tauri::AppHandle) {
-    if let Some(main_window) = app.get_webview_window("main") {
-        let _ = main_window.set_always_on_top(false);
-    }
-}
-
+#[cfg(target_os = "windows")]
 fn center_window_on_current_monitor(window: &tauri::WebviewWindow) {
     let monitor = window
         .current_monitor()
@@ -9037,99 +9077,6 @@ fn center_window_on_current_monitor(window: &tauri::WebviewWindow) {
     let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
         centered_x, centered_y,
     )));
-}
-
-#[tauri::command]
-fn open_console_window(app: tauri::AppHandle, section: Option<String>) -> Result<(), String> {
-    sync_main_window_window_level(&app);
-
-    let section = section
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| {
-            matches!(
-                *value,
-                "overview"
-                    | "platforms"
-                    | "staff"
-                    | "role-workflow"
-                    | "skill-market"
-                    | "channels"
-                    | "bindings"
-                    | "tasks"
-            )
-        })
-        .unwrap_or("platforms");
-    let payload = ConsoleWindowOpenPayload {
-        section: section.to_string(),
-    };
-
-    if let Some(window) = app.get_webview_window("console") {
-        center_window_on_current_monitor(&window);
-        let _ = window.show();
-        let _ = window.set_focus();
-        let _ = window.emit("clawpet://console-open", payload);
-        sync_main_window_window_level(&app);
-        return Ok(());
-    }
-
-    let init_script = format!(
-        "window.__CLAWPET_CONSOLE_MODE = true; window.__CLAWPET_CONSOLE_SECTION = {};",
-        serde_json::to_string(section).unwrap_or_else(|_| "\"platforms\"".to_string())
-    );
-
-    let mut builder = tauri::WebviewWindowBuilder::new(
-        &app,
-        "console",
-        tauri::WebviewUrl::App("index.html".into()),
-    )
-    .title("ClawPet Platform Console")
-    .inner_size(1200.0, 820.0)
-    .min_inner_size(960.0, 640.0)
-    .resizable(true)
-    .maximizable(true)
-    .minimizable(true)
-    .closable(true)
-    .decorations(true)
-    .transparent(false)
-    .shadow(true)
-    .always_on_top(false)
-    .skip_taskbar(false)
-    .focused(false)
-    .visible(false)
-    .initialization_script(&init_script);
-
-    // macOS: 隐藏标题栏区域，仅保留窗口控制按钮（红黄绿）
-    #[cfg(target_os = "macos")]
-    {
-        builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
-    }
-
-    let window = builder
-        .build()
-        .map_err(|error| format!("failed to open console window: {error}"))?;
-    center_window_on_current_monitor(&window);
-    let _ = window.show();
-    let _ = window.set_focus();
-    let _ = window.emit("clawpet://console-open", payload);
-    sync_main_window_window_level(&app);
-    Ok(())
-}
-
-#[tauri::command]
-fn close_console_window(app: tauri::AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("console")
-        .ok_or_else(|| "console window not found".to_string())?;
-    window.close().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn start_console_window_drag(app: tauri::AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("console")
-        .ok_or_else(|| "console window not found".to_string())?;
-    window.start_dragging().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -9164,7 +9111,7 @@ fn open_main_chat_panel(app: &tauri::AppHandle) {
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
-    let _ = window.emit("clawpet://chat-open", "main");
+    let _ = window.emit("dragonclaw://chat-open", "main");
 }
 
 #[cfg(target_os = "windows")]
@@ -9561,7 +9508,7 @@ fn load_lobster_snapshot() -> Result<LobsterSnapshotResponse, String> {
         detail,
         backups: collect_lobster_backups(),
         install_wizard_open_every_launch: read_env_bool(
-            "CLAWPET_INSTALL_WIZARD_OPEN_EVERY_LAUNCH",
+            "DRAGONCLAW_INSTALL_WIZARD_OPEN_EVERY_LAUNCH",
             false,
         ),
     })
@@ -9733,6 +9680,187 @@ async fn run_lobster_action(
         .map_err(|error| format!("龙虾操作任务执行失败：{error}"))?
 }
 
+fn run_openclaw_channel_plugin_install_blocking(
+    channel_type: String,
+) -> OpenClawChannelPluginInstallResult {
+    let started_at = std::time::Instant::now();
+    let normalized_channel = normalize_channel_identifier(&channel_type);
+    if normalized_channel.is_empty() {
+        return OpenClawChannelPluginInstallResult {
+            channel_type: channel_type.trim().to_string(),
+            plugin_id: None,
+            plugin_spec: None,
+            command: String::new(),
+            success: false,
+            detail: "channelType 不能为空。".to_string(),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+        };
+    }
+
+    let Some((plugin_id, plugin_spec)) = resolve_channel_plugin_install_spec(&normalized_channel)
+    else {
+        return OpenClawChannelPluginInstallResult {
+            channel_type: normalized_channel,
+            plugin_id: None,
+            plugin_spec: None,
+            command: String::new(),
+            success: true,
+            detail: "当前频道无需额外安装插件。".to_string(),
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: started_at.elapsed().as_millis(),
+        };
+    };
+
+    if let Err(error) = bootstrap_openclaw_runtime(false) {
+        let command = format!(
+            "openclaw plugins install {plugin_spec} && openclaw plugins enable {plugin_id}"
+        );
+        return OpenClawChannelPluginInstallResult {
+            channel_type: normalized_channel,
+            plugin_id: Some(plugin_id.to_string()),
+            plugin_spec: Some(plugin_spec.to_string()),
+            command,
+            success: false,
+            detail: format!("插件安装前自举失败：{error}"),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: error,
+            duration_ms: started_at.elapsed().as_millis(),
+        };
+    }
+
+    let mut stdout_sections = Vec::new();
+    let mut stderr_sections = Vec::new();
+
+    let install_args = ["plugins", "install", plugin_spec];
+    let (install_command, install_output) = match run_openclaw_cli_output(&install_args) {
+        Ok(value) => value,
+        Err(error) => {
+            let command = format!(
+                "openclaw plugins install {plugin_spec} && openclaw plugins enable {plugin_id}"
+            );
+            return OpenClawChannelPluginInstallResult {
+                channel_type: normalized_channel,
+                plugin_id: Some(plugin_id.to_string()),
+                plugin_spec: Some(plugin_spec.to_string()),
+                command,
+                success: false,
+                detail: "插件安装失败，无法调用 bundled OpenClaw CLI。".to_string(),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: error,
+                duration_ms: started_at.elapsed().as_millis(),
+            };
+        }
+    };
+
+    let install_stdout = String::from_utf8_lossy(&install_output.stdout).to_string();
+    let install_stderr = String::from_utf8_lossy(&install_output.stderr).to_string();
+    append_labeled_output_section(&mut stdout_sections, "plugin-install", &install_stdout);
+    append_labeled_output_section(&mut stderr_sections, "plugin-install", &install_stderr);
+
+    if !install_output.status.success() {
+        let merged_detail = format!("{}\n{}", install_stdout.trim(), install_stderr.trim())
+            .trim()
+            .to_string();
+        return OpenClawChannelPluginInstallResult {
+            channel_type: normalized_channel,
+            plugin_id: Some(plugin_id.to_string()),
+            plugin_spec: Some(plugin_spec.to_string()),
+            command: install_command,
+            success: false,
+            detail: if merged_detail.is_empty() {
+                format!("插件安装失败（{plugin_spec}）。")
+            } else {
+                format!("插件安装失败（{plugin_spec}）：{merged_detail}")
+            },
+            exit_code: install_output.status.code(),
+            stdout: stdout_sections.join("\n\n"),
+            stderr: stderr_sections.join("\n\n"),
+            duration_ms: started_at.elapsed().as_millis(),
+        };
+    }
+
+    let enable_args = ["plugins", "enable", plugin_id];
+    let (enable_command, enable_output) = match run_openclaw_cli_output(&enable_args) {
+        Ok(value) => value,
+        Err(error) => {
+            let command = format!("{install_command} && openclaw plugins enable {plugin_id}");
+            return OpenClawChannelPluginInstallResult {
+                channel_type: normalized_channel,
+                plugin_id: Some(plugin_id.to_string()),
+                plugin_spec: Some(plugin_spec.to_string()),
+                command,
+                success: false,
+                detail: "插件已安装，但启用失败（无法调用 bundled OpenClaw CLI）。".to_string(),
+                exit_code: install_output.status.code(),
+                stdout: stdout_sections.join("\n\n"),
+                stderr: if stderr_sections.is_empty() {
+                    error
+                } else {
+                    format!("{}\n\n{error}", stderr_sections.join("\n\n"))
+                },
+                duration_ms: started_at.elapsed().as_millis(),
+            };
+        }
+    };
+    let enable_stdout = String::from_utf8_lossy(&enable_output.stdout).to_string();
+    let enable_stderr = String::from_utf8_lossy(&enable_output.stderr).to_string();
+    append_labeled_output_section(&mut stdout_sections, "plugin-enable", &enable_stdout);
+    append_labeled_output_section(&mut stderr_sections, "plugin-enable", &enable_stderr);
+
+    if !enable_output.status.success() {
+        let merged_detail = format!("{}\n{}", enable_stdout.trim(), enable_stderr.trim())
+            .trim()
+            .to_string();
+        return OpenClawChannelPluginInstallResult {
+            channel_type: normalized_channel,
+            plugin_id: Some(plugin_id.to_string()),
+            plugin_spec: Some(plugin_spec.to_string()),
+            command: format!("{install_command} && {enable_command}"),
+            success: false,
+            detail: if merged_detail.is_empty() {
+                format!("插件已安装，但启用失败（{plugin_id}）。")
+            } else {
+                format!("插件已安装，但启用失败（{plugin_id}）：{merged_detail}")
+            },
+            exit_code: enable_output.status.code().or(install_output.status.code()),
+            stdout: stdout_sections.join("\n\n"),
+            stderr: stderr_sections.join("\n\n"),
+            duration_ms: started_at.elapsed().as_millis(),
+        };
+    }
+
+    OpenClawChannelPluginInstallResult {
+        channel_type: normalized_channel,
+        plugin_id: Some(plugin_id.to_string()),
+        plugin_spec: Some(plugin_spec.to_string()),
+        command: format!("{install_command} && {enable_command}"),
+        success: true,
+        detail: format!("插件 {plugin_id} 已安装并启用。"),
+        exit_code: enable_output.status.code().or(install_output.status.code()).or(Some(0)),
+        stdout: stdout_sections.join("\n\n"),
+        stderr: stderr_sections.join("\n\n"),
+        duration_ms: started_at.elapsed().as_millis(),
+    }
+}
+
+#[tauri::command]
+async fn install_openclaw_channel_plugin(
+    channel_type: String,
+) -> Result<OpenClawChannelPluginInstallResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_openclaw_channel_plugin_install_blocking(channel_type)
+    })
+    .await
+    .map_err(|error| format!("频道插件安装任务执行失败：{error}"))
+}
+
 #[tauri::command]
 async fn check_openclaw_gateway(endpoint: Option<String>) -> Result<GatewayHealthResponse, String> {
     let gateway_port = Some(resolve_openclaw_gateway_port());
@@ -9831,6 +9959,388 @@ fn trim_remote_error_detail(raw: &str) -> String {
         return trimmed.to_string();
     }
     format!("{}...", trimmed.chars().take(260).collect::<String>())
+}
+
+fn build_openclaw_channel_qr_binding_snapshot(
+    state: &OpenClawChannelQrBindingSessionState,
+) -> OpenClawChannelQrBindingSessionSnapshot {
+    OpenClawChannelQrBindingSessionSnapshot {
+        session_id: state.session_id.clone(),
+        channel_type: state.channel_type.clone(),
+        status: state.status.clone(),
+        qr_url: state.qr_url.clone(),
+        detail: state.detail.clone(),
+        logs: state.logs.clone(),
+        started_at_ms: state.started_at_ms,
+        updated_at_ms: state.updated_at_ms,
+    }
+}
+
+fn strip_ansi_escape_sequences(raw: &str) -> String {
+    let mut output = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if matches!(chars.peek(), Some('[')) {
+                let _ = chars.next();
+                while let Some(next) = chars.next() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+
+    output
+}
+
+fn extract_http_urls_from_text(raw: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut cursor = 0usize;
+
+    while cursor < raw.len() {
+        let remain = &raw[cursor..];
+        let next_http = remain.find("http://");
+        let next_https = remain.find("https://");
+        let Some(relative_start) = (match (next_http, next_https) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(value), None) => Some(value),
+            (None, Some(value)) => Some(value),
+            (None, None) => None,
+        }) else {
+            break;
+        };
+
+        let start = cursor + relative_start;
+        let tail = &raw[start..];
+        let relative_end = tail.find(|ch: char| {
+            ch.is_whitespace()
+                || ch == '"'
+                || ch == '\''
+                || ch == '<'
+                || ch == '>'
+                || ch == '，'
+                || ch == '。'
+        });
+        let end = start + relative_end.unwrap_or(tail.len());
+        if end <= start {
+            break;
+        }
+
+        let candidate = raw[start..end].trim_end_matches(|ch: char| {
+            ch == ','
+                || ch == '.'
+                || ch == ';'
+                || ch == ')'
+                || ch == '('
+                || ch == '，'
+                || ch == '。'
+                || ch == '；'
+                || ch == '）'
+                || ch == '（'
+        });
+        if candidate.starts_with("http://") || candidate.starts_with("https://") {
+            urls.push(candidate.to_string());
+        }
+
+        cursor = end;
+    }
+
+    urls
+}
+
+fn extract_channel_qr_url_from_line(channel_type: &str, line: &str) -> Option<String> {
+    let urls = extract_http_urls_from_text(line);
+    if urls.is_empty() {
+        return None;
+    }
+
+    let normalized = normalize_channel_identifier(channel_type);
+    if normalized == "weixin" {
+        if let Some(value) = urls
+            .iter()
+            .find(|url| url.contains("liteapp.weixin.qq.com"))
+            .cloned()
+        {
+            return Some(value);
+        }
+    } else if normalized == "wecom" {
+        if let Some(value) = urls
+            .iter()
+            .find(|url| url.contains("work.weixin.qq.com/ai/qc/"))
+            .cloned()
+        {
+            return Some(value);
+        }
+    }
+
+    urls.into_iter().next()
+}
+
+fn update_openclaw_channel_qr_binding_session_from_line(
+    session: &mut OpenClawChannelQrBindingSessionState,
+    raw_line: &str,
+) {
+    let cleaned = strip_ansi_escape_sequences(raw_line)
+        .replace('\r', "")
+        .trim()
+        .to_string();
+    if cleaned.is_empty() {
+        return;
+    }
+
+    session.updated_at_ms = current_timestamp_millis();
+    session.logs.push(cleaned.clone());
+    if session.logs.len() > 120 {
+        let extra = session.logs.len() - 120;
+        session.logs.drain(0..extra);
+    }
+
+    if session.qr_url.is_none() {
+        if let Some(url) = extract_channel_qr_url_from_line(&session.channel_type, &cleaned) {
+            session.qr_url = Some(url);
+            session.status = "waiting_scan".to_string();
+            session.detail = Some("二维码已生成，请使用手机扫码完成绑定。".to_string());
+        }
+    }
+
+    if cleaned.contains("等待扫码")
+        || cleaned.contains("等待连接结果")
+        || cleaned.contains("请使用微信扫描")
+        || cleaned.contains("请使用企业微信扫描")
+    {
+        if session.status == "running" {
+            session.status = "waiting_scan".to_string();
+        }
+    }
+
+    if cleaned.contains("扫码成功")
+        || cleaned.contains("连接成功")
+        || cleaned.contains("已自动获取")
+        || cleaned.contains("与微信连接成功")
+    {
+        session.detail = Some(cleaned.clone());
+    }
+
+    if cleaned.contains("失败") || cleaned.to_ascii_lowercase().contains("error") {
+        session.detail = Some(cleaned);
+    }
+}
+
+fn prune_openclaw_channel_qr_binding_sessions() {
+    let now = current_timestamp_millis();
+    let mut sessions = match openclaw_channel_qr_binding_sessions().lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+
+    sessions.retain(|_, session_state| {
+        let Ok(state) = session_state.lock() else {
+            return false;
+        };
+        let age_ms = now.saturating_sub(state.updated_at_ms);
+        let finished = state.status == "success" || state.status == "error";
+        if finished {
+            age_ms <= 10 * 60 * 1000
+        } else {
+            age_ms <= 30 * 60 * 1000
+        }
+    });
+}
+
+#[tauri::command]
+fn start_openclaw_channel_qr_binding(
+    channel_type: String,
+) -> Result<OpenClawChannelQrBindingSessionSnapshot, String> {
+    let normalized_channel = normalize_channel_identifier(&channel_type);
+    if normalized_channel != "weixin" && normalized_channel != "wecom" {
+        return Err("当前仅支持微信（weixin）和企业微信（wecom）二维码绑定。".to_string());
+    }
+
+    prune_openclaw_channel_qr_binding_sessions();
+
+    let session_id = generate_ephemeral_openclaw_gateway_token()
+        .unwrap_or_else(|_| format!("qr-{}", current_timestamp_millis()));
+    let command_line = if normalized_channel == "weixin" {
+        "npx -y @tencent-weixin/openclaw-weixin-cli@latest install".to_string()
+    } else {
+        // WeCom CLI 默认首项即“扫码接入（推荐）”，通过换行可自动确认。
+        if cfg!(target_os = "windows") {
+            "echo.| npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
+        } else {
+            "printf '\\n' | npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
+        }
+    };
+
+    let now = current_timestamp_millis();
+    let session_state = Arc::new(Mutex::new(OpenClawChannelQrBindingSessionState {
+        session_id: session_id.clone(),
+        channel_type: normalized_channel.clone(),
+        status: "running".to_string(),
+        qr_url: None,
+        detail: Some(format!(
+            "已启动{}绑定流程，正在获取二维码...",
+            if normalized_channel == "weixin" {
+                "微信"
+            } else {
+                "企业微信"
+            }
+        )),
+        logs: vec![format!("启动命令：{command_line}")],
+        started_at_ms: now,
+        updated_at_ms: now,
+    }));
+
+    {
+        let mut sessions = openclaw_channel_qr_binding_sessions()
+            .lock()
+            .map_err(|_| "无法获取二维码会话状态锁。".to_string())?;
+        sessions.insert(session_id.clone(), session_state.clone());
+    }
+
+    let session_state_for_thread = session_state.clone();
+    thread::spawn(move || {
+        let mut command = if cfg!(target_os = "windows") {
+            let mut cmd = Command::new("cmd");
+            suppress_windows_command_window(&mut cmd);
+            cmd.args(["/C", &command_line]);
+            cmd
+        } else {
+            let mut cmd = Command::new("/bin/sh");
+            cmd.args(["-lc", &command_line]);
+            cmd
+        };
+        suppress_windows_command_window(&mut command);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        let mut child = match command.spawn() {
+            Ok(value) => value,
+            Err(error) => {
+                if let Ok(mut state) = session_state_for_thread.lock() {
+                    state.status = "error".to_string();
+                    state.detail = Some(format!("启动二维码绑定流程失败：{error}"));
+                    state.updated_at_ms = current_timestamp_millis();
+                }
+                return;
+            }
+        };
+
+        let mut reader_jobs: Vec<JoinHandle<()>> = Vec::new();
+
+        if let Some(stdout) = child.stdout.take() {
+            let stdout_state = session_state_for_thread.clone();
+            reader_jobs.push(thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                    let Ok(content) = line else {
+                        continue;
+                    };
+                    if let Ok(mut state) = stdout_state.lock() {
+                        update_openclaw_channel_qr_binding_session_from_line(&mut state, &content);
+                    } else {
+                        break;
+                    }
+                }
+            }));
+        }
+
+        if let Some(stderr) = child.stderr.take() {
+            let stderr_state = session_state_for_thread.clone();
+            reader_jobs.push(thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    let Ok(content) = line else {
+                        continue;
+                    };
+                    if let Ok(mut state) = stderr_state.lock() {
+                        update_openclaw_channel_qr_binding_session_from_line(&mut state, &content);
+                    } else {
+                        break;
+                    }
+                }
+            }));
+        }
+
+        let wait_result = child.wait();
+        for job in reader_jobs {
+            let _ = job.join();
+        }
+
+        if let Ok(mut state) = session_state_for_thread.lock() {
+            state.updated_at_ms = current_timestamp_millis();
+            match wait_result {
+                Ok(status) if status.success() => {
+                    state.status = "success".to_string();
+                    if state.detail.is_none() {
+                        state.detail = Some("绑定流程已完成。".to_string());
+                    }
+                }
+                Ok(status) => {
+                    state.status = "error".to_string();
+                    let code_text = status
+                        .code()
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    if state.detail.is_none() {
+                        state.detail = Some(format!("绑定流程执行失败（exit code: {code_text}）。"));
+                    }
+                }
+                Err(error) => {
+                    state.status = "error".to_string();
+                    state.detail = Some(format!("等待绑定流程结束失败：{error}"));
+                }
+            }
+        }
+    });
+
+    let state = session_state
+        .lock()
+        .map_err(|_| "无法读取二维码会话状态。".to_string())?;
+    Ok(build_openclaw_channel_qr_binding_snapshot(&state))
+}
+
+#[tauri::command]
+fn poll_openclaw_channel_qr_binding(
+    session_id: String,
+) -> Result<OpenClawChannelQrBindingSessionSnapshot, String> {
+    prune_openclaw_channel_qr_binding_sessions();
+
+    let normalized_id = session_id.trim().to_string();
+    if normalized_id.is_empty() {
+        return Err("sessionId 不能为空。".to_string());
+    }
+
+    let state_handle = {
+        let sessions = openclaw_channel_qr_binding_sessions()
+            .lock()
+            .map_err(|_| "无法获取二维码会话状态锁。".to_string())?;
+        sessions
+            .get(&normalized_id)
+            .cloned()
+            .ok_or_else(|| format!("未找到二维码会话：{normalized_id}"))?
+    };
+
+    let state = state_handle
+        .lock()
+        .map_err(|_| "二维码会话状态读取失败。".to_string())?;
+    Ok(build_openclaw_channel_qr_binding_snapshot(&state))
+}
+
+#[tauri::command]
+fn clear_openclaw_channel_qr_binding_session(session_id: String) -> Result<(), String> {
+    let normalized_id = session_id.trim().to_string();
+    if normalized_id.is_empty() {
+        return Ok(());
+    }
+    let mut sessions = openclaw_channel_qr_binding_sessions()
+        .lock()
+        .map_err(|_| "无法获取二维码会话状态锁。".to_string())?;
+    sessions.remove(&normalized_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -10196,7 +10706,7 @@ fn open_openclaw_control_ui_blocking() -> Result<String, String> {
     let url = match resolve_openclaw_dashboard_url() {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("[clawpet] resolve dashboard url failed: {error}");
+            eprintln!("[dragonclaw] resolve dashboard url failed: {error}");
             build_openclaw_control_ui_url_fallback()
         }
     };
@@ -10744,12 +11254,6 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             quit_app,
-            get_available_monitors,
-            get_window_inner_position,
-            move_window_to_monitor,
-            open_console_window,
-            close_console_window,
-            start_console_window_drag,
             start_main_window_drag,
             openclaw_chat,
             sync_local_proxy,
@@ -10762,6 +11266,7 @@ pub fn run() {
             load_openclaw_channel_accounts_snapshot,
             load_openclaw_channel_form_values,
             save_openclaw_channel_config,
+            install_openclaw_channel_plugin,
             save_openclaw_channel_binding,
             delete_openclaw_channel_account_config,
             delete_openclaw_channel_config,
@@ -10783,6 +11288,9 @@ pub fn run() {
             save_source_file,
             install_role_workflow_agent,
             remove_role_workflow_agent,
+            start_openclaw_channel_qr_binding,
+            poll_openclaw_channel_qr_binding,
+            clear_openclaw_channel_qr_binding_session,
             request_feishu_openclaw_qr,
             poll_feishu_openclaw_qr_result,
             open_external_url,
@@ -10800,7 +11308,7 @@ pub fn run() {
             }
 
             if let Err(error) = bootstrap_openclaw_runtime(true) {
-                eprintln!("[clawpet] openclaw bootstrap skipped: {error}");
+                eprintln!("[dragonclaw] openclaw bootstrap skipped: {error}");
             }
 
             #[cfg(desktop)]

@@ -8,7 +8,7 @@ import channelFeishuIcon from "../images/channels/feishu.svg";
 import channelQqIcon from "../images/channels/qq.svg";
 import channelTelegramIcon from "../images/channels/telegram.svg";
 import channelWecomIcon from "../images/channels/wecom.svg";
-import channelWechatIcon from "../images/channels/whatsapp.svg";
+import channelWeixinIcon from "../images/channels/weixin.svg";
 import packageJson from "../../package.json";
 import {
   DEFAULT_TASK_PROJECT_NAME,
@@ -39,19 +39,32 @@ type ChatStatus = "pending" | "done" | "error";
 type ChatMessageKind = "default" | "runtime_tool";
 type ChatToolStatus = "running" | "done" | "error";
 type AgentPaneTab = "staff" | "group" | "channel";
+type ChatQuickCreateActionId = "role" | "group" | "friend";
 type RelatedResourceTarget = "memory" | "skills" | "tools" | "model" | "channel" | "schedule";
 type RelatedSkillCategory = "builtIn" | "installed";
+type RelatedToolsFilter = string;
 type RelatedScheduleFilter = "all" | "enabled" | "stopped" | "disabled";
 type UtilityModalType = "history" | "logs";
+type ChatSettingsPanelMode = "agent" | "group" | "logs";
 type UtilityLogTab = "runtime" | "errorAnalysis";
 type UtilityLogDetailTab = "request" | "response" | "stream" | "raw";
 type UtilityLogCategory = "all" | "message" | "tool";
+type UtilityLogScheduleFilter = "all" | "scheduled" | "manual";
 type SidebarSettingsMenuGroupId = "general" | "providers" | "about";
 type SidebarSettingsAppearance = "system" | "light" | "dark";
 type SidebarSettingsLanguage = "zh-CN" | "en-US";
+type SidebarThemePreset = "elegant" | "frosted" | "pure-white";
+type SidebarThemeMode = "day" | "night";
+type SidebarAvatarCategoryId = "pixel" | "illustration" | "animal" | "cute";
 type SidebarSettingsMenuGroup = {
   id: SidebarSettingsMenuGroupId;
   label: string;
+};
+type SidebarAvatarOption = {
+  id: string;
+  label: string;
+  category: SidebarAvatarCategoryId;
+  url: string;
 };
 type OpenClawProviderProtocol = "openai" | "anthropic";
 type OpenClawProviderApiKind = "openai-completions" | "openai-responses" | "anthropic-messages";
@@ -85,6 +98,19 @@ type RoleWorkflowModalBase = {
 type RoleWorkflowDetailNotice = {
   tone: "success" | "error";
   text: string;
+};
+type CreateEmployeeModalStep = 1 | 2 | 3;
+type CreateEmployeeIdentityOption = {
+  id: string;
+  icon: string;
+  name: string;
+  desc: string;
+};
+type CreateEmployeeRuleItem = {
+  id: string;
+  text: string;
+  enabled: boolean;
+  custom?: boolean;
 };
 
 type TaskModuleView = "projects" | "board";
@@ -152,12 +178,58 @@ type AgentListItem = {
   groupKind: AgentGroupKind;
 };
 
+type ChatUserGroup = {
+  id: string;
+  name: string;
+  createdAt: number;
+};
+
+type ChatConversationGroup = {
+  id: string;
+  name: string;
+  memberAgentIds: string[];
+  createdAt: number;
+};
+
+type ChatUserCustomAgentKind = "friend" | "staff";
+type ChatUserCustomAgentKnowledgeScope = "general" | "specific" | "document";
+type ChatUserCustomAgent = {
+  agentId: string;
+  displayName: string;
+  createdAt: number;
+  kind?: ChatUserCustomAgentKind;
+  roleLabel?: string;
+  channel?: string;
+  workspace?: string;
+  currentWork?: string;
+  scheduledLabel?: string;
+  mission?: string;
+  tasks?: string[];
+  knowledgeScope?: ChatUserCustomAgentKnowledgeScope;
+  specificDomain?: string;
+};
+
+type ChatUserListSection = {
+  id: string;
+  title: string;
+  agents: AgentListItem[];
+  isDefault?: boolean;
+};
+
+type ChatComposerAttachment = {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+};
+
 type AgentChatMessage = {
   id: string;
   role: ChatRole;
   text: string;
   status: ChatStatus;
   createdAt: number;
+  attachments?: ChatComposerAttachment[];
   kind?: ChatMessageKind;
   toolName?: string;
   toolStatus?: ChatToolStatus;
@@ -249,6 +321,19 @@ type OpenClawChannelAccountsSnapshotResponse = {
   channels: OpenClawChannelGroupSnapshotItem[];
 };
 
+type ChannelPaneChatItem = {
+  id: string;
+  catalogId: string;
+  channelType: string;
+  name: string;
+  icon: string | null;
+  accountId: string;
+  summary: string;
+  statusLabel: string;
+  statusTone: AgentStatusTone;
+  boundAgentId: string | null;
+};
+
 type OpenClawPlatformSnapshotItem = {
   id: string;
   providerId: string;
@@ -310,6 +395,12 @@ type TaskSnapshotResponse = {
   jobs: TaskSnapshotItem[];
 };
 
+type TaskReminderPopupState = {
+  id: string;
+  job: TaskSnapshotItem;
+  queuedCount: number;
+};
+
 type OpenClawMessageLogItem = {
   id: string;
   sessionId?: string;
@@ -364,6 +455,17 @@ type FeishuOnboardingPollResponse = {
   tenantBrand: string | null;
 };
 
+type OpenClawChannelQrBindingSessionSnapshot = {
+  sessionId: string;
+  channelType: string;
+  status: string;
+  qrUrl: string | null;
+  detail: string | null;
+  logs: string[];
+  startedAtMs: number;
+  updatedAtMs: number;
+};
+
 type LobsterSnapshotResponse = {
   openclawInstalled: boolean;
   openclawVersion: string | null;
@@ -382,6 +484,19 @@ type LobsterActionResult = {
   backupPath: string | null;
 };
 
+type OpenClawChannelPluginInstallResult = {
+  channelType: string;
+  pluginId: string | null;
+  pluginSpec: string | null;
+  command: string;
+  success: boolean;
+  detail: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+};
+
 type StartupInstallStepStatus = "pending" | "installing" | "done" | "failed";
 type StartupInstallStep = {
   id: string;
@@ -391,31 +506,13 @@ type StartupInstallStep = {
 };
 
 type DashboardHealthTone = "online" | "warn" | "offline" | "neutral";
-type DashboardIconName =
-  | "platform"
-  | "request"
-  | "gateway"
-  | "latency"
-  | "tokenToday"
-  | "tokenWeek"
-  | "tokenTotal"
-  | "failure"
-  | "runtime"
-  | "channel"
-  | "model"
-  | "uptime"
-  | "memory"
-  | "message"
-  | "connected"
-  | "staff";
 
 type DashboardMetricCard = {
   id: string;
   label: string;
   value: string;
-  detail: string;
+  detail?: string;
   tone: DashboardHealthTone;
-  icon: DashboardIconName;
 };
 
 type DashboardActivityItem = {
@@ -459,11 +556,14 @@ type ChannelPaneConfigField = {
   description?: string;
 };
 
+type ChannelPaneConnectionMode = "form" | "qr";
+
 type ChannelPaneCatalogItem = {
   id: string;
   name: string;
   description: string;
   icon: string;
+  connectionMode?: ChannelPaneConnectionMode;
   aliases?: string[];
   backendChannelType?: string;
   docsUrl?: string;
@@ -510,6 +610,15 @@ const sidebarSettingsAppearanceOptions: Array<{ id: SidebarSettingsAppearance; l
   { id: "light", label: "浅色" },
   { id: "dark", label: "深色" }
 ];
+const sidebarThemePresetOptions: Array<{ id: SidebarThemePreset; label: string }> = [
+  { id: "elegant", label: "淡雅" },
+  { id: "frosted", label: "磨砂" },
+  { id: "pure-white", label: "纯白" }
+];
+const sidebarThemeModeOptions: Array<{ id: SidebarThemeMode; label: string }> = [
+  { id: "day", label: "日间" },
+  { id: "night", label: "夜间" }
+];
 const sidebarSettingsLanguageOptions: Array<{ id: SidebarSettingsLanguage; label: string }> = [
   { id: "zh-CN", label: "简体中文" },
   { id: "en-US", label: "English" }
@@ -525,6 +634,9 @@ const sidebarSettingsTips: string[] = [
 ];
 const SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY = "keai.desktop-pet.sidebar-settings.appearance";
 const SIDEBAR_SETTINGS_LANGUAGE_STORAGE_KEY = "keai.desktop-pet.sidebar-settings.language";
+const SIDEBAR_THEME_PRESET_STORAGE_KEY = "keai.desktop-pet.sidebar-theme.preset";
+const SIDEBAR_THEME_MODE_STORAGE_KEY = "keai.desktop-pet.sidebar-theme.mode";
+const SIDEBAR_AGENT_AVATAR_OVERRIDES_STORAGE_KEY = "keai.desktop-pet.sidebar-avatar.overrides";
 const packageVersionFallback =
   typeof packageJson.version === "string" && packageJson.version.trim() ? packageJson.version.trim() : "0.2.0";
 const FEISHU_CHANNEL_ID = "feishu";
@@ -533,6 +645,7 @@ const FEISHU_PLUGIN_PACKAGE_NAME = "@larksuite/openclaw-lark";
 const FEISHU_DOCS_URL = "https://www.feishu.cn/content/article/7613711414611463386";
 const FEISHU_APP_ID_PLACEHOLDER = "cli_xxxxxxxxxxxxxxxx";
 const FEISHU_APP_SECRET_PLACEHOLDER = "请输入飞书应用的 Secret";
+const CHANNEL_QR_BINDING_POLL_INTERVAL_MS = 2000;
 
 const taskProjectStorageKey = "keai.desktop-pet.task-projects";
 const taskStatusFlow: TaskBoardStatus[] = ["todo", "in_progress", "in_review", "done", "cancelled"];
@@ -546,16 +659,17 @@ const taskBoardColumns: TaskBoardColumn[] = [
 const agentPaneTabs: Array<{ id: AgentPaneTab; label: string }> = [
   { id: "staff", label: "数字员工" },
   { id: "channel", label: "频道" },
-  { id: "group", label: "群组" }
+  { id: "group", label: "团队" }
 ];
 const chatChannelCatalog: ChannelPaneCatalogItem[] = [
   {
-    id: "wechat",
+    id: "weixin",
     name: "微信",
     description: "微信消息触达与机器人接入",
-    icon: channelWechatIcon,
-    aliases: ["wx", "wechat_official_account", "wechat-official-account"],
-    instructions: ["保存配置后将自动启用微信频道。", "若你使用插件接入，请先确认插件已安装并启用。"],
+    icon: channelWeixinIcon,
+    connectionMode: "qr",
+    aliases: ["wechat", "wx", "wechat_official_account", "wechat-official-account", "openclaw-weixin", "openclaw_weixin"],
+    instructions: [],
     fields: []
   },
   {
@@ -580,13 +694,11 @@ const chatChannelCatalog: ChannelPaneCatalogItem[] = [
     name: "企业微信",
     description: "企业微信应用与群机器人",
     icon: channelWecomIcon,
-    aliases: ["workwechat", "wechatwork", "qywx"],
+    connectionMode: "qr",
+    aliases: ["workwechat", "wechatwork", "qywx", "openclaw-wecom", "openclaw_wecom"],
     docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/JTGnwoV0RixKPtkr4w7c7gpAnDc",
-    instructions: ["在企业微信管理后台创建应用并获取配置", "确保已启用接收消息服务器配置", "填写 Bot ID 和 Secret 后保存"],
-    fields: [
-      { key: "botId", label: "机器人 Bot ID", placeholder: "ww_xxxxxx", required: true },
-      { key: "secret", label: "应用 Secret", placeholder: "输入企业微信 Secret", required: true, secret: true }
-    ]
+    instructions: [],
+    fields: []
   },
   {
     id: "dingtalk",
@@ -596,16 +708,13 @@ const chatChannelCatalog: ChannelPaneCatalogItem[] = [
     aliases: ["dingding"],
     docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/Y5eNwiSiZidkLskrwtJc1rUln0b#doxcnr8KfaA2mNPeQUeHO83eDPh",
     instructions: [
-      "在钉钉开发者后台创建企业内部应用并开启 Stream 模式",
-      "填写 Client ID 与 Client Secret（必填）",
-      "Robot Code / Corp ID / Agent ID 按需填写"
+      "点击“安装钉钉插件”并完成组件安装",
+      "在钉钉开放平台创建应用，获取 Client ID 与 Client Secret",
+      "保存后返回频道列表检查连接状态"
     ],
     fields: [
-      { key: "clientId", label: "Client ID (AppKey)", placeholder: "dingxxxxxx", required: true },
-      { key: "clientSecret", label: "Client Secret (AppSecret)", placeholder: "输入应用密钥", required: true, secret: true },
-      { key: "robotCode", label: "Robot Code（可选）", placeholder: "通常与 Client ID 相同" },
-      { key: "corpId", label: "Corp ID（可选）", placeholder: "dingxxxxxx" },
-      { key: "agentId", label: "Agent ID（可选）", placeholder: "123456789" }
+      { key: "clientId", label: "Client ID", placeholder: "dingxxxx（在钉钉开放平台应用信息中获取）", required: true },
+      { key: "clientSecret", label: "Client Secret", placeholder: "在钉钉开放平台应用凭证中获取", required: true, secret: true }
     ]
   },
   {
@@ -630,14 +739,13 @@ const chatChannelCatalog: ChannelPaneCatalogItem[] = [
     aliases: ["tg"],
     docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/TjiGwxsMWi7hpDkDAQBc0ydMnEf#PL8ndvsEwoYVWIx1T4mcB1EvnSb",
     instructions: [
-      "打开 Telegram 并搜索 @BotFather",
-      "发送 /newbot 并按照说明操作，复制机器人令牌",
-      "从 @userinfobot 获取你的用户 ID",
-      "将令牌和允许用户 ID 填入后保存"
+      "在 Telegram 中搜索 @BotFather，发送 /newbot 创建机器人",
+      "按提示设置机器人名称，成功后 BotFather 会返回 Bot Token",
+      "将 Bot Token 填入下方表单并保存",
+      "把机器人拉入目标群，或私聊机器人完成授权"
     ],
     fields: [
-      { key: "botToken", label: "机器人令牌", placeholder: "123456:ABC-DEF...", required: true, secret: true },
-      { key: "allowedUsers", label: "允许的用户 ID", placeholder: "例如 123456789, 987654321", required: true }
+      { key: "botToken", label: "Bot Token", placeholder: "粘贴来自 @BotFather 的 Token", required: true, secret: true }
     ]
   },
   {
@@ -647,18 +755,22 @@ const chatChannelCatalog: ChannelPaneCatalogItem[] = [
     icon: channelDiscordIcon,
     docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/BkOywJYCAiYRN9k4KTTceKPMnxg#C9zjdBRT1oqZ4VxF8q7ceRxQnLk",
     instructions: [
-      "前往 Discord Developer Portal 创建应用并添加 Bot",
-      "复制 Bot Token，并启用 Message Content Intent",
-      "通过 OAuth2 URL Generator 生成邀请链接并拉机器人入群",
-      "填入 Token，按需补充服务器 ID 和频道 ID 后保存"
+      "打开 Discord Developer Portal，创建应用并添加 Bot",
+      "进入应用 > Bot 页面点击 Reset Token 获取 Bot Token，并开启 Message Content Intent",
+      "在下方填写凭证并生成授权链接，将机器人添加到目标服务器"
     ],
     fields: [
-      { key: "token", label: "机器人令牌", placeholder: "输入 Discord Bot Token", required: true, secret: true },
-      { key: "guildId", label: "服务器 ID", placeholder: "例如 123456789012345678" },
-      { key: "channelId", label: "频道 ID（可选）", placeholder: "例如 123456789012345678" }
+      { key: "appId", label: "Application ID", placeholder: "例如 1470267845714645176", required: true },
+      { key: "token", label: "Bot Token", placeholder: "从开发者门户 > Bot > Token 粘贴", required: true, secret: true }
     ]
   }
 ];
+const CHANNEL_CONFIG_GUIDED_LAYOUT_IDS = new Set(["dingtalk", "telegram", "discord"]);
+const CHANNEL_CONFIG_GUIDED_FIELD_ORDER: Record<string, string[]> = {
+  dingtalk: ["clientId", "clientSecret"],
+  telegram: ["botToken"],
+  discord: ["appId", "token"]
+};
 const chatChannelCatalogMap = new Map<string, ChannelPaneCatalogItem>(chatChannelCatalog.map((channel) => [channel.id, channel]));
 const chatChannelAliasMap = new Map<string, string>();
 for (const channel of chatChannelCatalog) {
@@ -674,7 +786,7 @@ for (const alias of ["ding-talk", "ding_talk"]) {
   chatChannelAliasMap.set(alias, "dingtalk");
 }
 for (const alias of ["wechat-official", "wechat_service"]) {
-  chatChannelAliasMap.set(alias, "wechat");
+  chatChannelAliasMap.set(alias, "weixin");
 }
 for (const alias of ["tencent-qq"]) {
   chatChannelAliasMap.set(alias, "qq");
@@ -693,11 +805,98 @@ const agentAvatarPool = Object.entries(agentAvatarModules)
   .sort(([leftPath], [rightPath]) => leftPath.localeCompare(rightPath, "en"))
   .map(([, url]) => url)
   .filter((url) => typeof url === "string" && url.trim().length > 0);
+const SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY = 14;
+const SIDEBAR_AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
+const sidebarAvatarCategoryTabs: Array<{ id: SidebarAvatarCategoryId; label: string }> = [
+  { id: "pixel", label: "像素风" },
+  { id: "illustration", label: "插画" },
+  { id: "animal", label: "动物" },
+  { id: "cute", label: "手绘风" }
+];
+const SIDEBAR_PIXEL_AVATAR_PALETTES = [
+  { bg: "#6f85ff", frame: "#4156aa", skin: "#f6cfaf", hair: "#22273d", eye: "#0d1224", top: "#eef2ff", accent: "#9eb0ff" },
+  { bg: "#5db4ff", frame: "#2f709f", skin: "#f8d8ba", hair: "#5e3a24", eye: "#122039", top: "#f8f1e7", accent: "#9ad5ff" },
+  { bg: "#7fda9a", frame: "#3b8a57", skin: "#f2cdb2", hair: "#253243", eye: "#152238", top: "#f4fff3", accent: "#9ce8b4" },
+  { bg: "#ffa6a6", frame: "#b35f63", skin: "#f9d5be", hair: "#3b2b2b", eye: "#23161b", top: "#fff3f3", accent: "#ffc9c9" },
+  { bg: "#c695ff", frame: "#6c4ba8", skin: "#f7d7c5", hair: "#2c2148", eye: "#101026", top: "#f5ecff", accent: "#dac1ff" },
+  { bg: "#f4ca6b", frame: "#ad8435", skin: "#f4cfb2", hair: "#2f2a1e", eye: "#1b1a15", top: "#fff7e4", accent: "#f8de9f" },
+  { bg: "#6dd0c8", frame: "#2d857d", skin: "#f5d8c0", hair: "#2f3c31", eye: "#0d1c16", top: "#ebfffb", accent: "#9be5de" },
+  { bg: "#8db6ff", frame: "#4f71b8", skin: "#f6d1b9", hair: "#2f2f4f", eye: "#121a33", top: "#eef5ff", accent: "#c0d4ff" },
+  { bg: "#ffb774", frame: "#b8713f", skin: "#f7d9c1", hair: "#3f2f21", eye: "#20150f", top: "#fff2e3", accent: "#ffd3a8" },
+  { bg: "#97e58e", frame: "#51914a", skin: "#f5d4ba", hair: "#2a3b2d", eye: "#132018", top: "#f3fff0", accent: "#bdf0b7" },
+  { bg: "#ff95d8", frame: "#b75493", skin: "#f8d6c6", hair: "#3e2442", eye: "#1f1231", top: "#fff0fb", accent: "#ffc5ea" },
+  { bg: "#79d5ff", frame: "#3f7ea6", skin: "#f6d7bd", hair: "#213246", eye: "#122130", top: "#ecf8ff", accent: "#afe4ff" },
+  { bg: "#a6b1ff", frame: "#5f6ab7", skin: "#f7d8c0", hair: "#2e2d54", eye: "#171734", top: "#f1f3ff", accent: "#cad0ff" },
+  { bg: "#ffae98", frame: "#b86455", skin: "#f8d4bc", hair: "#3f3028", eye: "#241a16", top: "#fff1ed", accent: "#ffd2c7" }
+] as const;
+const SIDEBAR_HANDDRAWN_AVATAR_PALETTES = [
+  { bg: "#2d6ff5", skin: "#f6dfe2", hair: "#f8f8f8", top: "#071737", lens: "#7262df", accent: "#f08e8e" },
+  { bg: "#4e7dff", skin: "#f9dfcc", hair: "#273245", top: "#0f233f", lens: "#6cb5ff", accent: "#ef9a87" },
+  { bg: "#4abf9a", skin: "#f7dbc8", hair: "#232d2f", top: "#102635", lens: "#8f7cff", accent: "#f19680" },
+  { bg: "#7b74ff", skin: "#f3d6db", hair: "#efeef9", top: "#101d44", lens: "#5a78ff", accent: "#e88692" },
+  { bg: "#5a9df6", skin: "#f8ddc9", hair: "#f2e1c5", top: "#112548", lens: "#6f8fff", accent: "#f2a57f" },
+  { bg: "#3e8ddf", skin: "#f6d7c9", hair: "#412f28", top: "#0d1b3a", lens: "#8b6ee9", accent: "#ee8f8c" },
+  { bg: "#3570cf", skin: "#f5dad2", hair: "#f0f5ff", top: "#0a1a38", lens: "#7d6ce3", accent: "#eb9287" }
+] as const;
+const sidebarAvatarPresetOptions = buildSidebarAvatarPresetOptions();
 
 const CHAT_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-history";
 const SESSION_STORAGE_PREFIX = "keai.desktop-pet.openclaw.session-id";
 const CHAT_ARCHIVE_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-archives";
+const CHAT_USER_GROUPS_STORAGE_KEY = "keai.desktop-pet.chat-user-groups";
+const CHAT_USER_GROUP_MEMBERSHIP_STORAGE_KEY = "keai.desktop-pet.chat-user-group-membership";
+const CHAT_CONVERSATION_GROUPS_STORAGE_KEY = "keai.desktop-pet.chat-conversation-groups";
+const CHAT_USER_AGENT_ORDER_STORAGE_KEY = "keai.desktop-pet.chat-user-agent-order";
+const CHAT_USER_COLLAPSED_SECTIONS_STORAGE_KEY = "keai.desktop-pet.chat-user-collapsed-sections";
+const CHAT_USER_CUSTOM_AGENTS_STORAGE_KEY = "keai.desktop-pet.chat-user-custom-agents";
+const CHAT_USER_PINNED_GROUP_ID = "builtin:pinned";
+const CHAT_CONVERSATION_GROUP_AGENT_PREFIX = "chat-group:";
 const ROLE_WORKFLOW_OVERRIDES_STORAGE_KEY = "keai.desktop-pet.role-workflow-overrides";
+const RECRUITMENT_DIVISION_FILTER_ALL = "__all__";
+const CREATE_EMPLOYEE_IDENTITY_OPTIONS: CreateEmployeeIdentityOption[] = [
+  { id: "efficiency", icon: "🧮", name: "效率专家", desc: "擅长分析、规划、总结" },
+  { id: "creative", icon: "🎨", name: "创意伙伴", desc: "擅长写作、头脑风暴、设计" },
+  { id: "coach", icon: "👨‍🏫", name: "知识教练", desc: "擅长教学、解释、答疑" },
+  { id: "advisor", icon: "💼", name: "专业顾问", desc: "模拟法律、财务、技术等角色" },
+  { id: "companion", icon: "😄", name: "趣味玩伴", desc: "擅长聊天、游戏、角色扮演" },
+  { id: "researcher", icon: "🔍", name: "研究助手", desc: "擅长查找、对比、调研" }
+];
+const CREATE_EMPLOYEE_RANDOM_NAMES = [
+  "财税小专家",
+  "灵感火花",
+  "决策导航仪",
+  "行程百事通",
+  "代码医生",
+  "创意引擎",
+  "学习伙伴",
+  "分析大师",
+  "写作助手",
+  "策划专家",
+  "翻译官",
+  "记忆管家"
+];
+const CREATE_EMPLOYEE_TASK_EXAMPLES = [
+  "生成会议纪要",
+  "润色邮件文案",
+  "生成Python代码片段",
+  "进行SWOT分析",
+  "制定旅行计划",
+  "总结长篇文章"
+];
+const CREATE_EMPLOYEE_STEPS: Array<{ id: CreateEmployeeModalStep; label: string }> = [
+  { id: 1, label: "定义身份" },
+  { id: 2, label: "设定能力" },
+  { id: 3, label: "调整性格" }
+];
+const CREATE_EMPLOYEE_DEFAULT_RULES: CreateEmployeeRuleItem[] = [
+  { id: "rule-reference", text: "所有建议仅供参考，不构成专业（医疗/法律/财务）意见。", enabled: true },
+  { id: "rule-safe", text: "回答应安全、合规、健康。", enabled: true },
+  { id: "rule-honest", text: "在不确定答案时，应诚实告知。", enabled: true }
+];
+const CREATE_EMPLOYEE_MAX_TASKS = 20;
+const CREATE_EMPLOYEE_MAX_RULES = 12;
+const UTILITY_LOG_ROLE_FILTER_ACTIVE = "__active__";
+const UTILITY_LOG_ROLE_FILTER_ALL = "__all__";
 const ROLE_WORKFLOW_INSTALL_PROMPT_PREFIX = "请根据以下角色信息创建 agent:";
 const STARTUP_OPENCLAW_STEPS_BASE: Array<Omit<StartupInstallStep, "status">> = [
   { id: "env", title: "检测环境", etaLabel: "" },
@@ -718,10 +917,72 @@ const LOCKED_STARTUP_OPENCLAW_PROVIDER = {
 const activeSection = ref<SidebarSection>("chat");
 const activeAgentPaneTab = ref<AgentPaneTab>("staff");
 const searchQuery = ref("");
+const chatUserGroups = ref<ChatUserGroup[]>(loadChatUserGroups());
+const chatConversationGroups = ref<ChatConversationGroup[]>(loadChatConversationGroups());
+const chatUserCustomAgents = ref<ChatUserCustomAgent[]>(loadChatUserCustomAgents());
+const chatUserGroupMembership = ref<Record<string, string>>(loadChatUserGroupMembership());
+const chatUserAgentOrder = ref<string[]>(loadChatUserAgentOrder());
+const chatUserCollapsedSections = ref<Record<string, boolean>>(loadChatUserCollapsedSections());
+const chatUserDragAgentId = ref<string | null>(null);
+const chatUserDragOverAgentId = ref<string | null>(null);
+const chatUserDragSectionId = ref<string | null>(null);
+const isCreateChatUserGroupModalOpen = ref(false);
+const createChatUserGroupDraft = ref("");
+const createChatUserGroupError = ref("");
+const createChatUserGroupSearch = ref("");
+const createChatUserGroupInputRef = ref<HTMLInputElement | null>(null);
+const createChatUserGroupSelectedAgentIds = ref<string[]>([]);
+const CREATE_CHAT_USER_GROUP_MAX_MEMBERS = 10;
+const isCreateEmployeeModalOpen = ref(false);
+const createEmployeeStep = ref<CreateEmployeeModalStep>(1);
+const createEmployeeError = ref("");
+const createEmployeeNotice = ref("");
+const createEmployeeNameInputRef = ref<HTMLInputElement | null>(null);
+const createEmployeeTaskInputRef = ref<HTMLInputElement | null>(null);
+const createEmployeeNameDraft = ref("");
+const createEmployeeSelectedIdentityIds = ref<string[]>([]);
+const createEmployeeMissionDraft = ref("");
+const createEmployeeTasks = ref<string[]>([]);
+const createEmployeeTaskInput = ref("");
+const createEmployeeKnowledgeScope = ref<ChatUserCustomAgentKnowledgeScope>("general");
+const createEmployeeSpecificDomain = ref("");
+const createEmployeeFormality = ref(50);
+const createEmployeeDetail = ref(50);
+const createEmployeeOpeningLine = ref("");
+const createEmployeeRules = ref<CreateEmployeeRuleItem[]>(
+  CREATE_EMPLOYEE_DEFAULT_RULES.map((rule) => ({
+    ...rule
+  }))
+);
+const isChatQuickCreateMenuOpen = ref(false);
+const chatQuickCreateMenuRef = ref<HTMLElement | null>(null);
+const isChatAgentContextMenuOpen = ref(false);
+const chatAgentContextMenuRef = ref<HTMLElement | null>(null);
+const chatAgentContextMenuAgentId = ref<string | null>(null);
+const chatAgentContextMenuPosition = ref({ x: 0, y: 0 });
+const isSidebarThemePopoverOpen = ref(false);
+const sidebarThemeQuickActionRef = ref<HTMLElement | null>(null);
+const isSidebarProfilePopoverOpen = ref(false);
+const sidebarProfilePanelRef = ref<HTMLElement | null>(null);
+const sidebarProfileTriggerRef = ref<HTMLElement | null>(null);
+const sidebarAvatarUploadInputRef = ref<HTMLInputElement | null>(null);
+const sidebarAvatarUploadError = ref("");
+const sidebarProfileNotice = ref("");
+const sidebarAvatarPresetCategory = ref<SidebarAvatarCategoryId>("pixel");
+const sidebarAgentAvatarOverrides = ref<Record<string, string>>(loadSidebarAvatarOverrides());
 const chatInput = ref("");
+const chatAttachmentInputRef = ref<HTMLInputElement | null>(null);
+const chatAttachments = ref<ChatComposerAttachment[]>([]);
+const chatComposerError = ref("");
+const chatComposerInputRef = ref<HTMLTextAreaElement | null>(null);
+const CHAT_COMPOSER_MIN_ROWS = 3;
+const CHAT_COMPOSER_MAX_ROWS = 8;
+const CHAT_COMPOSER_MAX_ATTACHMENT_COUNT = 5;
+const CHAT_COMPOSER_MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const isSending = ref(false);
 const agents = ref<AgentListItem[]>([]);
 const selectedAgentId = ref<string | null>(null);
+const activeChannelChatSession = ref<ChannelPaneChatItem | null>(null);
 const chatMessages = ref<AgentChatMessage[]>([]);
 const runtimeToolSyncContext = ref<RuntimeToolSyncContext | null>(null);
 const expandedRuntimeToolMessages = ref<Record<string, boolean>>({});
@@ -745,12 +1006,23 @@ const taskDraftPriority = ref<TaskRecord["priority"]>("p1");
 const taskDragTaskId = ref<string | null>(null);
 const taskDragOverStatus = ref<TaskBoardStatus | null>(null);
 const isAgentSettingsOpen = ref(false);
+const chatSettingsPanelMode = ref<ChatSettingsPanelMode>("agent");
 const isSidebarLogsOpen = ref(false);
 const isSidebarSettingsModalOpen = ref(false);
 const sidebarSettingsActiveGroup = ref<SidebarSettingsMenuGroupId>("general");
 const sidebarSettingsAppearance = ref<SidebarSettingsAppearance>(
   normalizeSidebarSettingsAppearance(safeStorageGet(SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY))
 );
+const sidebarThemePreset = ref<SidebarThemePreset>(normalizeSidebarThemePreset(safeStorageGet(SIDEBAR_THEME_PRESET_STORAGE_KEY)));
+const sidebarThemeMode = ref<SidebarThemeMode>(normalizeSidebarThemeMode(safeStorageGet(SIDEBAR_THEME_MODE_STORAGE_KEY)));
+const sidebarThemeModeActiveIndex = computed(() => {
+  const index = sidebarThemeModeOptions.findIndex((mode) => mode.id === sidebarThemeMode.value);
+  return index >= 0 ? index : 0;
+});
+const sidebarThemePresetActiveIndex = computed(() => {
+  const index = sidebarThemePresetOptions.findIndex((preset) => preset.id === sidebarThemePreset.value);
+  return index >= 0 ? index : 0;
+});
 const sidebarSettingsLanguage = ref<SidebarSettingsLanguage>(
   normalizeSidebarSettingsLanguage(safeStorageGet(SIDEBAR_SETTINGS_LANGUAGE_STORAGE_KEY))
 );
@@ -761,6 +1033,7 @@ const sidebarSettingsAppVersion = ref(`v${packageVersionFallback}`);
 const sidebarSettingsFeedbackDraft = ref("");
 const sidebarSettingsNotice = ref("");
 const sidebarSettingsError = ref("");
+let cleanupSystemThemeModeListener: (() => void) | null = null;
 const isProxyConfigModalOpen = ref(false);
 const proxyConfigLoading = ref(false);
 const proxyConfigSaving = ref(false);
@@ -782,7 +1055,17 @@ const relatedModelDraft = ref<RelatedModelDraft | null>(null);
 const relatedModelCustomExpanded = ref(false);
 const relatedChannelSnapshot = ref<OpenClawChannelAccountsSnapshotResponse | null>(null);
 const relatedTaskSnapshot = ref<TaskSnapshotResponse | null>(null);
+const taskReminderPopup = ref<TaskReminderPopupState | null>(null);
+const taskReminderQueue = ref<TaskSnapshotItem[]>([]);
+const taskReminderSeenKeys = new Set<string>();
+const taskReminderAutoCloseMs = 7200;
+const taskReminderPollIntervalMs = 10000;
+let taskReminderPollTimer = 0;
+let taskReminderAutoCloseTimer = 0;
+let taskReminderBootstrapped = false;
 const relatedSkillCategory = ref<RelatedSkillCategory>("builtIn");
+const RELATED_TOOLS_FILTER_ALL = "__all__";
+const relatedToolsFilter = ref<RelatedToolsFilter>(RELATED_TOOLS_FILTER_ALL);
 const relatedScheduleFilter = ref<RelatedScheduleFilter>("all");
 const relatedSkillSearch = ref("");
 const relatedMemorySearch = ref("");
@@ -814,9 +1097,21 @@ const channelConfigAccountId = ref("");
 const channelConfigAllowEditAccountId = ref(false);
 const channelConfigExistingAccountIds = ref<string[]>([]);
 const channelConfigForm = ref<Record<string, string>>({});
+const channelConfigNotice = ref("");
 const channelConfigError = ref("");
 const channelConfigSaving = ref(false);
+const channelConfigSyncing = ref(false);
 const channelConfigSecretVisibility = ref<Record<string, boolean>>({});
+const channelQrBindingStarting = ref(false);
+const channelQrBindingSessionId = ref("");
+const channelQrBindingChannelType = ref("");
+const channelQrBindingSnapshot = ref<OpenClawChannelQrBindingSessionSnapshot | null>(null);
+let channelQrBindingPollTimer = 0;
+const isChannelBindingModalOpen = ref(false);
+const channelBindingModalItem = ref<ChannelPaneChatItem | null>(null);
+const channelBindingTargetAgentId = ref("");
+const channelBindingSaving = ref(false);
+const channelBindingError = ref("");
 const utilityModalType = ref<UtilityModalType | null>(null);
 const utilityModalLoading = ref(false);
 const utilityModalError = ref("");
@@ -833,12 +1128,15 @@ const dashboardJsHeapUsageMb = ref<number | null>(null);
 const utilityLogTab = ref<UtilityLogTab>("runtime");
 const utilityLogDetailTab = ref<UtilityLogDetailTab>("response");
 const utilityRuntimeCategory = ref<UtilityLogCategory>("all");
+const utilityRuntimeRoleFilter = ref(UTILITY_LOG_ROLE_FILTER_ACTIVE);
+const utilityRuntimeScheduleFilter = ref<UtilityLogScheduleFilter>("all");
 const utilitySelectedLogId = ref<string | null>(null);
 const runtimeToolSyncWindowMs = 180000;
 const runtimeToolSyncPostResponseWindowMs = 4000;
 const runtimeToolSyncRetryDelayMs = 400;
 let runtimeToolSyncRetryTimer = 0;
 const recruitmentKeyword = ref("");
+const recruitmentDivisionFilter = ref(RECRUITMENT_DIVISION_FILTER_ALL);
 const recruitmentDivisions = loadAgencyRosterZh();
 const roleWorkflowOverrides = ref<Record<string, RoleWorkflowOverride>>(loadRoleWorkflowOverrides());
 const roleWorkflowDetailRoleId = ref<string | null>(null);
@@ -882,6 +1180,11 @@ const utilityRuntimeCategories: Array<{ id: UtilityLogCategory; label: string }>
   { id: "message", label: "消息日志" },
   { id: "tool", label: "工具调用日志" }
 ];
+const utilityRuntimeScheduleFilters: Array<{ id: UtilityLogScheduleFilter; label: string }> = [
+  { id: "all", label: "全部调用" },
+  { id: "scheduled", label: "仅定时任务" },
+  { id: "manual", label: "排除定时任务" }
+];
 const relatedModelProtocolOptions: Array<{ id: OpenClawProviderApiKind; label: string }> = [
   { id: "openai-completions", label: "OpenAI Completions" },
   { id: "openai-responses", label: "OpenAI Responses" },
@@ -899,8 +1202,8 @@ const skillMarketCategories: SkillMarketCategoryOption[] = [
   { id: "communication-collaboration", label: "沟通协同", hint: "协作与集成", apiCategory: "communication-collaboration" }
 ];
 const marketTabs: MarketTabOption[] = [
-  { id: "fuel-pack", label: "加油包" },
-  { id: "monthly-membership", label: "月度会员" }
+  { id: "fuel-pack", label: "会员套餐" },
+  { id: "monthly-membership", label: "智慧流程" }
 ];
 const marketPlansByTab: Record<MarketTabId, MarketPlanCard[]> = {
   "fuel-pack": [
@@ -1011,11 +1314,1222 @@ function safeStorageSet(key: string, value: string) {
   }
 }
 
+function loadSidebarAvatarOverrides() {
+  const raw = safeStorageGet(SIDEBAR_AGENT_AVATAR_OVERRIDES_STORAGE_KEY);
+  if (!raw) {
+    return {} as Record<string, string>;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {} as Record<string, string>;
+    }
+    const result: Record<string, string> = {};
+    for (const [rawAgentId, rawUrl] of Object.entries(parsed as Record<string, unknown>)) {
+      const agentId = rawAgentId.trim();
+      const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
+      if (!agentId || !url || url.length > 2_000_000) {
+        continue;
+      }
+      result[agentId] = url;
+    }
+    return result;
+  } catch {
+    return {} as Record<string, string>;
+  }
+}
+
+function persistSidebarAvatarOverrides() {
+  safeStorageSet(SIDEBAR_AGENT_AVATAR_OVERRIDES_STORAGE_KEY, JSON.stringify(sidebarAgentAvatarOverrides.value));
+}
+
+function createEmojiAvatarDataUrl(emoji: string, startColor: string, endColor: string) {
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="${startColor}" />
+      <stop offset="100%" stop-color="${endColor}" />
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="48" fill="url(#bg)" />
+  <circle cx="48" cy="48" r="45" fill="none" stroke="rgba(255,255,255,0.34)" stroke-width="2" />
+  <text x="48" y="57" text-anchor="middle" font-size="42">${emoji}</text>
+</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function createLabelAvatarDataUrl(label: string, startColor: string, endColor: string) {
+  const safeLabel = label.trim().slice(0, 3).toUpperCase() || "AV";
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="${startColor}" />
+      <stop offset="100%" stop-color="${endColor}" />
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="48" fill="url(#bg)" />
+  <circle cx="48" cy="48" r="45" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="2" />
+  <text
+    x="48"
+    y="56"
+    text-anchor="middle"
+    font-size="24"
+    font-weight="700"
+    fill="rgba(255,255,255,0.95)"
+    font-family="Arial, Helvetica, sans-serif"
+  >${safeLabel}</text>
+</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function createPixelAvatarDataUrl(index: number) {
+  const palette = SIDEBAR_PIXEL_AVATAR_PALETTES[index % SIDEBAR_PIXEL_AVATAR_PALETTES.length];
+  const cells: string[] = [];
+  const px = 6;
+  const block = (x: number, y: number, w: number, h: number, color: string) =>
+    `<rect x="${x * px}" y="${y * px}" width="${w * px}" height="${h * px}" fill="${color}" />`;
+  const push = (x: number, y: number, w: number, h: number, color: string) => {
+    cells.push(block(x, y, w, h, color));
+  };
+
+  push(0, 0, 16, 16, palette.bg);
+  push(1, 1, 14, 14, palette.frame);
+  push(2, 2, 12, 12, palette.bg);
+  push(3, 3, 10, 6, palette.skin);
+
+  const hairVariant = index % 7;
+  if (hairVariant === 0) {
+    push(3, 2, 10, 2, palette.hair);
+    push(3, 4, 1, 3, palette.hair);
+    push(12, 4, 1, 3, palette.hair);
+  } else if (hairVariant === 1) {
+    push(3, 2, 9, 2, palette.hair);
+    push(3, 4, 2, 2, palette.hair);
+    push(11, 3, 2, 4, palette.hair);
+  } else if (hairVariant === 2) {
+    push(3, 2, 10, 3, palette.hair);
+    push(5, 5, 2, 1, palette.hair);
+    push(9, 5, 2, 1, palette.hair);
+  } else if (hairVariant === 3) {
+    push(3, 2, 10, 2, palette.hair);
+    push(4, 4, 2, 2, palette.hair);
+    push(10, 4, 2, 2, palette.hair);
+    push(3, 5, 1, 2, palette.hair);
+    push(12, 5, 1, 2, palette.hair);
+  } else if (hairVariant === 4) {
+    push(2, 2, 12, 2, palette.hair);
+    push(3, 4, 10, 2, palette.hair);
+    push(3, 6, 1, 1, palette.hair);
+    push(12, 6, 1, 1, palette.hair);
+  } else if (hairVariant === 5) {
+    push(3, 2, 10, 2, palette.hair);
+    push(4, 4, 8, 1, palette.hair);
+    push(3, 5, 2, 2, palette.hair);
+  } else {
+    push(3, 2, 10, 2, palette.hair);
+    push(4, 4, 8, 2, palette.hair);
+    push(3, 6, 2, 1, palette.hair);
+    push(11, 6, 2, 1, palette.hair);
+  }
+
+  push(6, 6, 1, 1, palette.eye);
+  push(9, 6, 1, 1, palette.eye);
+  push(7, 8, 2, 1, palette.accent);
+  push(3, 10, 10, 2, palette.top);
+  push(2, 12, 12, 3, palette.top);
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" shape-rendering="crispEdges">
+  ${cells.join("\n  ")}
+</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function createHandDrawnAvatarDataUrl(index: number) {
+  const baseCount = SIDEBAR_HANDDRAWN_AVATAR_PALETTES.length;
+  const palette = SIDEBAR_HANDDRAWN_AVATAR_PALETTES[index % baseCount];
+  const variant = index % baseCount;
+  const mirrored = Math.floor(index / baseCount) % 2 === 1;
+  let portrait = "";
+
+  if (variant === 0) {
+    portrait = `
+  <path d="M0 96h96V74c-9-8-21-12-34-12s-23 2-35 9L0 96z" fill="${palette.top}" />
+  <rect x="42" y="58" width="10" height="12" rx="4.5" fill="${palette.skin}" />
+  <ellipse cx="48" cy="42" rx="20" ry="21" fill="${palette.skin}" />
+  <path d="M17 44c3-18 17-31 33-31 15 0 30 9 31 33-8-8-19-8-28-6-16 3-25 5-36 4z" fill="${palette.hair}" />
+  <ellipse cx="17" cy="50" rx="9" ry="8" fill="${palette.hair}" />
+  <ellipse cx="79" cy="50" rx="9" ry="8" fill="${palette.hair}" />
+  <circle cx="35" cy="44" r="9.6" fill="none" stroke="#11192f" stroke-width="2.2" />
+  <circle cx="60.5" cy="44" r="9.6" fill="none" stroke="#11192f" stroke-width="2.2" />
+  <rect x="44.4" y="42.6" width="7" height="2.5" rx="1.25" fill="#11192f" />
+  <circle cx="34.4" cy="44.2" r="3.5" fill="#0f1630" />
+  <circle cx="61.2" cy="44.2" r="3.5" fill="#0f1630" />
+  <circle cx="35.2" cy="42.8" r="1.1" fill="#f4f8ff" />
+  <circle cx="61.8" cy="42.8" r="1.1" fill="#f4f8ff" />
+  <ellipse cx="30" cy="50.8" rx="3.6" ry="2.5" fill="${palette.accent}" opacity="0.35" />
+  <ellipse cx="66.4" cy="50.8" rx="3.6" ry="2.5" fill="${palette.accent}" opacity="0.35" />
+  <circle cx="47.7" cy="52.1" r="1.2" fill="${palette.accent}" />
+  <path d="M45.8 57.2c.9.6 1.5.8 2.2.8s1.3-.2 2.2-.8" fill="none" stroke="${palette.accent}" stroke-width="1.5" stroke-linecap="round" />
+`;
+  } else if (variant === 1) {
+    portrait = `
+  <path d="M0 96h96V73c-7-7-18-11-31-13-9-1-18 0-27 3-14 5-24 14-38 33z" fill="${palette.top}" />
+  <path d="M34 59c4 3 8 4 13 4 5 0 9-1 14-4v-9H34z" fill="${palette.skin}" />
+  <ellipse cx="49" cy="41.2" rx="19.5" ry="20.5" fill="${palette.skin}" />
+  <path d="M25 21c5-7 13-10 24-10 14 0 24 6 27 17l-2 49H63l-1-42H39l-2 42H23V28c0-3 .7-5 2-7z" fill="${palette.hair}" />
+  <path d="M31 34c5-9 11-13 18-13 8 0 14 4 20 12-7-2-13-2-19 0-6 2-12 2-19 1z" fill="${palette.hair}" />
+  <path d="M29.5 43h16l-2.8 2.6h-12.2z" fill="#11182f" />
+  <path d="M52 43h16.5l-2.8 2.6H51.8z" fill="#11182f" />
+  <rect x="45.2" y="43.4" width="4.4" height="2" rx="1" fill="#11182f" />
+  <ellipse cx="37.2" cy="44.1" rx="4.1" ry="4.2" fill="${palette.lens}" fill-opacity="0.72" />
+  <ellipse cx="60.2" cy="44.1" rx="4.1" ry="4.2" fill="${palette.lens}" fill-opacity="0.72" />
+  <circle cx="37.2" cy="44.1" r="2.3" fill="#151e38" />
+  <circle cx="60.2" cy="44.1" r="2.3" fill="#151e38" />
+  <path d="M35.3 35.2c2.2-1 4.3-1 6.5 0" fill="none" stroke="#1c2442" stroke-width="1.6" stroke-linecap="round" />
+  <path d="M56.8 35.2c2.2-1 4.3-1 6.5 0" fill="none" stroke="#1c2442" stroke-width="1.6" stroke-linecap="round" />
+  <circle cx="70" cy="50" r="1.5" fill="#131a31" />
+  <ellipse cx="48.6" cy="56.5" rx="2.4" ry="1.1" fill="${palette.accent}" />
+`;
+  } else if (variant === 2) {
+    portrait = `
+  <path d="M0 96h96V74c-12-10-23-13-38-13-10 0-21 3-30 8L0 96z" fill="${palette.top}" />
+  <path d="M42 58h9v11h-9z" fill="${palette.skin}" />
+  <path d="M34 59c3 2 7 3 11 3 5 0 10-2 14-5v14H34z" fill="${palette.top}" />
+  <ellipse cx="47" cy="41" rx="18.5" ry="20" fill="${palette.skin}" />
+  <path d="M23 38c5-14 15-25 28-25 11 0 21 6 28 16-11 1-19 4-27 8-9 5-18 7-29 7V38z" fill="${palette.hair}" />
+  <path d="M24 32h48v3H24z" fill="#090f21" />
+  <path d="M23 38c0 13 4 20 12 29h34c6-8 9-16 9-29-8 9-16 11-25 12-9 1-19-2-30-12z" fill="${palette.hair}" />
+  <circle cx="32" cy="43" r="9" fill="none" stroke="#10192f" stroke-width="2" />
+  <ellipse cx="58.2" cy="43.2" rx="10.2" ry="8.4" fill="none" stroke="#10192f" stroke-width="2" />
+  <rect x="41.6" y="42.1" width="6.1" height="1.9" rx="0.95" fill="#10192f" />
+  <circle cx="32.4" cy="43.6" r="3.1" fill="#11192f" />
+  <ellipse cx="58.5" cy="43.6" rx="3.4" ry="3.1" fill="#11192f" />
+  <ellipse cx="27.2" cy="50.4" rx="3.6" ry="2.4" fill="${palette.accent}" opacity="0.35" />
+  <ellipse cx="62.7" cy="50.1" rx="3.4" ry="2.2" fill="${palette.accent}" opacity="0.35" />
+  <path d="M45.8 55.5c1 .6 1.9.9 3 .9 1 0 2-.3 3-.9" fill="none" stroke="${palette.accent}" stroke-width="1.4" stroke-linecap="round" />
+  <circle cx="18.6" cy="44.2" r="4.5" fill="${palette.skin}" />
+  <circle cx="18.1" cy="44.1" r="1.7" fill="${palette.accent}" opacity="0.5" />
+`;
+  } else if (variant === 3) {
+    portrait = `
+  <path d="M0 96h96V72c-8-7-20-10-33-10-15 0-25 4-36 12L0 96z" fill="${palette.top}" />
+  <rect x="43" y="58" width="10" height="11" rx="4.5" fill="${palette.skin}" />
+  <ellipse cx="48" cy="42" rx="19" ry="20" fill="${palette.skin}" />
+  <path d="M22 33c4-13 15-21 28-21 12 0 22 6 27 16v38H61l-1-28H36l-1 28H22V33z" fill="${palette.hair}" />
+  <path d="M28 36h40v4H28z" fill="${palette.hair}" />
+  <circle cx="34.5" cy="44" r="10.3" fill="none" stroke="#101a31" stroke-width="2.5" />
+  <circle cx="60.6" cy="44" r="10.3" fill="none" stroke="#101a31" stroke-width="2.5" />
+  <rect x="44.7" y="42.2" width="6.2" height="2.6" rx="1.3" fill="#101a31" />
+  <circle cx="34.5" cy="44" r="5.8" fill="${palette.lens}" fill-opacity="0.7" />
+  <circle cx="60.6" cy="44" r="5.8" fill="${palette.lens}" fill-opacity="0.7" />
+  <circle cx="34.5" cy="44.3" r="2.9" fill="#0f1730" />
+  <circle cx="60.6" cy="44.3" r="2.9" fill="#0f1730" />
+  <path d="M28.8 35.2c2.1-1.4 4.3-1.8 6.7-1.1" fill="none" stroke="#6b8ff2" stroke-width="1.5" stroke-linecap="round" />
+  <path d="M56.8 35.2c2.1-1.4 4.3-1.8 6.7-1.1" fill="none" stroke="#6b8ff2" stroke-width="1.5" stroke-linecap="round" />
+  <circle cx="72.7" cy="47.8" r="1.8" fill="#11192f" />
+  <path d="M45.1 56.2c1.2.4 1.9.5 2.9.5 1.1 0 2-.2 3.1-.8" fill="none" stroke="${palette.accent}" stroke-width="1.4" stroke-linecap="round" />
+`;
+  } else if (variant === 4) {
+    portrait = `
+  <path d="M0 96h96V74c-9-7-18-10-31-11-11 0-20 3-30 8L0 96z" fill="#edf5ff" />
+  <path d="M40 58h10v11H40z" fill="${palette.skin}" />
+  <path d="M31 63c5 2 11 3 17 3 8 0 14-2 20-5v17H31z" fill="#f7fbff" />
+  <ellipse cx="45.5" cy="41.5" rx="18.5" ry="20.5" fill="${palette.skin}" />
+  <path d="M20 36c4-14 14-24 28-24 9 0 19 4 27 13-11 1-20 5-28 10-8 5-16 7-27 7V36z" fill="${palette.hair}" />
+  <path d="M53 19l3 3-5 5-3-3z" fill="#3f7af5" />
+  <path d="M35.6 35.7c2-.7 3.9-.6 5.9.2" fill="none" stroke="#2f5fcb" stroke-width="1.5" stroke-linecap="round" />
+  <path d="M53.4 35.7c2-.7 3.9-.6 5.9.2" fill="none" stroke="#2f5fcb" stroke-width="1.5" stroke-linecap="round" />
+  <ellipse cx="36.5" cy="44.4" rx="3.8" ry="3.2" fill="#2f5fcb" />
+  <ellipse cx="54.6" cy="44.4" rx="3.8" ry="3.2" fill="#2f5fcb" />
+  <circle cx="37.2" cy="43.4" r="0.9" fill="#f4f8ff" />
+  <circle cx="55.3" cy="43.4" r="0.9" fill="#f4f8ff" />
+  <ellipse cx="32.1" cy="50.6" rx="3.5" ry="2.3" fill="#f68ca7" opacity="0.52" />
+  <ellipse cx="58.5" cy="50.3" rx="3.2" ry="2.1" fill="#f68ca7" opacity="0.45" />
+  <path d="M43.3 56.7c1.1.5 1.9.7 2.8.7 1 0 1.9-.3 2.9-.9" fill="none" stroke="#ee5c8f" stroke-width="1.5" stroke-linecap="round" />
+`;
+  } else if (variant === 5) {
+    portrait = `
+  <path d="M0 96h96V73c-8-8-20-12-33-12s-23 3-35 10L0 96z" fill="#070f1f" />
+  <rect x="44" y="58" width="9" height="10" rx="4.5" fill="${palette.skin}" />
+  <ellipse cx="48" cy="42" rx="18.5" ry="20.5" fill="${palette.skin}" />
+  <path d="M24 40c3-15 15-28 30-28 11 0 21 6 25 14-7-1-14 0-22 2-9 3-19 8-33 12z" fill="${palette.hair}" />
+  <path d="M30 67c6-8 10-10 14-12 4-2 8-2 13 1-5-1-10 1-15 4-4 3-8 5-12 7z" fill="${palette.hair}" opacity="0.92" />
+  <path d="M63 65c3-5 6-8 10-10-2 4-3 8-3 12z" fill="${palette.hair}" opacity="0.85" />
+  <path d="M34.5 36.1c2-.9 4-.9 5.9-.1" fill="none" stroke="#d7e3ff" stroke-width="1.4" stroke-linecap="round" />
+  <path d="M53.3 36.1c2-.9 4-.9 5.9-.1" fill="none" stroke="#d7e3ff" stroke-width="1.4" stroke-linecap="round" />
+  <ellipse cx="36.8" cy="44.1" rx="4" ry="3.4" fill="#2f5fd1" />
+  <ellipse cx="55.2" cy="44.1" rx="4" ry="3.4" fill="#2f5fd1" />
+  <circle cx="37.5" cy="43.2" r="1" fill="#f4f8ff" />
+  <circle cx="56" cy="43.2" r="1" fill="#f4f8ff" />
+  <ellipse cx="32.1" cy="50.5" rx="3.6" ry="2.3" fill="#ee90a8" opacity="0.42" />
+  <ellipse cx="59.1" cy="50.2" rx="3.4" ry="2.1" fill="#ee90a8" opacity="0.42" />
+  <path d="M44.4 56.8c1.3.8 2.4 1.1 3.6 1.1 1.2 0 2.2-.4 3.5-1.3" fill="none" stroke="#f28f96" stroke-width="1.3" stroke-linecap="round" />
+`;
+  } else {
+    portrait = `
+  <path d="M0 96h96V72c-9-8-21-11-35-11s-24 3-37 12L0 96z" fill="#2149a3" />
+  <path d="M39 57h10v11H39z" fill="${palette.skin}" />
+  <ellipse cx="43" cy="41.5" rx="17.2" ry="19.2" fill="${palette.skin}" />
+  <path d="M18 39c3-16 15-27 31-27 12 0 24 6 29 19-8-1-15 1-22 5-10 6-18 7-38 3z" fill="${palette.hair}" />
+  <path d="M57 20c8 4 16 13 19 24 1 9 0 17-3 24-2-8-8-14-14-19-6-5-14-9-22-10 6-11 11-17 20-19z" fill="${palette.hair}" />
+  <ellipse cx="27" cy="43.5" rx="3.8" ry="2.8" fill="#2c4ca4" />
+  <ellipse cx="43.8" cy="44" rx="3.9" ry="3.1" fill="#2c4ca4" />
+  <circle cx="27.7" cy="42.9" r="0.95" fill="#f4f8ff" />
+  <circle cx="44.4" cy="43.3" r="0.95" fill="#f4f8ff" />
+  <path d="M22.2 35.8c1.7-.7 3.4-.7 5.2 0" fill="none" stroke="#2d4b9a" stroke-width="1.3" stroke-linecap="round" />
+  <path d="M39 35.8c1.7-.7 3.4-.7 5.2 0" fill="none" stroke="#2d4b9a" stroke-width="1.3" stroke-linecap="round" />
+  <circle cx="32.4" cy="50.6" r="1.1" fill="#ef8c8e" />
+  <path d="M31 56c1.6 1.2 3 1.8 4.7 1.8s3.2-.6 4.9-1.9" fill="none" stroke="#eb6f7a" stroke-width="1.4" stroke-linecap="round" />
+  <circle cx="65.5" cy="45.4" r="7.2" fill="#2454bd" />
+  <circle cx="65.5" cy="45.4" r="4.2" fill="#f2f6ff" />
+  <circle cx="65.5" cy="45.4" r="1.5" fill="#2454bd" />
+  <path d="M61 38c2-2 4-2.8 6-2.2" fill="none" stroke="#f2cf56" stroke-width="1.2" stroke-linecap="round" />
+`;
+  }
+
+  const portraitLayer = mirrored ? `<g transform="translate(96 0) scale(-1 1)">${portrait}</g>` : portrait;
+  const mirroredBadge = mirrored
+    ? `<path d="M8 11l4 1.6L15 9l-.2 4.3L19 15l-4.3.7L14 20l-2.1-4-4.4-.8 3.7-2.2z" fill="${palette.accent}" opacity="0.86" />`
+    : "";
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <rect width="96" height="96" fill="${palette.bg}" />
+  ${portraitLayer}
+  ${mirroredBadge}
+</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function createAnimalAvatarDataUrl(index: number) {
+  const variant = index % SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY;
+  const ringColors = [
+    "#f1a327",
+    "#e76075",
+    "#5a8fd8",
+    "#9760f4",
+    "#c68a4f",
+    "#65cba2",
+    "#e8c54e",
+    "#57c58e",
+    "#6f8ee8",
+    "#fdaf4f",
+    "#66b5ff",
+    "#f5788a",
+    "#53c6bb",
+    "#88a0ff"
+  ] as const;
+  const wingColors = [
+    "#f9c871",
+    "#f2929f",
+    "#93b6ea",
+    "#b594f6",
+    "#e3b476",
+    "#9adfc7",
+    "#f2d879",
+    "#8fe0b6",
+    "#9bb0f4",
+    "#f7c97f",
+    "#9bd3ff",
+    "#f5a0ab",
+    "#8edfd7",
+    "#a6b8ff"
+  ] as const;
+  const accentColors = [
+    "#f2952f",
+    "#d94159",
+    "#4f79c8",
+    "#7f63d6",
+    "#9b6f3f",
+    "#3ea37f",
+    "#e2ad37",
+    "#37a96f",
+    "#4f6ed2",
+    "#ea9831",
+    "#4b93d8",
+    "#d35573",
+    "#3ab1a6",
+    "#586fd4"
+  ] as const;
+  const eyeOffsetX = [-1, 1, 0, 2, -2, 1, -1, 0, 2, -1, 1, -2, 0, 2] as const;
+  const eyeOffsetY = [0, 0, 1, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1, 1] as const;
+  const tiltAngles = [-6, 6, -4, 4, -5, 5, -3, 3, -2, 2, -4, 4, -3, 3] as const;
+  const ring = ringColors[variant];
+  const wing = wingColors[variant];
+  const accent = accentColors[variant];
+  const leftPupilX = 39 + eyeOffsetX[variant];
+  const rightPupilX = 57 + eyeOffsetX[variant];
+  const pupilY = 45 + eyeOffsetY[variant];
+  const tilt = tiltAngles[variant];
+
+  let eyeMarkup = `
+    <circle cx="39" cy="45" r="7.8" fill="#ffffff" stroke="#30343d" stroke-width="2" />
+    <circle cx="57" cy="45" r="7.8" fill="#ffffff" stroke="#30343d" stroke-width="2" />
+    <circle cx="${leftPupilX}" cy="${pupilY}" r="2.75" fill="#2a303a" />
+    <circle cx="${rightPupilX}" cy="${pupilY}" r="2.75" fill="#2a303a" />
+  `;
+  if (variant === 6 || variant === 9) {
+    eyeMarkup = `
+    <path d="M31 45c3-3 6-3 9 0" fill="none" stroke="#30343d" stroke-width="2.2" stroke-linecap="round" />
+    <circle cx="57" cy="45" r="7.8" fill="#ffffff" stroke="#30343d" stroke-width="2" />
+    <circle cx="${rightPupilX}" cy="${pupilY}" r="2.75" fill="#2a303a" />
+    `;
+  }
+  if (variant === 10) {
+    eyeMarkup = `
+    <circle cx="39" cy="45" r="7.8" fill="#ffffff" stroke="#30343d" stroke-width="2" />
+    <circle cx="57" cy="45" r="7.8" fill="#ffffff" stroke="#30343d" stroke-width="2" />
+    <circle cx="${leftPupilX}" cy="${pupilY}" r="2.75" fill="#2a303a" />
+    <path d="M52 45c2.2-1.9 4.4-1.9 6.6 0" fill="none" stroke="#2a303a" stroke-width="1.9" stroke-linecap="round" />
+    `;
+  }
+
+  let accessoryMarkup = "";
+  switch (variant) {
+    case 0:
+      accessoryMarkup = `
+    <path d="M32 33c3-2 6-2 9-1" fill="none" stroke="#2b2f37" stroke-width="2.2" stroke-linecap="round" />
+    <path d="M55 32c3-1 6-.8 9 1.2" fill="none" stroke="#2b2f37" stroke-width="2.2" stroke-linecap="round" />
+      `;
+      break;
+    case 1:
+      accessoryMarkup = `<path d="M28 54c6 3 12 4 20 4s14-1 20-4v9H28z" fill="#dc4755" />`;
+      break;
+    case 2:
+      accessoryMarkup = `
+    <circle cx="39" cy="45" r="8.8" fill="#6ea0eb" fill-opacity="0.45" />
+    <circle cx="57" cy="45" r="8.8" fill="#6ea0eb" fill-opacity="0.45" />
+    <path d="M42 59h12l-2.8 4h-6.4z" fill="#5748ad" />
+      `;
+      break;
+    case 3:
+      accessoryMarkup = `<path d="M41 59h14l-3.4 4h-7.2z" fill="#2d2f34" />`;
+      break;
+    case 4:
+      accessoryMarkup = `
+    <rect x="40" y="29" width="16" height="5" rx="2.5" fill="#2f2f35" />
+    <rect x="43.5" y="23" width="9" height="8" rx="2" fill="#2f2f35" />
+    <path d="M41 59h14l-3.4 4h-7.2z" fill="#cd414f" />
+      `;
+      break;
+    case 5:
+      accessoryMarkup = `
+    <rect x="31.2" y="40.8" width="14.6" height="8.6" rx="3" fill="#6ec9ff" fill-opacity="0.52" stroke="#31343d" stroke-width="1.6" />
+    <rect x="49.2" y="40.8" width="14.6" height="8.6" rx="3" fill="#ff6f75" fill-opacity="0.46" stroke="#31343d" stroke-width="1.6" />
+      `;
+      break;
+    case 6:
+      accessoryMarkup = `<path d="M66 63c4-3 4-7 0-9-3-2-7 0-7 4 0 5 5 9 10 9" fill="none" stroke="#f1b93c" stroke-width="2" stroke-linecap="round" />`;
+      break;
+    case 7:
+      accessoryMarkup = `
+    <circle cx="66.5" cy="52.5" r="3.1" fill="#ff94bf" />
+    <circle cx="70.5" cy="49.6" r="3.1" fill="#ff94bf" />
+    <circle cx="70.6" cy="55.3" r="3.1" fill="#ff94bf" />
+    <circle cx="74.2" cy="52.4" r="3.1" fill="#ff94bf" />
+    <circle cx="70.6" cy="52.4" r="1.55" fill="#ffd95c" />
+      `;
+      break;
+    case 8:
+      accessoryMarkup = `
+    <path d="M31 32h34l-3 4H34z" fill="#4f73d0" />
+    <path d="M36 32c2-6 7-9 12-9 5 0 9 2 13 7l-4 2c-3-3-6-4-9-4s-6 2-8 5z" fill="#efc243" />
+      `;
+      break;
+    case 9:
+      accessoryMarkup = `<circle cx="57" cy="45" r="9.2" fill="none" stroke="#2a303a" stroke-width="1.9" />`;
+      break;
+    case 10:
+      accessoryMarkup = `
+    <path d="M28 43c0-6 4-11 10-12" fill="none" stroke="#2f343c" stroke-width="2" />
+    <path d="M68 43c0-6-4-11-10-12" fill="none" stroke="#2f343c" stroke-width="2" />
+    <rect x="24" y="44" width="5" height="9" rx="2.2" fill="#2f343c" />
+    <rect x="67" y="44" width="5" height="9" rx="2.2" fill="#2f343c" />
+    <path d="M61 53c4 0 6 2 6 6" fill="none" stroke="#2f343c" stroke-width="1.6" />
+      `;
+      break;
+    case 11:
+      accessoryMarkup = `<path d="M68 30l2.6 4.1 4.7 1.3-3.2 3.7.2 5-4.3-2.1-4.4 1.9.5-5-3.1-3.9 4.7-1.1z" fill="#ffd451" />`;
+      break;
+    case 12:
+      accessoryMarkup = `
+    <path d="M63 31c4-4 8-4 12 0-4 4-8 4-12 0z" fill="#63c487" />
+    <path d="M68 28v8" stroke="#48a36b" stroke-width="1.3" />
+      `;
+      break;
+    default:
+      accessoryMarkup = `<path d="M28 58c6 2 12 3 20 3s14-1 20-3v4c-6 3-12 4-20 4s-14-1-20-4z" fill="#6b82d7" />`;
+      break;
+  }
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <circle cx="48" cy="48" r="45" fill="#ffffff" stroke="${ring}" stroke-width="3.4" />
+  <g transform="rotate(${tilt} 48 52)">
+    <ellipse cx="48" cy="52" rx="22.5" ry="20.5" fill="#f7f8fc" stroke="#3a3e47" stroke-width="1.8" />
+    <path d="M31 38l6-8 6 7-10 4z" fill="${wing}" />
+    <path d="M65 38l-6-8-6 7 10 4z" fill="${wing}" />
+    <ellipse cx="29.5" cy="55" rx="7.7" ry="11.2" fill="${wing}" />
+    <ellipse cx="66.5" cy="55" rx="7.7" ry="11.2" fill="${wing}" />
+    <ellipse cx="48" cy="46.5" rx="17.5" ry="14.6" fill="#ffffff" />
+    ${eyeMarkup}
+    <path d="M45 50h6l-3 5z" fill="${accent}" />
+    <circle cx="48" cy="55.3" r="1.2" fill="${accent}" opacity="0.85" />
+    <ellipse cx="32.1" cy="51.9" rx="2.5" ry="1.8" fill="${accent}" opacity="0.25" />
+    <ellipse cx="63.9" cy="51.9" rx="2.5" ry="1.8" fill="${accent}" opacity="0.25" />
+    ${accessoryMarkup}
+  </g>
+</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function completeSidebarAvatarOptions(
+  category: SidebarAvatarCategoryId,
+  labelPrefix: string,
+  baseOptions: SidebarAvatarOption[],
+  fallbackFactory: (index: number) => string
+) {
+  const options = [...baseOptions];
+  while (options.length < SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY) {
+    const index = options.length;
+    options.push({
+      id: `${category}-fallback-${index + 1}`,
+      label: `${labelPrefix} ${index + 1}`,
+      category,
+      url: fallbackFactory(index)
+    });
+  }
+  return options.slice(0, SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY);
+}
+
+function buildSidebarAvatarPresetOptions(): Record<SidebarAvatarCategoryId, SidebarAvatarOption[]> {
+  const pixelGenerated = Array.from({ length: SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY }, (_, index) => ({
+    id: `pixel-generated-${index + 1}`,
+    label: `像素风 ${index + 1}`,
+    category: "pixel" as SidebarAvatarCategoryId,
+    url: createPixelAvatarDataUrl(index)
+  }));
+  const illustrationFromPool = agentAvatarPool
+    .slice(0, SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY)
+    .map((url, index) => ({
+      id: `illustration-pool-${index + 1}`,
+      label: `插画 ${index + 1}`,
+      category: "illustration" as SidebarAvatarCategoryId,
+      url
+    }));
+
+  const pixel = completeSidebarAvatarOptions("pixel", "像素风", pixelGenerated, (index) => createPixelAvatarDataUrl(index));
+  const illustration = completeSidebarAvatarOptions("illustration", "插画", illustrationFromPool, (index) =>
+    createLabelAvatarDataUrl(`IL${index + 1}`, "#ff9a7d", "#ff5f8f")
+  );
+
+  const animal = completeSidebarAvatarOptions(
+    "animal",
+    "动物",
+    Array.from({ length: SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY }, (_, index) => ({
+      id: `animal-${index + 1}`,
+      label: `动物 ${index + 1}`,
+      category: "animal" as SidebarAvatarCategoryId,
+      url: createAnimalAvatarDataUrl(index)
+    })),
+    (index) => createAnimalAvatarDataUrl(index)
+  );
+
+  const handDrawn = completeSidebarAvatarOptions(
+    "cute",
+    "手绘风",
+    Array.from({ length: SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY }, (_, index) => ({
+      id: `handdrawn-${index + 1}`,
+      label: `手绘风 ${index + 1}`,
+      category: "cute" as SidebarAvatarCategoryId,
+      url: createHandDrawnAvatarDataUrl(index)
+    })),
+    (index) => createHandDrawnAvatarDataUrl(index)
+  );
+
+  return {
+    pixel,
+    illustration,
+    animal,
+    cute: handDrawn
+  };
+}
+
+function normalizeChatUserGroupName(value: string) {
+  return value.trim().replace(/\s+/g, " ").slice(0, 24);
+}
+
+function normalizeChatUserGroup(raw: unknown): ChatUserGroup | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const candidate = raw as Partial<ChatUserGroup>;
+  const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+  const name = typeof candidate.name === "string" ? normalizeChatUserGroupName(candidate.name) : "";
+  if (!id || !name) {
+    return null;
+  }
+  const createdAt =
+    typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
+      ? Math.max(0, Math.floor(candidate.createdAt))
+      : Date.now();
+  return {
+    id,
+    name,
+    createdAt
+  };
+}
+
+function normalizeChatConversationGroup(raw: unknown): ChatConversationGroup | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const candidate = raw as Partial<ChatConversationGroup>;
+  const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+  const name = typeof candidate.name === "string" ? normalizeChatUserGroupName(candidate.name) : "";
+  if (!id || !name) {
+    return null;
+  }
+  const members = Array.isArray(candidate.memberAgentIds)
+    ? candidate.memberAgentIds
+        .map((memberId) => (typeof memberId === "string" ? memberId.trim() : ""))
+        .filter(Boolean)
+    : [];
+  const dedupedMembers = Array.from(new Set(members)).slice(0, 30);
+  const createdAt =
+    typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
+      ? Math.max(0, Math.floor(candidate.createdAt))
+      : Date.now();
+  return {
+    id,
+    name,
+    memberAgentIds: dedupedMembers,
+    createdAt
+  };
+}
+
+function normalizeChatUserCustomAgentKind(raw: unknown): ChatUserCustomAgentKind {
+  return raw === "staff" ? "staff" : "friend";
+}
+
+function normalizeChatUserCustomAgentKnowledgeScope(raw: unknown): ChatUserCustomAgentKnowledgeScope | undefined {
+  if (raw === "general" || raw === "specific" || raw === "document") {
+    return raw;
+  }
+  return undefined;
+}
+
+function normalizeChatUserCustomAgent(raw: unknown): ChatUserCustomAgent | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const candidate = raw as Partial<ChatUserCustomAgent>;
+  const agentId = typeof candidate.agentId === "string" ? candidate.agentId.trim() : "";
+  const displayName = typeof candidate.displayName === "string" ? normalizeChatUserGroupName(candidate.displayName) : "";
+  if (!agentId || !displayName) {
+    return null;
+  }
+  const createdAt =
+    typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
+      ? Math.max(0, Math.floor(candidate.createdAt))
+      : Date.now();
+  const kind = normalizeChatUserCustomAgentKind(candidate.kind);
+  const normalizeOptionalField = (value: unknown) => (typeof value === "string" ? value.trim().slice(0, 200) : "");
+  const roleLabel = normalizeOptionalField(candidate.roleLabel);
+  const channel = normalizeOptionalField(candidate.channel);
+  const workspace = normalizeOptionalField(candidate.workspace);
+  const currentWork = normalizeOptionalField(candidate.currentWork);
+  const scheduledLabel = normalizeOptionalField(candidate.scheduledLabel);
+  const mission = typeof candidate.mission === "string" ? candidate.mission.trim().slice(0, 1200) : "";
+  const tasks = Array.isArray(candidate.tasks)
+    ? candidate.tasks
+        .map((task) => (typeof task === "string" ? task.trim() : ""))
+        .filter(Boolean)
+        .slice(0, CREATE_EMPLOYEE_MAX_TASKS)
+    : [];
+  const knowledgeScope = normalizeChatUserCustomAgentKnowledgeScope(candidate.knowledgeScope);
+  const specificDomain = typeof candidate.specificDomain === "string" ? candidate.specificDomain.trim().slice(0, 240) : "";
+
+  return {
+    agentId,
+    displayName,
+    createdAt,
+    kind,
+    roleLabel: roleLabel || undefined,
+    channel: channel || undefined,
+    workspace: workspace || undefined,
+    currentWork: currentWork || undefined,
+    scheduledLabel: scheduledLabel || undefined,
+    mission: mission || undefined,
+    tasks: tasks.length > 0 ? tasks : undefined,
+    knowledgeScope,
+    specificDomain: specificDomain || undefined
+  };
+}
+
+function loadChatUserCustomAgents() {
+  const raw = safeStorageGet(CHAT_USER_CUSTOM_AGENTS_STORAGE_KEY);
+  if (!raw) {
+    return [] as ChatUserCustomAgent[];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [] as ChatUserCustomAgent[];
+    }
+    const deduped = new Map<string, ChatUserCustomAgent>();
+    for (const item of parsed) {
+      const normalized = normalizeChatUserCustomAgent(item);
+      if (!normalized) {
+        continue;
+      }
+      const dedupeKey = normalized.agentId.toLowerCase();
+      if (deduped.has(dedupeKey)) {
+        continue;
+      }
+      deduped.set(dedupeKey, normalized);
+      if (deduped.size >= 200) {
+        break;
+      }
+    }
+    return Array.from(deduped.values()).sort((left, right) => left.createdAt - right.createdAt);
+  } catch {
+    return [] as ChatUserCustomAgent[];
+  }
+}
+
+function loadChatConversationGroups() {
+  const raw = safeStorageGet(CHAT_CONVERSATION_GROUPS_STORAGE_KEY);
+  if (!raw) {
+    return [] as ChatConversationGroup[];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [] as ChatConversationGroup[];
+    }
+    const deduped = new Map<string, ChatConversationGroup>();
+    for (const item of parsed) {
+      const normalized = normalizeChatConversationGroup(item);
+      if (!normalized) {
+        continue;
+      }
+      const dedupeKey = normalized.id.toLowerCase();
+      if (deduped.has(dedupeKey)) {
+        continue;
+      }
+      deduped.set(dedupeKey, normalized);
+      if (deduped.size >= 100) {
+        break;
+      }
+    }
+    return Array.from(deduped.values()).sort((left, right) => left.createdAt - right.createdAt);
+  } catch {
+    return [] as ChatConversationGroup[];
+  }
+}
+
+function createDefaultPinnedChatUserGroup(): ChatUserGroup {
+  return {
+    id: CHAT_USER_PINNED_GROUP_ID,
+    name: "置顶",
+    createdAt: 0
+  };
+}
+
+function loadChatUserGroups() {
+  const raw = safeStorageGet(CHAT_USER_GROUPS_STORAGE_KEY);
+  if (!raw) {
+    return [createDefaultPinnedChatUserGroup()];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed)
+      ? parsed.map((item) => normalizeChatUserGroup(item)).filter((item): item is ChatUserGroup => item !== null)
+      : [];
+    const deduped = new Map<string, ChatUserGroup>();
+    for (const group of list) {
+      if (!deduped.has(group.id)) {
+        deduped.set(group.id, group);
+      }
+    }
+    const pinned = deduped.get(CHAT_USER_PINNED_GROUP_ID) ?? createDefaultPinnedChatUserGroup();
+    const others = Array.from(deduped.values())
+      .filter((group) => group.id !== CHAT_USER_PINNED_GROUP_ID)
+      .sort((left, right) => left.createdAt - right.createdAt)
+      .slice(0, 20);
+    return [pinned, ...others];
+  } catch {
+    return [createDefaultPinnedChatUserGroup()];
+  }
+}
+
+function loadChatUserGroupMembership() {
+  const raw = safeStorageGet(CHAT_USER_GROUP_MEMBERSHIP_STORAGE_KEY);
+  if (!raw) {
+    return {} as Record<string, string>;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {} as Record<string, string>;
+    }
+    const entries = Object.entries(parsed as Record<string, unknown>)
+      .map(([agentId, groupId]) => {
+        if (typeof groupId !== "string") {
+          return null;
+        }
+        const normalizedAgentId = agentId.trim();
+        const normalizedGroupId = groupId.trim();
+        if (!normalizedAgentId || !normalizedGroupId) {
+          return null;
+        }
+        return [normalizedAgentId, normalizedGroupId] as const;
+      })
+      .filter((entry): entry is readonly [string, string] => entry !== null);
+    return Object.fromEntries(entries) as Record<string, string>;
+  } catch {
+    return {} as Record<string, string>;
+  }
+}
+
+function loadChatUserAgentOrder() {
+  const raw = safeStorageGet(CHAT_USER_AGENT_ORDER_STORAGE_KEY);
+  if (!raw) {
+    return [] as string[];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [] as string[];
+    }
+    const seen = new Set<string>();
+    const order: string[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "string") {
+        continue;
+      }
+      const normalizedAgentId = item.trim();
+      if (!normalizedAgentId || seen.has(normalizedAgentId)) {
+        continue;
+      }
+      seen.add(normalizedAgentId);
+      order.push(normalizedAgentId);
+      if (order.length >= 300) {
+        break;
+      }
+    }
+    return order;
+  } catch {
+    return [] as string[];
+  }
+}
+
+function loadChatUserCollapsedSections() {
+  const raw = safeStorageGet(CHAT_USER_COLLAPSED_SECTIONS_STORAGE_KEY);
+  if (!raw) {
+    return {} as Record<string, boolean>;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {} as Record<string, boolean>;
+    }
+    const entries = Object.entries(parsed as Record<string, unknown>)
+      .map(([sectionId, isCollapsed]) => {
+        const normalizedSectionId = sectionId.trim();
+        if (!normalizedSectionId || isCollapsed !== true) {
+          return null;
+        }
+        return [normalizedSectionId, true] as const;
+      })
+      .filter((entry): entry is readonly [string, true] => entry !== null);
+    return Object.fromEntries(entries) as Record<string, boolean>;
+  } catch {
+    return {} as Record<string, boolean>;
+  }
+}
+
+function persistChatUserGroupMembership() {
+  safeStorageSet(CHAT_USER_GROUP_MEMBERSHIP_STORAGE_KEY, JSON.stringify(chatUserGroupMembership.value));
+}
+
+function persistChatUserAgentOrder() {
+  safeStorageSet(CHAT_USER_AGENT_ORDER_STORAGE_KEY, JSON.stringify(chatUserAgentOrder.value));
+}
+
+function persistChatUserCollapsedSections() {
+  safeStorageSet(CHAT_USER_COLLAPSED_SECTIONS_STORAGE_KEY, JSON.stringify(chatUserCollapsedSections.value));
+}
+
+function persistChatUserCustomAgents() {
+  safeStorageSet(CHAT_USER_CUSTOM_AGENTS_STORAGE_KEY, JSON.stringify(chatUserCustomAgents.value));
+}
+
+function persistChatConversationGroups() {
+  safeStorageSet(CHAT_CONVERSATION_GROUPS_STORAGE_KEY, JSON.stringify(chatConversationGroups.value));
+}
+
+function createChatConversationGroupId() {
+  return `group-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getChatConversationGroupAgentId(groupId: string) {
+  return `${CHAT_CONVERSATION_GROUP_AGENT_PREFIX}${groupId.trim()}`;
+}
+
+function getChatConversationGroupIdFromAgentId(agentId: string) {
+  const normalized = agentId.trim();
+  if (!normalized.startsWith(CHAT_CONVERSATION_GROUP_AGENT_PREFIX)) {
+    return null;
+  }
+  const groupId = normalized.slice(CHAT_CONVERSATION_GROUP_AGENT_PREFIX.length).trim();
+  return groupId || null;
+}
+
+function isChatConversationGroupAgentId(agentId: string) {
+  return Boolean(getChatConversationGroupIdFromAgentId(agentId));
+}
+
+function findChatConversationGroupByName(name: string) {
+  const normalized = normalizeChatUserGroupName(name).toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return chatConversationGroups.value.find((group) => group.name.toLowerCase() === normalized) ?? null;
+}
+
+function createChatConversationGroup(name: string, memberAgentIds: string[]) {
+  const normalizedName = normalizeChatUserGroupName(name);
+  if (!normalizedName) {
+    return null;
+  }
+  if (findChatConversationGroupByName(normalizedName)) {
+    return null;
+  }
+  const dedupedMembers = Array.from(new Set(memberAgentIds.map((item) => item.trim()).filter(Boolean))).slice(0, 30);
+  const nextGroup: ChatConversationGroup = {
+    id: createChatConversationGroupId(),
+    name: normalizedName,
+    memberAgentIds: dedupedMembers,
+    createdAt: Date.now()
+  };
+  chatConversationGroups.value = [...chatConversationGroups.value, nextGroup]
+    .sort((left, right) => left.createdAt - right.createdAt)
+    .slice(-100);
+  persistChatConversationGroups();
+  return nextGroup;
+}
+
+function syncChatConversationGroupsWithMembers(memberPool: AgentListItem[]) {
+  const validMemberIds = new Set(
+    memberPool
+      .filter((item) => !isChatConversationGroupAgentId(item.agentId))
+      .map((item) => item.agentId.trim())
+      .filter(Boolean)
+  );
+  let changed = false;
+  const nextGroups = chatConversationGroups.value.map((group) => {
+    const nextMembers = group.memberAgentIds.filter((memberId) => validMemberIds.has(memberId));
+    if (nextMembers.length === group.memberAgentIds.length) {
+      return group;
+    }
+    changed = true;
+    return {
+      ...group,
+      memberAgentIds: nextMembers
+    } satisfies ChatConversationGroup;
+  });
+  if (!changed) {
+    return;
+  }
+  chatConversationGroups.value = nextGroups;
+  persistChatConversationGroups();
+}
+
+function findChatConversationGroupByAgentId(agentId: string | null) {
+  const normalized = (agentId ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+  const groupId = getChatConversationGroupIdFromAgentId(normalized);
+  if (!groupId) {
+    return null;
+  }
+  return chatConversationGroups.value.find((group) => group.id === groupId) ?? null;
+}
+
+function getConversationGroupMembersByAgentId(agentId: string) {
+  const group = findChatConversationGroupByAgentId(agentId);
+  if (!group) {
+    return [] as AgentListItem[];
+  }
+  return getChatConversationGroupMembers(group);
+}
+
+function getConversationGroupPreviewMembers(agentId: string, limit = 3) {
+  return getConversationGroupMembersByAgentId(agentId).slice(0, Math.max(1, limit));
+}
+
+function getConversationGroupMemberCount(agentId: string) {
+  return getConversationGroupMembersByAgentId(agentId).length;
+}
+
+function pruneChatUserGroupMembership() {
+  const validGroupIds = new Set(chatUserGroups.value.map((group) => group.id));
+  const nextEntries = Object.entries(chatUserGroupMembership.value).filter((entry) => validGroupIds.has(entry[1]));
+  if (nextEntries.length === Object.keys(chatUserGroupMembership.value).length) {
+    return;
+  }
+  chatUserGroupMembership.value = Object.fromEntries(nextEntries) as Record<string, string>;
+  persistChatUserGroupMembership();
+}
+
+function syncChatUserAgentOrder() {
+  if (agents.value.length === 0) {
+    return;
+  }
+  const knownAgentIds = agents.value
+    .map((agent) => agent.agentId.trim())
+    .filter((agentId) => agentId.length > 0);
+  const knownIdSet = new Set(knownAgentIds);
+  const seen = new Set<string>();
+  const nextOrder: string[] = [];
+
+  for (const agentId of chatUserAgentOrder.value) {
+    const normalizedAgentId = agentId.trim();
+    if (!normalizedAgentId || seen.has(normalizedAgentId) || !knownIdSet.has(normalizedAgentId)) {
+      continue;
+    }
+    seen.add(normalizedAgentId);
+    nextOrder.push(normalizedAgentId);
+  }
+
+  for (const agentId of knownAgentIds) {
+    if (seen.has(agentId)) {
+      continue;
+    }
+    seen.add(agentId);
+    nextOrder.push(agentId);
+  }
+
+  if (
+    nextOrder.length === chatUserAgentOrder.value.length &&
+    nextOrder.every((agentId, index) => chatUserAgentOrder.value[index] === agentId)
+  ) {
+    return;
+  }
+
+  chatUserAgentOrder.value = nextOrder;
+  persistChatUserAgentOrder();
+}
+
+function persistChatUserGroups() {
+  safeStorageSet(CHAT_USER_GROUPS_STORAGE_KEY, JSON.stringify(chatUserGroups.value));
+  pruneChatUserGroupMembership();
+}
+
+function createChatUserGroupId() {
+  return `group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function findChatUserGroupByName(name: string) {
+  const normalized = normalizeChatUserGroupName(name).toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return chatUserGroups.value.find((group) => group.name.toLowerCase() === normalized) ?? null;
+}
+
+function createChatUserGroup(name: string) {
+  const normalizedName = normalizeChatUserGroupName(name);
+  if (!normalizedName) {
+    return null;
+  }
+  const existing = findChatUserGroupByName(normalizedName);
+  if (existing) {
+    return existing;
+  }
+  const nextGroup: ChatUserGroup = {
+    id: createChatUserGroupId(),
+    name: normalizedName,
+    createdAt: Date.now()
+  };
+  const pinned = chatUserGroups.value.find((group) => group.id === CHAT_USER_PINNED_GROUP_ID) ?? null;
+  const others = chatUserGroups.value.filter((group) => group.id !== CHAT_USER_PINNED_GROUP_ID);
+  chatUserGroups.value = pinned ? [pinned, ...others, nextGroup] : [...chatUserGroups.value, nextGroup];
+  persistChatUserGroups();
+  return nextGroup;
+}
+
+function deleteChatUserGroup(groupId: string) {
+  const normalizedGroupId = groupId.trim();
+  if (!normalizedGroupId || normalizedGroupId === CHAT_USER_PINNED_GROUP_ID) {
+    return false;
+  }
+  const hasTargetGroup = chatUserGroups.value.some((group) => group.id === normalizedGroupId);
+  if (!hasTargetGroup) {
+    return false;
+  }
+
+  chatUserGroups.value = chatUserGroups.value.filter((group) => group.id !== normalizedGroupId);
+  persistChatUserGroups();
+
+  if (chatUserCollapsedSections.value[normalizedGroupId]) {
+    const nextCollapsedSections = { ...chatUserCollapsedSections.value };
+    delete nextCollapsedSections[normalizedGroupId];
+    chatUserCollapsedSections.value = nextCollapsedSections;
+    persistChatUserCollapsedSections();
+  }
+  return true;
+}
+
+function getChatUserGroupName(agentId: string) {
+  const groupId = chatUserGroupMembership.value[agentId];
+  if (!groupId) {
+    return "未分组";
+  }
+  const matched = chatUserGroups.value.find((group) => group.id === groupId) ?? null;
+  return matched?.name ?? "未分组";
+}
+
+function setAgentChatUserGroup(agentId: string, groupId: string) {
+  const normalizedAgentId = agentId.trim();
+  const normalizedGroupId = groupId.trim();
+  if (!normalizedAgentId || !normalizedGroupId) {
+    return;
+  }
+  if (chatUserGroupMembership.value[normalizedAgentId] === normalizedGroupId) {
+    return;
+  }
+  chatUserGroupMembership.value = {
+    ...chatUserGroupMembership.value,
+    [normalizedAgentId]: normalizedGroupId
+  };
+  persistChatUserGroupMembership();
+}
+
+function clearAgentChatUserGroup(agentId: string) {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId || !(normalizedAgentId in chatUserGroupMembership.value)) {
+    return;
+  }
+  const nextMembership = { ...chatUserGroupMembership.value };
+  delete nextMembership[normalizedAgentId];
+  chatUserGroupMembership.value = nextMembership;
+  persistChatUserGroupMembership();
+}
+
+function getChatUserAgentOrderIndexMap() {
+  const indexMap = new Map<string, number>();
+  for (let index = 0; index < chatUserAgentOrder.value.length; index += 1) {
+    const agentId = chatUserAgentOrder.value[index];
+    if (!agentId || indexMap.has(agentId)) {
+      continue;
+    }
+    indexMap.set(agentId, index);
+  }
+  return indexMap;
+}
+
+function sortAgentsByChatUserOrder(items: AgentListItem[]) {
+  if (items.length <= 1) {
+    return items;
+  }
+  const orderIndexMap = getChatUserAgentOrderIndexMap();
+  return [...items].sort((left, right) => {
+    const leftOrder = orderIndexMap.get(left.agentId);
+    const rightOrder = orderIndexMap.get(right.agentId);
+    if (typeof leftOrder === "number" && typeof rightOrder === "number") {
+      return leftOrder - rightOrder;
+    }
+    if (typeof leftOrder === "number") {
+      return -1;
+    }
+    if (typeof rightOrder === "number") {
+      return 1;
+    }
+    return 0;
+  });
+}
+
+function moveChatUserAgentOrderBeforeTarget(sourceAgentId: string, targetAgentId: string) {
+  const normalizedSourceId = sourceAgentId.trim();
+  const normalizedTargetId = targetAgentId.trim();
+  if (!normalizedSourceId || !normalizedTargetId || normalizedSourceId === normalizedTargetId) {
+    return;
+  }
+
+  syncChatUserAgentOrder();
+  const nextOrder = [...chatUserAgentOrder.value];
+  const sourceIndex = nextOrder.indexOf(normalizedSourceId);
+  const targetIndex = nextOrder.indexOf(normalizedTargetId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+    return;
+  }
+
+  const [draggedAgentId] = nextOrder.splice(sourceIndex, 1);
+  const insertionIndex = nextOrder.indexOf(normalizedTargetId);
+  if (!draggedAgentId || insertionIndex < 0) {
+    return;
+  }
+  nextOrder.splice(insertionIndex, 0, draggedAgentId);
+  chatUserAgentOrder.value = nextOrder;
+  persistChatUserAgentOrder();
+}
+
+function isChatUserSectionCollapsed(sectionId: string) {
+  const normalizedSectionId = sectionId.trim();
+  if (!normalizedSectionId) {
+    return false;
+  }
+  return chatUserCollapsedSections.value[normalizedSectionId] === true;
+}
+
+function toggleChatUserSectionCollapsed(sectionId: string) {
+  const normalizedSectionId = sectionId.trim();
+  if (!normalizedSectionId) {
+    return;
+  }
+  const currentlyCollapsed = chatUserCollapsedSections.value[normalizedSectionId] === true;
+  const nextCollapsedSections = { ...chatUserCollapsedSections.value };
+  if (currentlyCollapsed) {
+    delete nextCollapsedSections[normalizedSectionId];
+  } else {
+    nextCollapsedSections[normalizedSectionId] = true;
+  }
+  chatUserCollapsedSections.value = nextCollapsedSections;
+  persistChatUserCollapsedSections();
+}
+
 function normalizeSidebarSettingsAppearance(raw: string | null): SidebarSettingsAppearance {
   if (raw === "light" || raw === "dark" || raw === "system") {
     return raw;
   }
   return "system";
+}
+
+function normalizeSidebarThemePreset(raw: string | null): SidebarThemePreset {
+  if (raw === "elegant" || raw === "frosted" || raw === "pure-white") {
+    return raw;
+  }
+  return "elegant";
+}
+
+function resolveSystemThemeMode(): SidebarThemeMode {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return "day";
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "night" : "day";
+}
+
+function normalizeSidebarThemeMode(raw: string | null): SidebarThemeMode {
+  if (raw === "day" || raw === "night") {
+    return raw;
+  }
+  return resolveSystemThemeMode();
 }
 
 function normalizeSidebarSettingsLanguage(raw: string | null): SidebarSettingsLanguage {
@@ -1588,15 +3102,54 @@ function createSessionId() {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function chatStorageKeyFor(agentId: string) {
+function normalizeConversationKeyPart(value: string) {
+  return value.trim().toLowerCase() || "unknown";
+}
+
+function buildAgentConversationScopeKey(agentId: string) {
+  return `agent:${normalizeConversationKeyPart(agentId)}`;
+}
+
+function buildChannelConversationScopeKey(agentId: string, channelSession: ChannelPaneChatItem) {
+  const normalizedType = normalizeChannelPaneType(channelSession.channelType);
+  const channelType = normalizeConversationKeyPart(normalizedType || channelSession.catalogId || channelSession.channelType);
+  const accountId = normalizeConversationKeyPart(channelSession.accountId);
+  const ownerAgentId = normalizeConversationKeyPart(agentId);
+  return `channel:${channelType}:${accountId}:${ownerAgentId}`;
+}
+
+function resolveConversationScopeKey(agentId: string | null, channelSession: ChannelPaneChatItem | null) {
+  const normalizedAgentId = (agentId ?? "").trim();
+  if (!normalizedAgentId) {
+    return null;
+  }
+  if (!channelSession) {
+    return buildAgentConversationScopeKey(normalizedAgentId);
+  }
+  return buildChannelConversationScopeKey(normalizedAgentId, channelSession);
+}
+
+function chatStorageKeyFor(conversationScopeKey: string) {
+  return `${CHAT_STORAGE_PREFIX}.${conversationScopeKey}`;
+}
+
+function sessionStorageKeyFor(conversationScopeKey: string) {
+  return `${SESSION_STORAGE_PREFIX}.${conversationScopeKey}`;
+}
+
+function chatArchiveStorageKeyFor(conversationScopeKey: string) {
+  return `${CHAT_ARCHIVE_STORAGE_PREFIX}.${conversationScopeKey}`;
+}
+
+function legacyChatStorageKeyForAgent(agentId: string) {
   return `${CHAT_STORAGE_PREFIX}.${agentId}`;
 }
 
-function sessionStorageKeyFor(agentId: string) {
+function legacySessionStorageKeyForAgent(agentId: string) {
   return `${SESSION_STORAGE_PREFIX}.${agentId}`;
 }
 
-function chatArchiveStorageKeyFor(agentId: string) {
+function legacyChatArchiveStorageKeyForAgent(agentId: string) {
   return `${CHAT_ARCHIVE_STORAGE_PREFIX}.${agentId}`;
 }
 
@@ -1652,6 +3205,77 @@ function normalizeToolStatus(value: unknown): ChatToolStatus | undefined {
   return undefined;
 }
 
+function createChatAttachmentId() {
+  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatAttachmentSize(size: number) {
+  if (!Number.isFinite(size) || size <= 0) {
+    return "0 B";
+  }
+  if (size < 1024) {
+    return `${Math.round(size)} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function normalizeAttachment(raw: unknown): ChatComposerAttachment | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const candidate = raw as Partial<ChatComposerAttachment>;
+  const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+  if (!name) {
+    return null;
+  }
+  const size = typeof candidate.size === "number" && Number.isFinite(candidate.size) ? Math.max(0, candidate.size) : 0;
+  const type = typeof candidate.type === "string" ? candidate.type : "";
+  return {
+    id: typeof candidate.id === "string" && candidate.id.trim() ? candidate.id : createChatAttachmentId(),
+    name,
+    size,
+    type
+  };
+}
+
+function normalizeMessageAttachments(raw: unknown): ChatComposerAttachment[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const list = raw.map((item) => normalizeAttachment(item)).filter((item): item is ChatComposerAttachment => item !== null);
+  return list.length > 0 ? list : undefined;
+}
+
+function formatAttachmentSummaryForPrompt(attachments: ChatComposerAttachment[]) {
+  if (attachments.length === 0) {
+    return "";
+  }
+  const details = attachments.map((attachment) => `${attachment.name} (${formatAttachmentSize(attachment.size)})`);
+  return `[附件: ${details.join("；")}]`;
+}
+
+function buildOpenClawMessageContent(message: AgentChatMessage) {
+  if (message.role !== "user" || !message.attachments || message.attachments.length === 0) {
+    return message.text;
+  }
+  const summary = formatAttachmentSummaryForPrompt(message.attachments);
+  if (!summary) {
+    return message.text;
+  }
+  const baseText = message.text.trim() === "(附件)" ? "" : message.text.trim();
+  return baseText ? `${baseText}\n\n${summary}` : summary;
+}
+
+function getMessageDisplayText(message: AgentChatMessage) {
+  if (message.role === "user" && message.text.trim() === "(附件)" && message.attachments && message.attachments.length > 0) {
+    return "";
+  }
+  return message.text;
+}
+
 function isRuntimeToolMessage(message: AgentChatMessage) {
   return message.kind === "runtime_tool";
 }
@@ -1672,6 +3296,7 @@ function normalizeMessage(raw: unknown): AgentChatMessage | null {
   const toolInput = typeof candidate.toolInput === "string" && candidate.toolInput.trim() ? candidate.toolInput.trim() : undefined;
   const toolOutput =
     typeof candidate.toolOutput === "string" && candidate.toolOutput.trim() ? candidate.toolOutput.trim() : undefined;
+  const attachments = normalizeMessageAttachments((candidate as { attachments?: unknown }).attachments);
 
   return {
     id: typeof candidate.id === "string" && candidate.id.trim() ? candidate.id : createMessageId("msg"),
@@ -1679,6 +3304,7 @@ function normalizeMessage(raw: unknown): AgentChatMessage | null {
     text: candidate.text,
     status: normalizeStatus(candidate.status),
     createdAt: typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt) ? candidate.createdAt : Date.now(),
+    attachments,
     kind,
     toolName,
     toolStatus,
@@ -1705,8 +3331,14 @@ function createWelcomeMessages(_agent: AgentListItem | null): AgentChatMessage[]
   return [];
 }
 
-function loadChatHistory(agentId: string) {
-  const raw = safeStorageGet(chatStorageKeyFor(agentId));
+type ConversationStorageReadOptions = {
+  legacyAgentId?: string | null;
+};
+
+function loadChatHistory(conversationScopeKey: string, options: ConversationStorageReadOptions = {}) {
+  const primaryRaw = safeStorageGet(chatStorageKeyFor(conversationScopeKey));
+  const legacyRaw = options.legacyAgentId ? safeStorageGet(legacyChatStorageKeyForAgent(options.legacyAgentId)) : null;
+  const raw = primaryRaw && primaryRaw.trim() ? primaryRaw : legacyRaw;
   if (!raw) {
     return [] as AgentChatMessage[];
   }
@@ -1726,8 +3358,10 @@ function loadChatHistory(agentId: string) {
   }
 }
 
-function loadChatArchives(agentId: string) {
-  const raw = safeStorageGet(chatArchiveStorageKeyFor(agentId));
+function loadChatArchives(conversationScopeKey: string, options: ConversationStorageReadOptions = {}) {
+  const primaryRaw = safeStorageGet(chatArchiveStorageKeyFor(conversationScopeKey));
+  const legacyRaw = options.legacyAgentId ? safeStorageGet(legacyChatArchiveStorageKeyForAgent(options.legacyAgentId)) : null;
+  const raw = primaryRaw && primaryRaw.trim() ? primaryRaw : legacyRaw;
   if (!raw) {
     return [] as ChatArchiveRecord[];
   }
@@ -1767,15 +3401,21 @@ function loadChatArchives(agentId: string) {
   }
 }
 
-function persistChatArchives(agentId: string, archives: ChatArchiveRecord[]) {
-  safeStorageSet(chatArchiveStorageKeyFor(agentId), JSON.stringify(archives.slice(0, 60)));
+function persistChatArchives(conversationScopeKey: string, archives: ChatArchiveRecord[]) {
+  safeStorageSet(chatArchiveStorageKeyFor(conversationScopeKey), JSON.stringify(archives.slice(0, 60)));
 }
 
-function loadSessionId(agentId: string) {
-  const key = sessionStorageKeyFor(agentId);
+function loadSessionId(conversationScopeKey: string, options: ConversationStorageReadOptions = {}) {
+  const key = sessionStorageKeyFor(conversationScopeKey);
   const existing = safeStorageGet(key);
   if (existing && existing.trim()) {
     return existing;
+  }
+
+  const legacyExisting = options.legacyAgentId ? safeStorageGet(legacySessionStorageKeyForAgent(options.legacyAgentId)) : null;
+  if (legacyExisting && legacyExisting.trim()) {
+    safeStorageSet(key, legacyExisting);
+    return legacyExisting;
   }
 
   const next = createSessionId();
@@ -1783,10 +3423,10 @@ function loadSessionId(agentId: string) {
   return next;
 }
 
-function persistChatHistory(agentId: string) {
+function persistChatHistory(conversationScopeKey: string) {
   const stableMessages = chatMessages.value.filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item));
-  safeStorageSet(chatStorageKeyFor(agentId), JSON.stringify(stableMessages));
-  safeStorageSet(sessionStorageKeyFor(agentId), currentSessionId.value || createSessionId());
+  safeStorageSet(chatStorageKeyFor(conversationScopeKey), JSON.stringify(stableMessages));
+  safeStorageSet(sessionStorageKeyFor(conversationScopeKey), currentSessionId.value || createSessionId());
 }
 
 function getOpenClawMessages(items: AgentChatMessage[]): OpenClawMessage[] {
@@ -1794,7 +3434,7 @@ function getOpenClawMessages(items: AgentChatMessage[]): OpenClawMessage[] {
     .filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item))
     .filter((item) => !isRuntimeToolMessage(item) && !item.id.startsWith("runtime-tool-") && !item.toolName)
     .filter((item) => item.role === "assistant" || item.role === "user" || item.role === "system")
-    .map((item) => ({ role: item.role, content: item.text }));
+    .map((item) => ({ role: item.role, content: buildOpenClawMessageContent(item) }));
 }
 
 function getAgentInitial(agent: AgentListItem) {
@@ -1810,7 +3450,19 @@ function hashAgentSeed(value: string) {
   return hash;
 }
 
+function formatLobsterNumberBySeed(seed: string) {
+  const normalizedSeed = seed.trim().toLowerCase() || "dragonclaw";
+  const mixedHash = hashAgentSeed(`${normalizedSeed}|lobster`);
+  const numeric = 100000000 + (mixedHash % 900000000);
+  const raw = String(numeric).padStart(9, "0");
+  return `${raw.slice(0, 3)} ${raw.slice(3, 6)} ${raw.slice(6, 9)}`;
+}
+
 function getAgentAvatarUrl(agent: AgentListItem) {
+  const customAvatar = sidebarAgentAvatarOverrides.value[agent.agentId];
+  if (typeof customAvatar === "string" && customAvatar.trim()) {
+    return customAvatar.trim();
+  }
   if (agentAvatarPool.length === 0) {
     return null;
   }
@@ -1853,7 +3505,11 @@ function refreshAgentMetaFromHistory(agentId: string, messages: AgentChatMessage
     return;
   }
 
-  const latestPreview = latest.text.trim() || fallback || "暂无会话";
+  const latestPreview =
+    latest.text.trim() ||
+    (latest.attachments && latest.attachments.length > 0 ? `[附件 ${latest.attachments.length} 个]` : "") ||
+    fallback ||
+    "暂无会话";
   setAgentMeta(agentId, {
     preview: latestPreview,
     timeLabel: formatTimeLabel(latest.createdAt)
@@ -1906,6 +3562,260 @@ function mapFallbackMember() {
   });
 }
 
+function mapChatUserCustomAgent(agent: ChatUserCustomAgent): AgentListItem {
+  const kind = normalizeChatUserCustomAgentKind(agent.kind);
+  if (kind === "staff") {
+    return {
+      agentId: agent.agentId,
+      displayName: agent.displayName,
+      roleLabel: agent.roleLabel?.trim() || "数字员工",
+      channel: agent.channel?.trim() || "custom",
+      model: "llm/petclaw-1.0",
+      workspace: agent.workspace?.trim() || "employee-studio",
+      toolsProfile: "default",
+      toolsEnabledCount: null,
+      statusLabel: "在线",
+      statusTone: "online",
+      currentWorkLabel: "擅长方向",
+      currentWork: agent.currentWork?.trim() || "等待分配任务",
+      recentOutput: "",
+      scheduledLabel: agent.scheduledLabel?.trim() || "随时可用",
+      groupKind: "staff"
+    };
+  }
+
+  return {
+    agentId: agent.agentId,
+    displayName: agent.displayName,
+    roleLabel: "虾友",
+    channel: "friend",
+    model: "llm/petclaw-1.0",
+    workspace: "personal",
+    toolsProfile: "default",
+    toolsEnabledCount: null,
+    statusLabel: "在线",
+    statusTone: "online",
+    currentWorkLabel: "最近状态",
+    currentWork: "等待开始聊天",
+    recentOutput: "",
+    scheduledLabel: "随时可聊",
+    groupKind: "staff"
+  };
+}
+
+function resolveChatConversationGroupMembers(group: ChatConversationGroup, memberPool: AgentListItem[]) {
+  if (group.memberAgentIds.length === 0) {
+    return [] as AgentListItem[];
+  }
+  const memberMap = new Map(
+    memberPool
+      .filter((agent) => !isChatConversationGroupAgentId(agent.agentId))
+      .map((agent) => [agent.agentId.trim(), agent] as const)
+      .filter(([agentId]) => agentId.length > 0)
+  );
+  return group.memberAgentIds
+    .map((memberId) => memberMap.get(memberId))
+    .filter((item): item is AgentListItem => Boolean(item));
+}
+
+function getChatConversationGroupMembers(group: ChatConversationGroup) {
+  return resolveChatConversationGroupMembers(group, agents.value);
+}
+
+function formatChatConversationGroupMemberSummary(group: ChatConversationGroup, memberPool: AgentListItem[]) {
+  const members = resolveChatConversationGroupMembers(group, memberPool);
+  if (members.length === 0) {
+    return "暂无成员";
+  }
+  const names = members.map((member) => stripRoleLabel(member.displayName));
+  if (names.length <= 3) {
+    return names.join("、");
+  }
+  return `${names.slice(0, 3).join("、")} 等 ${names.length} 人`;
+}
+
+function mapChatConversationGroupAgent(group: ChatConversationGroup, memberPool: AgentListItem[]): AgentListItem {
+  const members = resolveChatConversationGroupMembers(group, memberPool);
+  const memberCount = members.length;
+  const memberSummary = formatChatConversationGroupMemberSummary(group, memberPool);
+  const hasOffline = members.some((member) => member.statusTone === "offline");
+  const hasBusy = members.some((member) => member.statusTone === "busy");
+  const statusTone: AgentStatusTone = hasOffline ? "offline" : hasBusy ? "busy" : "online";
+  const statusLabel =
+    memberCount === 0 ? "无成员" : statusTone === "offline" ? `${memberCount} 人（部分离线）` : `${memberCount} 人在线`;
+  return {
+    agentId: getChatConversationGroupAgentId(group.id),
+    displayName: group.name,
+    roleLabel: `群聊 · ${memberCount} 人`,
+    channel: "群聊",
+    model: "group-chat",
+    workspace: "group-chat",
+    toolsProfile: "group-chat",
+    toolsEnabledCount: null,
+    statusLabel,
+    statusTone,
+    currentWorkLabel: "群成员",
+    currentWork: memberSummary,
+    recentOutput: "",
+    scheduledLabel: memberCount > 0 ? "可群聊" : "待添加成员",
+    groupKind: "group"
+  };
+}
+
+function createChatUserCustomAgentId(displayName: string, kind: ChatUserCustomAgentKind = "friend") {
+  const slug = displayName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 18);
+  const suffix = Math.random().toString(36).slice(2, 6);
+  const base = slug || Date.now().toString(36);
+  const prefix = kind === "staff" ? "staff" : "friend";
+  return `${prefix}-${base}-${suffix}`;
+}
+
+type CreateChatUserCustomAgentOptions = {
+  kind?: ChatUserCustomAgentKind;
+  roleLabel?: string;
+  channel?: string;
+  workspace?: string;
+  currentWork?: string;
+  scheduledLabel?: string;
+  mission?: string;
+  tasks?: string[];
+  knowledgeScope?: ChatUserCustomAgentKnowledgeScope;
+  specificDomain?: string;
+};
+
+function createOrGetChatUserCustomAgent(displayName: string, options: CreateChatUserCustomAgentOptions = {}) {
+  const normalizedDisplayName = normalizeChatUserGroupName(displayName);
+  if (!normalizedDisplayName) {
+    return null;
+  }
+  const kind = normalizeChatUserCustomAgentKind(options.kind);
+  const normalizeOptionalField = (value: unknown, maxLength = 200) => (typeof value === "string" ? value.trim().slice(0, maxLength) : "");
+  const roleLabel = normalizeOptionalField(options.roleLabel);
+  const channel = normalizeOptionalField(options.channel);
+  const workspace = normalizeOptionalField(options.workspace);
+  const currentWork = normalizeOptionalField(options.currentWork);
+  const scheduledLabel = normalizeOptionalField(options.scheduledLabel);
+  const mission = normalizeOptionalField(options.mission, 1200);
+  const tasks = Array.isArray(options.tasks)
+    ? options.tasks
+        .map((task) => normalizeOptionalField(task, 80))
+        .filter(Boolean)
+        .slice(0, CREATE_EMPLOYEE_MAX_TASKS)
+    : [];
+  const specificDomain = normalizeOptionalField(options.specificDomain, 240);
+  const knowledgeScope = normalizeChatUserCustomAgentKnowledgeScope(options.knowledgeScope);
+
+  const existingAgent =
+    agents.value.find(
+      (agent) => equalsIgnoreCase(stripRoleLabel(agent.displayName), normalizedDisplayName) || equalsIgnoreCase(agent.agentId, normalizedDisplayName)
+    ) ?? null;
+  if (existingAgent) {
+    return existingAgent;
+  }
+
+  const existingCustom =
+    chatUserCustomAgents.value.find(
+      (item) => equalsIgnoreCase(item.displayName, normalizedDisplayName) || equalsIgnoreCase(item.agentId, normalizedDisplayName)
+    ) ?? null;
+  if (existingCustom) {
+    const mergedCustomAgent: ChatUserCustomAgent = {
+      ...existingCustom,
+      kind,
+      roleLabel: roleLabel || undefined,
+      channel: channel || undefined,
+      workspace: workspace || undefined,
+      currentWork: currentWork || undefined,
+      scheduledLabel: scheduledLabel || undefined,
+      mission: mission || undefined,
+      tasks: tasks.length > 0 ? tasks : undefined,
+      knowledgeScope,
+      specificDomain: specificDomain || undefined
+    };
+    const changed =
+      JSON.stringify({
+        kind: existingCustom.kind ?? "friend",
+        roleLabel: existingCustom.roleLabel ?? "",
+        channel: existingCustom.channel ?? "",
+        workspace: existingCustom.workspace ?? "",
+        currentWork: existingCustom.currentWork ?? "",
+        scheduledLabel: existingCustom.scheduledLabel ?? "",
+        mission: existingCustom.mission ?? "",
+        tasks: existingCustom.tasks ?? [],
+        knowledgeScope: existingCustom.knowledgeScope ?? "",
+        specificDomain: existingCustom.specificDomain ?? ""
+      }) !==
+      JSON.stringify({
+        kind: mergedCustomAgent.kind ?? "friend",
+        roleLabel: mergedCustomAgent.roleLabel ?? "",
+        channel: mergedCustomAgent.channel ?? "",
+        workspace: mergedCustomAgent.workspace ?? "",
+        currentWork: mergedCustomAgent.currentWork ?? "",
+        scheduledLabel: mergedCustomAgent.scheduledLabel ?? "",
+        mission: mergedCustomAgent.mission ?? "",
+        tasks: mergedCustomAgent.tasks ?? [],
+        knowledgeScope: mergedCustomAgent.knowledgeScope ?? "",
+        specificDomain: mergedCustomAgent.specificDomain ?? ""
+      });
+    if (changed) {
+      chatUserCustomAgents.value = chatUserCustomAgents.value.map((item) =>
+        equalsIgnoreCase(item.agentId, existingCustom.agentId) ? mergedCustomAgent : item
+      );
+      persistChatUserCustomAgents();
+    }
+    const existingInPane = agents.value.find((agent) => equalsIgnoreCase(agent.agentId, existingCustom.agentId)) ?? null;
+    if (existingInPane) {
+      const mappedExisting = mapChatUserCustomAgent(mergedCustomAgent);
+      agents.value = agents.value.map((agent) => (equalsIgnoreCase(agent.agentId, mappedExisting.agentId) ? mappedExisting : agent));
+      syncChatUserAgentOrder();
+      return mappedExisting;
+    }
+    const mappedExisting = mapChatUserCustomAgent(mergedCustomAgent);
+    agents.value = [...agents.value, mappedExisting];
+    syncChatUserAgentOrder();
+    return mappedExisting;
+  }
+
+  const knownIds = new Set(
+    [...agents.value, ...chatUserCustomAgents.value.map((item) => mapChatUserCustomAgent(item))]
+      .map((agent) => agent.agentId.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  let nextAgentId = createChatUserCustomAgentId(normalizedDisplayName, kind);
+  while (knownIds.has(nextAgentId.toLowerCase())) {
+    nextAgentId = createChatUserCustomAgentId(normalizedDisplayName, kind);
+  }
+
+  const nextCustomAgent: ChatUserCustomAgent = {
+    agentId: nextAgentId,
+    displayName: normalizedDisplayName,
+    createdAt: Date.now(),
+    kind,
+    roleLabel: roleLabel || undefined,
+    channel: channel || undefined,
+    workspace: workspace || undefined,
+    currentWork: currentWork || undefined,
+    scheduledLabel: scheduledLabel || undefined,
+    mission: mission || undefined,
+    tasks: tasks.length > 0 ? tasks : undefined,
+    knowledgeScope,
+    specificDomain: specificDomain || undefined
+  };
+  const sortedCustomAgents = [...chatUserCustomAgents.value, nextCustomAgent].sort((left, right) => left.createdAt - right.createdAt);
+  chatUserCustomAgents.value = sortedCustomAgents.slice(-200);
+  persistChatUserCustomAgents();
+
+  const mapped = mapChatUserCustomAgent(nextCustomAgent);
+  agents.value = [...agents.value, mapped];
+  syncChatUserAgentOrder();
+  return mapped;
+}
+
 async function loadAgents() {
   const invoke = getTauriInvoke();
   let loadedAgents: AgentListItem[] = [];
@@ -1928,6 +3838,25 @@ async function loadAgents() {
     }
   }
 
+  if (chatUserCustomAgents.value.length > 0) {
+    const knownAgentIds = new Set(loadedAgents.map((agent) => agent.agentId.trim().toLowerCase()).filter(Boolean));
+    for (const customAgent of chatUserCustomAgents.value) {
+      const mappedAgent = mapChatUserCustomAgent(customAgent);
+      const normalizedAgentId = mappedAgent.agentId.trim().toLowerCase();
+      if (!normalizedAgentId || knownAgentIds.has(normalizedAgentId)) {
+        continue;
+      }
+      knownAgentIds.add(normalizedAgentId);
+      loadedAgents.push(mappedAgent);
+    }
+  }
+
+  syncChatConversationGroupsWithMembers(loadedAgents);
+  if (chatConversationGroups.value.length > 0) {
+    const mappedConversationGroups = chatConversationGroups.value.map((group) => mapChatConversationGroupAgent(group, loadedAgents));
+    loadedAgents = [...loadedAgents, ...mappedConversationGroups];
+  }
+
   loadedAgents.sort((left, right) => {
     const toneWeight = { online: 0, busy: 1, offline: 2 } as const;
     const toneDiff = toneWeight[left.statusTone] - toneWeight[right.statusTone];
@@ -1938,11 +3867,19 @@ async function loadAgents() {
   });
 
   agents.value = loadedAgents;
+  syncChatUserAgentOrder();
 
   for (const agent of loadedAgents) {
-    const history = loadChatHistory(agent.agentId);
+    const defaultConversationScopeKey = resolveConversationScopeKey(agent.agentId, null);
+    if (!defaultConversationScopeKey) {
+      continue;
+    }
+    const readOptions: ConversationStorageReadOptions = isChatConversationGroupAgentId(agent.agentId)
+      ? {}
+      : { legacyAgentId: agent.agentId };
+    const history = loadChatHistory(defaultConversationScopeKey, readOptions);
     if (history.length > 0) {
-      agentHistories.value[agent.agentId] = history;
+      agentHistories.value[defaultConversationScopeKey] = history;
     }
     refreshAgentMetaFromHistory(agent.agentId, history, agent.currentWork);
   }
@@ -1959,33 +3896,57 @@ async function scrollMessagesToBottom() {
   }
 }
 
-function switchAgent(agentId: string | null) {
-  if (!agentId || agentId === selectedAgentId.value) {
+type SwitchAgentOptions = {
+  channelSession?: ChannelPaneChatItem | null;
+  force?: boolean;
+};
+
+function switchAgent(agentId: string | null, options: SwitchAgentOptions = {}) {
+  if (!agentId) {
     return;
   }
 
   const previousAgentId = selectedAgentId.value;
-  if (previousAgentId) {
-    agentHistories.value[previousAgentId] = [...chatMessages.value];
-    persistChatHistory(previousAgentId);
+  const previousChannelSession = activeChannelChatSession.value;
+  const nextChannelSession = options.channelSession ?? null;
+  const sameAgent = previousAgentId ? equalsIgnoreCase(previousAgentId, agentId) : false;
+  const sameChannelSession = (previousChannelSession?.id ?? "") === (nextChannelSession?.id ?? "");
+  if (!options.force && sameAgent && sameChannelSession) {
+    return;
+  }
+
+  const previousConversationScopeKey = resolveConversationScopeKey(previousAgentId, previousChannelSession);
+  if (previousConversationScopeKey) {
+    agentHistories.value[previousConversationScopeKey] = [...chatMessages.value];
+    persistChatHistory(previousConversationScopeKey);
+  }
+
+  const nextConversationScopeKey = resolveConversationScopeKey(agentId, nextChannelSession);
+  if (!nextConversationScopeKey) {
+    return;
   }
 
   selectedAgentId.value = agentId;
-  currentSessionId.value = loadSessionId(agentId);
+  activeChannelChatSession.value = nextChannelSession ? { ...nextChannelSession } : null;
+  const loadOptions: ConversationStorageReadOptions = nextChannelSession ? {} : { legacyAgentId: agentId };
+  currentSessionId.value = loadSessionId(nextConversationScopeKey, loadOptions);
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
 
-  const cachedHistory = agentHistories.value[agentId];
-  const loadedHistory = cachedHistory && cachedHistory.length > 0 ? cachedHistory : loadChatHistory(agentId);
+  const cachedHistory = agentHistories.value[nextConversationScopeKey];
+  const loadedHistory =
+    cachedHistory && cachedHistory.length > 0 ? cachedHistory : loadChatHistory(nextConversationScopeKey, loadOptions);
 
   const active = agents.value.find((item) => item.agentId === agentId) ?? null;
   chatMessages.value = loadedHistory.length > 0 ? [...loadedHistory] : createWelcomeMessages(active);
+  chatAttachments.value = [];
+  chatComposerError.value = "";
 
   setAgentMeta(agentId, { unread: 0 });
   if (utilityModalType.value) {
     void refreshUtilityModalData(utilityModalType.value);
-  } else if (isSidebarLogsOpen.value) {
+  } else if (isLogsPanelActive.value || isSidebarLogsOpen.value) {
     void refreshUtilityModalData("logs");
   }
   void scrollMessagesToBottom();
@@ -1993,38 +3954,991 @@ function switchAgent(agentId: string | null) {
 
 function handleNewChat() {
   const activeId = selectedAgentId.value;
-  if (!activeId) {
+  const conversationScopeKey = resolveConversationScopeKey(activeId, activeChannelChatSession.value);
+  if (!activeId || !conversationScopeKey) {
     return;
   }
 
   const active = agents.value.find((item) => item.agentId === activeId) ?? null;
   chatMessages.value = createWelcomeMessages(active);
+  chatAttachments.value = [];
+  chatComposerError.value = "";
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
-  persistChatHistory(activeId);
+  persistChatHistory(conversationScopeKey);
   refreshAgentMetaFromHistory(activeId, chatMessages.value, active?.currentWork || "暂无会话");
   void scrollMessagesToBottom();
 }
 
+function closeSidebarProfilePopover() {
+  isSidebarProfilePopoverOpen.value = false;
+  sidebarAvatarUploadError.value = "";
+  sidebarProfileNotice.value = "";
+}
+
+function toggleSidebarProfilePopover() {
+  if (isSidebarProfilePopoverOpen.value) {
+    closeSidebarProfilePopover();
+    return;
+  }
+  closeSidebarThemePopover();
+  isSidebarProfilePopoverOpen.value = true;
+  sidebarAvatarUploadError.value = "";
+  sidebarProfileNotice.value = "";
+}
+
+function setSidebarAvatarPresetCategory(category: SidebarAvatarCategoryId) {
+  sidebarAvatarPresetCategory.value = category;
+}
+
+function isSidebarAvatarOptionSelected(option: SidebarAvatarOption) {
+  const agent = activeAgent.value;
+  if (!agent || isChatConversationGroupAgentId(agent.agentId)) {
+    return false;
+  }
+  const current = getAgentAvatarUrl(agent);
+  return current === option.url;
+}
+
+function applySidebarAvatarOption(option: SidebarAvatarOption) {
+  const agent = activeAgent.value;
+  if (!agent || isChatConversationGroupAgentId(agent.agentId)) {
+    sidebarAvatarUploadError.value = "当前为群聊，不支持设置独立头像。";
+    return;
+  }
+  sidebarAvatarUploadError.value = "";
+  sidebarProfileNotice.value = "";
+  sidebarAgentAvatarOverrides.value = {
+    ...sidebarAgentAvatarOverrides.value,
+    [agent.agentId]: option.url
+  };
+  persistSidebarAvatarOverrides();
+}
+
+function resetSidebarAvatarOverride() {
+  const agent = activeAgent.value;
+  if (!agent || isChatConversationGroupAgentId(agent.agentId)) {
+    return;
+  }
+  const nextOverrides = { ...sidebarAgentAvatarOverrides.value };
+  if (!(agent.agentId in nextOverrides)) {
+    return;
+  }
+  delete nextOverrides[agent.agentId];
+  sidebarAgentAvatarOverrides.value = nextOverrides;
+  sidebarAvatarUploadError.value = "";
+  sidebarProfileNotice.value = "";
+  persistSidebarAvatarOverrides();
+}
+
+function openSidebarAvatarUploadPicker() {
+  if (!sidebarProfileCanCustomizeAvatar.value) {
+    sidebarAvatarUploadError.value = "当前为群聊，不支持上传自定义头像。";
+    return;
+  }
+  sidebarAvatarUploadInputRef.value?.click();
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("读取头像文件失败，请重试。"));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      if (!result) {
+        reject(new Error("头像文件为空，请重新选择。"));
+        return;
+      }
+      resolve(result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleSidebarAvatarUploadChange(event: Event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+  const file = target.files?.[0] ?? null;
+  target.value = "";
+  if (!file) {
+    return;
+  }
+
+  if (!file.type.startsWith("image/")) {
+    sidebarAvatarUploadError.value = "仅支持上传图片文件。";
+    sidebarProfileNotice.value = "";
+    return;
+  }
+  if (file.size > SIDEBAR_AVATAR_UPLOAD_MAX_BYTES) {
+    sidebarAvatarUploadError.value = "图片大小不能超过 2MB。";
+    sidebarProfileNotice.value = "";
+    return;
+  }
+
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    const agent = activeAgent.value;
+    if (!agent || isChatConversationGroupAgentId(agent.agentId)) {
+      sidebarAvatarUploadError.value = "当前为群聊，不支持上传自定义头像。";
+      return;
+    }
+    sidebarAgentAvatarOverrides.value = {
+      ...sidebarAgentAvatarOverrides.value,
+      [agent.agentId]: dataUrl
+    };
+    sidebarAvatarUploadError.value = "";
+    sidebarProfileNotice.value = "头像已更新。";
+    persistSidebarAvatarOverrides();
+  } catch (error) {
+    sidebarAvatarUploadError.value = error instanceof Error ? error.message : "上传头像失败，请稍后重试。";
+    sidebarProfileNotice.value = "";
+  }
+}
+
+async function handleSidebarLobsterIdCopy() {
+  try {
+    await writeTextToClipboard(sidebarProfileLobsterId.value);
+    sidebarProfileNotice.value = "龙虾号已复制。";
+  } catch {
+    sidebarAvatarUploadError.value = "复制失败，请稍后重试。";
+    sidebarProfileNotice.value = "";
+  }
+}
+
+function handleSidebarProfilePopoverDocumentMouseDown(event: MouseEvent) {
+  if (!isSidebarProfilePopoverOpen.value) {
+    return;
+  }
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    closeSidebarProfilePopover();
+    return;
+  }
+  if (sidebarProfilePanelRef.value?.contains(target) || sidebarProfileTriggerRef.value?.contains(target)) {
+    return;
+  }
+  closeSidebarProfilePopover();
+}
+
+function handleSidebarProfilePopoverDocumentKeyDown(event: KeyboardEvent) {
+  if (!isSidebarProfilePopoverOpen.value) {
+    return;
+  }
+  if (event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  closeSidebarProfilePopover();
+}
+
+function closeSidebarThemePopover() {
+  isSidebarThemePopoverOpen.value = false;
+}
+
+function toggleSidebarThemePopover() {
+  isSidebarThemePopoverOpen.value = !isSidebarThemePopoverOpen.value;
+  if (isSidebarThemePopoverOpen.value) {
+    closeSidebarProfilePopover();
+  }
+}
+
+function handleSidebarThemePopoverDocumentMouseDown(event: MouseEvent) {
+  if (!isSidebarThemePopoverOpen.value) {
+    return;
+  }
+  const popoverRoot = sidebarThemeQuickActionRef.value;
+  if (!popoverRoot) {
+    closeSidebarThemePopover();
+    return;
+  }
+  const target = event.target;
+  if (target instanceof Node && popoverRoot.contains(target)) {
+    return;
+  }
+  closeSidebarThemePopover();
+}
+
+function handleSidebarThemePopoverDocumentKeyDown(event: KeyboardEvent) {
+  if (!isSidebarThemePopoverOpen.value) {
+    return;
+  }
+  if (event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  closeSidebarThemePopover();
+}
+
+function openChatQuickCreateMenu() {
+  isChatQuickCreateMenuOpen.value = true;
+}
+
+function closeChatQuickCreateMenu() {
+  isChatQuickCreateMenuOpen.value = false;
+}
+
+function toggleChatQuickCreateMenu() {
+  if (isChatQuickCreateMenuOpen.value) {
+    closeChatQuickCreateMenu();
+    return;
+  }
+  openChatQuickCreateMenu();
+}
+
+function handleChatQuickCreateMenuDocumentMouseDown(event: MouseEvent) {
+  if (!isChatQuickCreateMenuOpen.value) {
+    return;
+  }
+  const menuRoot = chatQuickCreateMenuRef.value;
+  if (!menuRoot) {
+    closeChatQuickCreateMenu();
+    return;
+  }
+  const target = event.target;
+  if (target instanceof Node && menuRoot.contains(target)) {
+    return;
+  }
+  closeChatQuickCreateMenu();
+}
+
+function handleChatQuickCreateMenuDocumentKeyDown(event: KeyboardEvent) {
+  if (!isChatQuickCreateMenuOpen.value) {
+    return;
+  }
+  if (event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  closeChatQuickCreateMenu();
+}
+
+function resolveChatAgentContextMenuTarget() {
+  const targetAgentId = chatAgentContextMenuAgentId.value;
+  if (!targetAgentId) {
+    return null;
+  }
+  return staffAgentsAll.value.find((agent) => equalsIgnoreCase(agent.agentId, targetAgentId)) ?? null;
+}
+
+function closeChatAgentContextMenu() {
+  isChatAgentContextMenuOpen.value = false;
+  chatAgentContextMenuAgentId.value = null;
+}
+
+function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent) {
+  if (activeAgentPaneTab.value !== "staff" || agent.groupKind !== "staff") {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  closeChatQuickCreateMenu();
+  const menuWidth = 152;
+  const menuHeight = 128;
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
+  const fallbackX = Math.max(8, event.clientX);
+  const fallbackY = Math.max(8, event.clientY);
+  const x =
+    viewportWidth > 0 ? Math.max(8, Math.min(fallbackX, viewportWidth - menuWidth - 8)) : fallbackX;
+  const y =
+    viewportHeight > 0 ? Math.max(8, Math.min(fallbackY, viewportHeight - menuHeight - 8)) : fallbackY;
+  chatAgentContextMenuPosition.value = { x, y };
+  chatAgentContextMenuAgentId.value = agent.agentId;
+  isChatAgentContextMenuOpen.value = true;
+}
+
+function handleChatAgentContextMenuDocumentMouseDown(event: MouseEvent) {
+  if (!isChatAgentContextMenuOpen.value) {
+    return;
+  }
+  const menuRoot = chatAgentContextMenuRef.value;
+  if (!menuRoot) {
+    closeChatAgentContextMenu();
+    return;
+  }
+  const target = event.target;
+  if (target instanceof Node && menuRoot.contains(target)) {
+    return;
+  }
+  closeChatAgentContextMenu();
+}
+
+function handleChatAgentContextMenuDocumentKeyDown(event: KeyboardEvent) {
+  if (!isChatAgentContextMenuOpen.value) {
+    return;
+  }
+  if (event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  closeChatAgentContextMenu();
+}
+
+function openAgentSettingsPanelForAgent(agentId: string) {
+  switchAgent(agentId);
+  closeSidebarSettingsModal();
+  closeSidebarLogsPanel();
+  chatSettingsPanelMode.value = "agent";
+  isAgentSettingsOpen.value = true;
+}
+
+function handleChatAgentContextMenuDetail() {
+  const target = resolveChatAgentContextMenuTarget();
+  closeChatAgentContextMenu();
+  if (!target) {
+    return;
+  }
+  openAgentSettingsPanelForAgent(target.agentId);
+}
+
+function handleChatAgentContextMenuPin() {
+  const target = resolveChatAgentContextMenuTarget();
+  closeChatAgentContextMenu();
+  if (!target) {
+    return;
+  }
+  setAgentChatUserGroup(target.agentId, CHAT_USER_PINNED_GROUP_ID);
+  if (chatUserCollapsedSections.value[CHAT_USER_PINNED_GROUP_ID]) {
+    const nextCollapsedSections = { ...chatUserCollapsedSections.value };
+    delete nextCollapsedSections[CHAT_USER_PINNED_GROUP_ID];
+    chatUserCollapsedSections.value = nextCollapsedSections;
+    persistChatUserCollapsedSections();
+  }
+}
+
+function handleQuickCreateRole() {
+  closeChatQuickCreateMenu();
+  activeSection.value = "recruitment";
+  recruitmentKeyword.value = "";
+  recruitmentDivisionFilter.value = RECRUITMENT_DIVISION_FILTER_ALL;
+}
+
+function handleQuickAddFriend() {
+  closeChatQuickCreateMenu();
+  if (typeof window === "undefined") {
+    return;
+  }
+  const input = window.prompt("输入虾友名称（最多 24 个字符）");
+  if (input === null) {
+    return;
+  }
+  const friend = createOrGetChatUserCustomAgent(input);
+  if (!friend) {
+    return;
+  }
+  activeSection.value = "chat";
+  activeAgentPaneTab.value = "staff";
+  switchAgent(friend.agentId);
+}
+
+function handleChatQuickCreateAction(actionId: ChatQuickCreateActionId) {
+  if (actionId === "role") {
+    handleQuickCreateRole();
+    return;
+  }
+  if (actionId === "group") {
+    closeChatQuickCreateMenu();
+    handleCreateChatUserGroup();
+    return;
+  }
+  handleQuickAddFriend();
+}
+
+type OpenCreateChatUserGroupOptions = {
+  presetName?: string;
+  presetAgentIds?: string[];
+};
+
+function openCreateChatUserGroupModal(options: OpenCreateChatUserGroupOptions = {}) {
+  isCreateChatUserGroupModalOpen.value = true;
+  createChatUserGroupDraft.value = normalizeChatUserGroupName(options.presetName ?? "");
+  createChatUserGroupError.value = "";
+  createChatUserGroupSearch.value = "";
+  const selectableIds = new Set(createChatUserGroupSelectableAgents.value.map((agent) => agent.agentId));
+  const fromPreset = Array.isArray(options.presetAgentIds)
+    ? options.presetAgentIds.map((item) => item.trim()).filter((item) => selectableIds.has(item))
+    : [];
+  const activeInPane =
+    selectedAgentId.value &&
+    (createChatUserGroupSelectableAgents.value.find((agent) => equalsIgnoreCase(agent.agentId, selectedAgentId.value ?? "")) ?? null);
+  const dedupedPreset = Array.from(new Set(fromPreset));
+  createChatUserGroupSelectedAgentIds.value = (
+    dedupedPreset.length > 0 ? dedupedPreset : activeInPane ? [activeInPane.agentId] : []
+  ).slice(0, CREATE_CHAT_USER_GROUP_MAX_MEMBERS);
+  void nextTick(() => {
+    createChatUserGroupInputRef.value?.focus();
+  });
+}
+
+function findRecruitmentRoleMatchedAgentId(role: AgencyRosterRole) {
+  const roleZh = role.nameZh.trim();
+  const roleEn = role.nameEn.trim().toLowerCase();
+  const matched =
+    createChatUserGroupSelectableAgents.value.find((agent) => {
+      const displayName = stripRoleLabel(agent.displayName).trim();
+      const normalizedDisplayName = displayName.toLowerCase();
+      return (
+        (roleZh && equalsIgnoreCase(displayName, roleZh)) ||
+        (roleEn && normalizedDisplayName === roleEn) ||
+        equalsIgnoreCase(agent.agentId, roleZh) ||
+        equalsIgnoreCase(agent.agentId, roleEn)
+      );
+    }) ?? null;
+  return matched?.agentId ?? null;
+}
+
+function handleCreateChatUserGroup() {
+  openCreateChatUserGroupModal();
+}
+
+function handleRecruitmentCreateTeam(role: AgencyRosterRole) {
+  const matchedAgentId = findRecruitmentRoleMatchedAgentId(role);
+  openCreateChatUserGroupModal({
+    presetName: `${role.nameZh} 团队`,
+    presetAgentIds: matchedAgentId ? [matchedAgentId] : []
+  });
+}
+
+function closeCreateChatUserGroupModal() {
+  isCreateChatUserGroupModalOpen.value = false;
+  createChatUserGroupDraft.value = "";
+  createChatUserGroupError.value = "";
+  createChatUserGroupSearch.value = "";
+  createChatUserGroupSelectedAgentIds.value = [];
+}
+
+function handleCreateChatUserGroupSubmit() {
+  const normalizedName = normalizeChatUserGroupName(createChatUserGroupDraft.value);
+  if (!normalizedName) {
+    createChatUserGroupError.value = "请输入团队名称（最多 24 个字符）。";
+    void nextTick(() => {
+      createChatUserGroupInputRef.value?.focus();
+    });
+    return;
+  }
+
+  const selectableIds = new Set(createChatUserGroupSelectableAgents.value.map((agent) => agent.agentId));
+  const selectedAgentIds = Array.from(
+    new Set(createChatUserGroupSelectedAgentIds.value.map((agentId) => agentId.trim()).filter((agentId) => selectableIds.has(agentId)))
+  );
+  if (selectedAgentIds.length === 0) {
+    createChatUserGroupError.value = "请至少选择 1 位成员。";
+    return;
+  }
+  if (selectedAgentIds.length > CREATE_CHAT_USER_GROUP_MAX_MEMBERS) {
+    createChatUserGroupError.value = `最多选择 ${CREATE_CHAT_USER_GROUP_MAX_MEMBERS} 位成员。`;
+    return;
+  }
+
+  const group = createChatConversationGroup(normalizedName, selectedAgentIds);
+  if (!group) {
+    createChatUserGroupError.value = "团队名称已存在，请换一个名称。";
+    return;
+  }
+
+  const baseAgents = agents.value.filter((agent) => !isChatConversationGroupAgentId(agent.agentId));
+  const mappedConversationGroups = chatConversationGroups.value.map((item) => mapChatConversationGroupAgent(item, baseAgents));
+  const mappedGroupAgent = mappedConversationGroups.find((item) => item.agentId === getChatConversationGroupAgentId(group.id));
+  agents.value = [...baseAgents, ...mappedConversationGroups];
+  syncChatUserAgentOrder();
+
+  if (activeSection.value !== "chat") {
+    activeSection.value = "chat";
+  }
+
+  closeCreateChatUserGroupModal();
+  activeAgentPaneTab.value = "group";
+  switchAgent(mappedGroupAgent?.agentId ?? getChatConversationGroupAgentId(group.id), { force: true });
+}
+
+function isCreateChatUserGroupMemberSelected(agentId: string) {
+  return createChatUserGroupSelectedAgentIds.value.includes(agentId);
+}
+
+function handleCreateChatUserGroupMemberToggle(agentId: string, selected: boolean) {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return;
+  }
+  createChatUserGroupError.value = "";
+  const nextSelectedIds = new Set(createChatUserGroupSelectedAgentIds.value);
+  if (selected) {
+    if (!nextSelectedIds.has(normalizedAgentId) && nextSelectedIds.size >= CREATE_CHAT_USER_GROUP_MAX_MEMBERS) {
+      createChatUserGroupError.value = `最多选择 ${CREATE_CHAT_USER_GROUP_MAX_MEMBERS} 位成员。`;
+      return;
+    }
+    nextSelectedIds.add(normalizedAgentId);
+  } else {
+    nextSelectedIds.delete(normalizedAgentId);
+  }
+  createChatUserGroupSelectedAgentIds.value = Array.from(nextSelectedIds);
+}
+
+function handleCreateChatUserGroupSelectAllMembers() {
+  const allIds = createChatUserGroupFilteredAgents.value.map((agent) => agent.agentId);
+  createChatUserGroupSelectedAgentIds.value = allIds.slice(0, CREATE_CHAT_USER_GROUP_MAX_MEMBERS);
+  if (allIds.length > CREATE_CHAT_USER_GROUP_MAX_MEMBERS) {
+    createChatUserGroupError.value = `已选择前 ${CREATE_CHAT_USER_GROUP_MAX_MEMBERS} 位成员。`;
+  } else {
+    createChatUserGroupError.value = "";
+  }
+}
+
+function handleCreateChatUserGroupClearMembers() {
+  createChatUserGroupSelectedAgentIds.value = [];
+  createChatUserGroupError.value = "";
+}
+
+function handleDeleteChatUserGroup(groupId: string) {
+  const targetGroup = chatUserGroups.value.find((group) => group.id === groupId) ?? null;
+  if (!targetGroup || targetGroup.id === CHAT_USER_PINNED_GROUP_ID) {
+    return;
+  }
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    const confirmed = window.confirm(`确定删除分组「${targetGroup.name}」吗？组内成员会回到“全部聊天”。`);
+    if (!confirmed) {
+      return;
+    }
+  }
+  deleteChatUserGroup(targetGroup.id);
+}
+
+function handleAssignAgentToChatUserGroup(agentId: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const currentGroupName = getChatUserGroupName(agentId);
+  const input = window.prompt("输入分组名称（留空可移出分组）", currentGroupName === "未分组" ? "" : currentGroupName);
+  if (input === null) {
+    return;
+  }
+  const normalizedName = normalizeChatUserGroupName(input);
+  if (!normalizedName) {
+    clearAgentChatUserGroup(agentId);
+    return;
+  }
+  const group = createChatUserGroup(normalizedName);
+  if (!group) {
+    return;
+  }
+  setAgentChatUserGroup(agentId, group.id);
+}
+
+function getChatUserCustomAgentById(agentId: string) {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return null;
+  }
+  return chatUserCustomAgents.value.find((item) => equalsIgnoreCase(item.agentId, normalizedAgentId)) ?? null;
+}
+
+function isChatUserCustomAgent(agentId: string) {
+  return Boolean(getChatUserCustomAgentById(agentId));
+}
+
+function removeChatUserCustomAgent(agentId: string) {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return false;
+  }
+
+  const nextCustomAgents = chatUserCustomAgents.value.filter((item) => !equalsIgnoreCase(item.agentId, normalizedAgentId));
+  if (nextCustomAgents.length === chatUserCustomAgents.value.length) {
+    return false;
+  }
+  chatUserCustomAgents.value = nextCustomAgents;
+  persistChatUserCustomAgents();
+
+  const nextMembershipEntries = Object.entries(chatUserGroupMembership.value).filter(
+    ([memberAgentId]) => !equalsIgnoreCase(memberAgentId, normalizedAgentId)
+  );
+  if (nextMembershipEntries.length !== Object.keys(chatUserGroupMembership.value).length) {
+    chatUserGroupMembership.value = Object.fromEntries(nextMembershipEntries) as Record<string, string>;
+    persistChatUserGroupMembership();
+  }
+
+  const nextOrder = chatUserAgentOrder.value.filter((existingAgentId) => !equalsIgnoreCase(existingAgentId, normalizedAgentId));
+  if (nextOrder.length !== chatUserAgentOrder.value.length) {
+    chatUserAgentOrder.value = nextOrder;
+    persistChatUserAgentOrder();
+  }
+
+  return true;
+}
+
+async function handleChatAgentContextMenuDelete() {
+  const target = resolveChatAgentContextMenuTarget();
+  closeChatAgentContextMenu();
+  if (!target) {
+    return;
+  }
+  const targetCustomAgent = getChatUserCustomAgentById(target.agentId);
+  const targetCustomKind = normalizeChatUserCustomAgentKind(targetCustomAgent?.kind);
+
+  const displayName = stripRoleLabel(target.displayName) || target.agentId;
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    const confirmed = window.confirm(`确定删除数字员工「${displayName}」吗？`);
+    if (!confirmed) {
+      return;
+    }
+  }
+
+  try {
+    if (isChatUserCustomAgent(target.agentId)) {
+      const removed = removeChatUserCustomAgent(target.agentId);
+      if (!removed) {
+        throw new Error("未找到可删除的自定义员工。");
+      }
+      staffSourceDetail.value =
+        targetCustomKind === "staff" ? `已删除自定义员工「${displayName}」。` : `已删除虾友「${displayName}」。`;
+    } else {
+      const invoke = getTauriInvoke();
+      if (!invoke) {
+        throw new Error("当前环境不支持删除数字员工。");
+      }
+      const detail = (await invoke("remove_role_workflow_agent", {
+        agentId: target.agentId,
+        deleteFiles: true
+      })) as string;
+      if (detail && detail.trim()) {
+        staffSourceDetail.value = detail.trim();
+      }
+    }
+    await loadAgents();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "删除数字员工失败。";
+    if (typeof window !== "undefined" && typeof window.alert === "function") {
+      window.alert(message);
+    }
+  }
+}
+
+function handleChatUserAgentDragStart(sectionId: string, agentId: string, event: DragEvent) {
+  const normalizedSectionId = sectionId.trim();
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedSectionId || !normalizedAgentId) {
+    return;
+  }
+  chatUserDragSectionId.value = normalizedSectionId;
+  chatUserDragAgentId.value = normalizedAgentId;
+  chatUserDragOverAgentId.value = normalizedAgentId;
+
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", normalizedAgentId);
+  }
+}
+
+function handleChatUserAgentDragOver(sectionId: string, agentId: string, event: DragEvent) {
+  if (!chatUserDragAgentId.value || chatUserDragSectionId.value !== sectionId) {
+    return;
+  }
+  chatUserDragOverAgentId.value = agentId;
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "move";
+  }
+}
+
+function handleChatUserAgentDrop(sectionId: string, targetAgentId: string) {
+  const dragSourceAgentId = chatUserDragAgentId.value;
+  if (!dragSourceAgentId || !targetAgentId || chatUserDragSectionId.value !== sectionId) {
+    handleChatUserAgentDragEnd();
+    return;
+  }
+  if (dragSourceAgentId !== targetAgentId) {
+    moveChatUserAgentOrderBeforeTarget(dragSourceAgentId, targetAgentId);
+  }
+  handleChatUserAgentDragEnd();
+}
+
+function handleChatUserAgentDragEnd() {
+  chatUserDragSectionId.value = null;
+  chatUserDragAgentId.value = null;
+  chatUserDragOverAgentId.value = null;
+}
+
+function triggerChatAttachmentPicker() {
+  if (!activeAgent.value || isSending.value) {
+    return;
+  }
+  chatAttachmentInputRef.value?.click();
+}
+
+function removeChatAttachment(attachmentId: string) {
+  chatAttachments.value = chatAttachments.value.filter((attachment) => attachment.id !== attachmentId);
+}
+
+function appendChatComposerFiles(files: FileList | File[]) {
+  const source = Array.from(files);
+  if (source.length === 0) {
+    return;
+  }
+  const remainCount = CHAT_COMPOSER_MAX_ATTACHMENT_COUNT - chatAttachments.value.length;
+  if (remainCount <= 0) {
+    chatComposerError.value = `最多添加 ${CHAT_COMPOSER_MAX_ATTACHMENT_COUNT} 个附件。`;
+    return;
+  }
+
+  const accepted: ChatComposerAttachment[] = [];
+  const candidates = source.slice(0, remainCount);
+  for (const file of candidates) {
+    if (file.size > CHAT_COMPOSER_MAX_ATTACHMENT_SIZE) {
+      chatComposerError.value = `文件「${file.name}」超过 10 MB 限制。`;
+      continue;
+    }
+    accepted.push({
+      id: createChatAttachmentId(),
+      name: file.name,
+      size: file.size,
+      type: file.type || ""
+    });
+  }
+  if (accepted.length === 0) {
+    return;
+  }
+  chatAttachments.value = [...chatAttachments.value, ...accepted];
+  chatComposerError.value = "";
+}
+
+function handleChatAttachmentInputChange(event: Event) {
+  const input = event.target as HTMLInputElement | null;
+  const files = input?.files;
+  if (files && files.length > 0) {
+    appendChatComposerFiles(files);
+  }
+  if (input) {
+    input.value = "";
+  }
+}
+
+function resizeChatComposerInput() {
+  const textarea = chatComposerInputRef.value;
+  if (!textarea) {
+    return;
+  }
+
+  const computedStyle = window.getComputedStyle(textarea);
+  const lineHeight = Number.parseFloat(computedStyle.lineHeight) || Number.parseFloat(computedStyle.fontSize) * 1.5 || 22;
+  const paddingTop = Number.parseFloat(computedStyle.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(computedStyle.paddingBottom) || 0;
+  const borderTop = Number.parseFloat(computedStyle.borderTopWidth) || 0;
+  const borderBottom = Number.parseFloat(computedStyle.borderBottomWidth) || 0;
+  const minHeight = lineHeight * CHAT_COMPOSER_MIN_ROWS + paddingTop + paddingBottom + borderTop + borderBottom;
+  const maxHeight = lineHeight * CHAT_COMPOSER_MAX_ROWS + paddingTop + paddingBottom + borderTop + borderBottom;
+
+  textarea.style.height = "auto";
+  const nextHeight = Math.min(maxHeight, Math.max(minHeight, textarea.scrollHeight));
+  textarea.style.height = `${nextHeight}px`;
+  textarea.style.overflowY = textarea.scrollHeight > maxHeight + 1 ? "auto" : "hidden";
+}
+
+function handleChatComposerInput() {
+  resizeChatComposerInput();
+}
+
+function handleChatComposerKeydown(event: KeyboardEvent) {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    return;
+  }
+
+  event.preventDefault();
+  void submitChat();
+}
+
+function parseGroupSpeakerPrefix(text: string) {
+  const match = text.trim().match(/^【([^】]+)】\s*/);
+  if (!match) {
+    return null;
+  }
+  const speaker = match[1]?.trim() ?? "";
+  if (!speaker) {
+    return null;
+  }
+  return {
+    speaker,
+    content: text.replace(/^【[^】]+】\s*/, "").trim()
+  };
+}
+
+function buildGroupConversationTranscript(messages: AgentChatMessage[]) {
+  const stable = messages
+    .filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item) && !isRuntimeToolMessage(item))
+    .filter((item) => item.role === "assistant" || item.role === "user")
+    .slice(-40);
+  if (stable.length === 0) {
+    return "";
+  }
+  return stable
+    .map((message) => {
+      if (message.role === "user") {
+        const content = buildOpenClawMessageContent(message).trim();
+        return `用户：${content || "(空消息)"}`;
+      }
+      const parsed = parseGroupSpeakerPrefix(message.text);
+      const speaker = parsed?.speaker || "群成员";
+      const content = (parsed?.content || message.text).trim();
+      return `${speaker}：${content || "(空消息)"}`;
+    })
+    .join("\n");
+}
+
+function buildGroupMemberPromptMessages(group: ChatConversationGroup, member: AgentListItem, messages: AgentChatMessage[]): OpenClawMessage[] {
+  const memberName = stripRoleLabel(member.displayName);
+  const memberNames = getChatConversationGroupMembers(group)
+    .map((item) => stripRoleLabel(item.displayName))
+    .filter(Boolean);
+  const transcript = buildGroupConversationTranscript(messages);
+  const memberScopeText = memberNames.length > 0 ? memberNames.join("、") : "暂无";
+  return [
+    {
+      role: "system",
+      content:
+        `你是群聊「${group.name}」中的成员「${memberName}」。` +
+        `群成员有：${memberScopeText}。` +
+        "请只代表你自己发言，不要代替其他成员回复，语气自然简洁。"
+    },
+    {
+      role: "user",
+      content:
+        `以下是群聊最近消息（按时间顺序）：\n${transcript || "(暂无历史消息)"}\n\n` +
+        `请以「${memberName}」身份，回复最后一条来自用户的消息。`
+    }
+  ];
+}
+
 async function submitChat() {
   const text = chatInput.value.trim();
+  const pendingAttachments = [...chatAttachments.value];
   const activeAgent = agents.value.find((item) => item.agentId === selectedAgentId.value) ?? null;
+  const conversationScopeKey = resolveConversationScopeKey(activeAgent?.agentId ?? null, activeChannelChatSession.value);
+  const activeConversationGroup = findChatConversationGroupByAgentId(activeAgent?.agentId ?? null);
 
-  if (!text || isSending.value || !activeAgent) {
+  if ((!text && pendingAttachments.length === 0) || isSending.value || !activeAgent || !conversationScopeKey) {
+    return;
+  }
+
+  const startedAt = Date.now();
+  if (activeConversationGroup) {
+    const groupMembers = getChatConversationGroupMembers(activeConversationGroup);
+    if (groupMembers.length === 0) {
+      chatComposerError.value = "该团队暂无可用成员，请先重新创建团队。";
+      return;
+    }
+
+    chatMessages.value.push({
+      id: createMessageId("user"),
+      role: "user",
+      text: text || "(附件)",
+      status: "done",
+      createdAt: startedAt,
+      attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
+    });
+
+    const pendingRows = groupMembers.map((member) => {
+      const pendingId = createMessageId("assistant");
+      chatMessages.value.push({
+        id: pendingId,
+        role: "assistant",
+        text: `${stripRoleLabel(member.displayName)} 正在思考中...`,
+        status: "pending",
+        createdAt: Date.now()
+      });
+      return {
+        member,
+        pendingId
+      };
+    });
+
+    runtimeToolSyncContext.value = null;
+    clearRuntimeToolSyncRetryTimer();
+
+    chatInput.value = "";
+    chatAttachments.value = [];
+    chatComposerError.value = "";
+    void nextTick(() => {
+      resizeChatComposerInput();
+    });
+
+    const previewText =
+      text ||
+      (pendingAttachments.length > 0
+        ? `[附件 ${pendingAttachments.length} 个]`
+        : "已发送消息");
+    setAgentMeta(activeAgent.agentId, {
+      preview: `你：${previewText}`,
+      timeLabel: formatTimeLabel(startedAt),
+      unread: 0
+    });
+
+    isSending.value = true;
+    void scrollMessagesToBottom();
+
+    let latestGroupPreview = "群聊已回复";
+    let hasSuccess = false;
+    try {
+      for (const row of pendingRows) {
+        const promptMessages = buildGroupMemberPromptMessages(activeConversationGroup, row.member, chatMessages.value);
+        try {
+          const response = await sendOpenClawChat(promptMessages, { agentId: row.member.agentId });
+          const doneAt = Date.now();
+          const pendingMessage = chatMessages.value.find((item) => item.id === row.pendingId);
+          const prefixedText = `【${stripRoleLabel(row.member.displayName)}】${response.text}`;
+          if (pendingMessage) {
+            pendingMessage.text = prefixedText;
+            pendingMessage.status = "done";
+            pendingMessage.createdAt = doneAt;
+          }
+          latestGroupPreview = prefixedText.trim() || latestGroupPreview;
+          hasSuccess = true;
+          setAgentMeta(row.member.agentId, {
+            preview: response.text.trim() || "已在群聊回复",
+            timeLabel: formatTimeLabel(doneAt),
+            unread: 0
+          });
+        } catch (error) {
+          const failedAt = Date.now();
+          const pendingMessage = chatMessages.value.find((item) => item.id === row.pendingId);
+          const errorText = error instanceof Error ? error.message : "群成员回复失败。";
+          if (pendingMessage) {
+            pendingMessage.text = `【${stripRoleLabel(row.member.displayName)}】${errorText}`;
+            pendingMessage.status = "error";
+            pendingMessage.createdAt = failedAt;
+          }
+        }
+      }
+      const finishedAt = Date.now();
+      setAgentMeta(activeAgent.agentId, {
+        preview: hasSuccess ? latestGroupPreview : "群聊消息发送失败",
+        timeLabel: formatTimeLabel(finishedAt),
+        unread: 0
+      });
+    } finally {
+      isSending.value = false;
+      persistChatHistory(conversationScopeKey);
+      agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+      void scrollMessagesToBottom();
+    }
     return;
   }
 
   const history = getOpenClawMessages(chatMessages.value);
-  const startedAt = Date.now();
   const pendingId = createMessageId("assistant");
+  const attachmentSummary = formatAttachmentSummaryForPrompt(pendingAttachments);
+  const userContent =
+    pendingAttachments.length > 0
+      ? `${text || "(附件)"}${attachmentSummary ? `\n\n${attachmentSummary}` : ""}`
+      : text;
 
   chatMessages.value.push({
     id: createMessageId("user"),
     role: "user",
-    text,
+    text: text || "(附件)",
     status: "done",
-    createdAt: startedAt
+    createdAt: startedAt,
+    attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
   });
 
   chatMessages.value.push({
@@ -2048,8 +4962,18 @@ async function submitChat() {
   }
 
   chatInput.value = "";
+  chatAttachments.value = [];
+  chatComposerError.value = "";
+  void nextTick(() => {
+    resizeChatComposerInput();
+  });
+  const previewText =
+    text ||
+    (pendingAttachments.length > 0
+      ? `[附件 ${pendingAttachments.length} 个]`
+      : "已发送消息");
   setAgentMeta(activeAgent.agentId, {
-    preview: `你：${text}`,
+    preview: `你：${previewText}`,
     timeLabel: formatTimeLabel(startedAt),
     unread: 0
   });
@@ -2058,7 +4982,7 @@ async function submitChat() {
   void scrollMessagesToBottom();
 
   try {
-    const response = await sendOpenClawChat([...history, { role: "user", content: text }], { agentId: activeAgent.agentId });
+    const response = await sendOpenClawChat([...history, { role: "user", content: userContent }], { agentId: activeAgent.agentId });
     const doneAt = Date.now();
 
     const pendingMessage = chatMessages.value.find((item) => item.id === pendingId);
@@ -2101,8 +5025,8 @@ async function submitChat() {
       }
     }
     isSending.value = false;
-    persistChatHistory(activeAgent.agentId);
-    agentHistories.value[activeAgent.agentId] = [...chatMessages.value];
+    persistChatHistory(conversationScopeKey);
+    agentHistories.value[conversationScopeKey] = [...chatMessages.value];
     void scrollMessagesToBottom();
   }
 }
@@ -2254,6 +5178,43 @@ function getAgentToolsEnabledLabel(agent: AgentListItem) {
   return "—";
 }
 
+async function writeTextToClipboard(payload: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(payload);
+    return;
+  }
+  if (typeof document !== "undefined") {
+    const temp = document.createElement("textarea");
+    temp.value = payload;
+    temp.setAttribute("readonly", "true");
+    temp.style.position = "fixed";
+    temp.style.opacity = "0";
+    temp.style.left = "-9999px";
+    document.body.appendChild(temp);
+    temp.focus();
+    temp.select();
+    const copied = document.execCommand("copy");
+    document.body.removeChild(temp);
+    if (!copied) {
+      throw new Error("复制失败，请手动复制。");
+    }
+    return;
+  }
+  throw new Error("当前环境不支持复制。");
+}
+
+async function handleCopyActiveAgentId() {
+  const payload = activeAgent.value?.agentId?.trim() ?? "";
+  if (!payload) {
+    return;
+  }
+  try {
+    await writeTextToClipboard(payload);
+  } catch {
+    // Keep this action non-intrusive in the settings panel.
+  }
+}
+
 function clearSidebarSettingsStatus() {
   sidebarSettingsNotice.value = "";
   sidebarSettingsError.value = "";
@@ -2264,9 +5225,92 @@ function closeSidebarSettingsModal() {
   clearSidebarSettingsStatus();
 }
 
+function applySidebarThemeToDocument(mode: SidebarThemeMode, preset: SidebarThemePreset) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const resolved = mode === "night" ? "dark" : "light";
+  root.setAttribute("data-app-theme-mode", mode);
+  root.setAttribute("data-app-theme-resolved", resolved);
+  root.setAttribute("data-app-theme-preset", preset);
+  root.style.colorScheme = resolved;
+}
+
+function setSidebarThemePreset(next: SidebarThemePreset) {
+  if (sidebarThemePreset.value === next) {
+    return;
+  }
+  sidebarThemePreset.value = next;
+  const matched = sidebarThemePresetOptions.find((item) => item.id === next);
+  sidebarSettingsNotice.value = `主题已切换为「${matched?.label ?? next}」。`;
+  sidebarSettingsError.value = "";
+}
+
+function setSidebarThemeMode(next: SidebarThemeMode, options: { syncAppearance?: boolean; showNotice?: boolean } = {}) {
+  const shouldSyncAppearance = options.syncAppearance !== false;
+  const mappedAppearance: SidebarSettingsAppearance = next === "night" ? "dark" : "light";
+  const needsAppearanceSync = shouldSyncAppearance && sidebarSettingsAppearance.value !== mappedAppearance;
+
+  if (sidebarThemeMode.value === next && !needsAppearanceSync) {
+    return;
+  }
+  sidebarThemeMode.value = next;
+
+  if (shouldSyncAppearance) {
+    sidebarSettingsAppearance.value = mappedAppearance;
+    safeStorageSet(SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY, mappedAppearance);
+  }
+
+  if (options.showNotice !== false) {
+    const matched = sidebarThemeModeOptions.find((item) => item.id === next);
+    sidebarSettingsNotice.value = `模式已切换为「${matched?.label ?? next}」。`;
+    sidebarSettingsError.value = "";
+  }
+}
+
+function syncSidebarThemeModeFromAppearance(next: SidebarSettingsAppearance) {
+  if (next === "system") {
+    setSidebarThemeMode(resolveSystemThemeMode(), { syncAppearance: false, showNotice: false });
+    return;
+  }
+  setSidebarThemeMode(next === "dark" ? "night" : "day", { syncAppearance: false, showNotice: false });
+}
+
+function stopSystemThemeModeListener() {
+  cleanupSystemThemeModeListener?.();
+  cleanupSystemThemeModeListener = null;
+}
+
+function ensureSystemThemeModeListener() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return;
+  }
+  if (cleanupSystemThemeModeListener) {
+    return;
+  }
+
+  const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  const handler = () => {
+    if (sidebarSettingsAppearance.value !== "system") {
+      return;
+    }
+    setSidebarThemeMode(mediaQuery.matches ? "night" : "day", { syncAppearance: false, showNotice: false });
+  };
+
+  if (typeof mediaQuery.addEventListener === "function") {
+    mediaQuery.addEventListener("change", handler);
+    cleanupSystemThemeModeListener = () => mediaQuery.removeEventListener("change", handler);
+  } else {
+    mediaQuery.addListener(handler);
+    cleanupSystemThemeModeListener = () => mediaQuery.removeListener(handler);
+  }
+}
+
 function setSidebarSettingsAppearance(next: SidebarSettingsAppearance) {
   sidebarSettingsAppearance.value = next;
   safeStorageSet(SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY, next);
+  syncSidebarThemeModeFromAppearance(next);
   const matched = sidebarSettingsAppearanceOptions.find((item) => item.id === next);
   sidebarSettingsNotice.value = `外观已设置为「${matched?.label ?? next}」。`;
   sidebarSettingsError.value = "";
@@ -2371,26 +5415,7 @@ async function handleSidebarFeedbackCopy() {
   }
 
   try {
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(payload);
-    } else if (typeof document !== "undefined") {
-      const temp = document.createElement("textarea");
-      temp.value = payload;
-      temp.setAttribute("readonly", "true");
-      temp.style.position = "fixed";
-      temp.style.opacity = "0";
-      temp.style.left = "-9999px";
-      document.body.appendChild(temp);
-      temp.focus();
-      temp.select();
-      const copied = document.execCommand("copy");
-      document.body.removeChild(temp);
-      if (!copied) {
-        throw new Error("复制失败，请手动复制。");
-      }
-    } else {
-      throw new Error("当前环境不支持复制。");
-    }
+    await writeTextToClipboard(payload);
     sidebarSettingsError.value = "";
     sidebarSettingsNotice.value = "反馈内容已复制，可直接粘贴发送。";
   } catch (error) {
@@ -2407,15 +5432,35 @@ async function openFeedbackLogsFromSidebarSettings() {
 function toggleAgentSettingsPanel() {
   closeSidebarSettingsModal();
   closeSidebarLogsPanel();
-  isAgentSettingsOpen.value = !isAgentSettingsOpen.value;
+  if (isAgentSettingsOpen.value && chatSettingsPanelMode.value === "agent") {
+    isAgentSettingsOpen.value = false;
+    return;
+  }
+  chatSettingsPanelMode.value = "agent";
+  isAgentSettingsOpen.value = true;
+}
+
+function openGroupInfoPanel() {
+  if (!activeAgentIsConversationGroup.value) {
+    return;
+  }
+  closeSidebarSettingsModal();
+  closeSidebarLogsPanel();
+  chatSettingsPanelMode.value = "group";
+  isAgentSettingsOpen.value = true;
 }
 
 function closeAgentSettingsPanel() {
+  if (isLogsPanelActive.value) {
+    closeSidebarLogsPanel();
+    return;
+  }
   isAgentSettingsOpen.value = false;
 }
 
 async function openSidebarSettings() {
   activeSection.value = "chat";
+  closeSidebarThemePopover();
   isAgentSettingsOpen.value = false;
   closeSidebarLogsPanel();
   closeUtilityModal();
@@ -2430,14 +5475,16 @@ async function openSidebarSettings() {
 
 async function openSidebarLogs() {
   activeSection.value = "chat";
-  isAgentSettingsOpen.value = false;
+  closeSidebarThemePopover();
   closeSidebarSettingsModal();
   closeProxyConfigModal();
   closeFeishuConnectModal();
   closeChannelConfigModal();
   closeRelatedResourceModal();
   closeUtilityModal();
-  isSidebarLogsOpen.value = true;
+  isSidebarLogsOpen.value = false;
+  chatSettingsPanelMode.value = "logs";
+  isAgentSettingsOpen.value = true;
   clearUtilityViewStatus();
   resetUtilityLogViewState();
   await refreshUtilityModalData("logs");
@@ -2582,18 +5629,21 @@ async function handleProxyConfigSave() {
 }
 
 async function openSidebarProxyConfig() {
+  closeSidebarThemePopover();
   isAgentSettingsOpen.value = false;
   closeSidebarLogsPanel();
   closeSidebarSettingsModal();
   closeUtilityModal();
   closeFeishuConnectModal();
   closeChannelConfigModal();
+  closeChannelBindingModal();
   closeRelatedResourceModal();
   isProxyConfigModalOpen.value = true;
   await loadProxyConfigSnapshot();
 }
 
 async function openSidebarOpenClawWeb() {
+  closeSidebarThemePopover();
   isAgentSettingsOpen.value = false;
   closeSidebarLogsPanel();
   closeSidebarSettingsModal();
@@ -2601,6 +5651,7 @@ async function openSidebarOpenClawWeb() {
   closeProxyConfigModal();
   closeFeishuConnectModal();
   closeChannelConfigModal();
+  closeChannelBindingModal();
 
   const invoke = getTauriInvoke();
   if (invoke) {
@@ -2621,41 +5672,6 @@ async function openSidebarOpenClawWeb() {
   }
 
   await openExternalUrl("http://127.0.0.1:18789/");
-}
-
-async function openSidebarLegacyConsole() {
-  isAgentSettingsOpen.value = false;
-  closeSidebarLogsPanel();
-  closeSidebarSettingsModal();
-  closeUtilityModal();
-  closeProxyConfigModal();
-  closeFeishuConnectModal();
-  closeChannelConfigModal();
-  closeRelatedResourceModal();
-
-  const invoke = getTauriInvoke();
-  if (invoke) {
-    try {
-      await invoke("open_console_window", { section: "overview" });
-      return;
-    } catch {
-      // Fallback to opening console mode URL.
-    }
-  }
-
-  if (typeof window !== "undefined") {
-    try {
-      const consoleUrl = new URL(window.location.href);
-      consoleUrl.searchParams.set("window", "console");
-      consoleUrl.searchParams.set("section", "overview");
-      await openExternalUrl(consoleUrl.toString());
-      return;
-    } catch {
-      // Fallback to a relative URL when URL parsing fails.
-    }
-  }
-
-  await openExternalUrl("index.html?window=console&section=overview");
 }
 
 function equalsIgnoreCase(left: string | null | undefined, right: string | null | undefined) {
@@ -3046,6 +6062,16 @@ function getLogAgentId(log: OpenClawMessageLogItem): string | null {
   return null;
 }
 
+function resolveUtilityRuntimeRoleFilterAgentId(filterId: string, currentAgentId: string | null) {
+  if (filterId === UTILITY_LOG_ROLE_FILTER_ALL) {
+    return null;
+  }
+  if (filterId === UTILITY_LOG_ROLE_FILTER_ACTIVE) {
+    return currentAgentId?.trim() || null;
+  }
+  return filterId.trim() || null;
+}
+
 function matchesAgentLog(log: OpenClawMessageLogItem, agentId: string | null) {
   if (!agentId) {
     return false;
@@ -3063,6 +6089,28 @@ function matchesAgentLog(log: OpenClawMessageLogItem, agentId: string | null) {
     return true;
   }
   return equalsIgnoreCase(getLogAgentId(log), agentId);
+}
+
+function isScheduledRuntimeLog(log: OpenClawMessageLogItem) {
+  const method = (log.method ?? "").trim().toLowerCase();
+  if (method.includes("cron") || method.includes("schedule") || method.includes("timer")) {
+    return true;
+  }
+  const toolName = normalizeRuntimeToolName(log).trim().toLowerCase();
+  if (toolName.includes("cron") || toolName.includes("schedule") || toolName.includes("timer")) {
+    return true;
+  }
+  const requestTarget = `${log.path ?? ""} ${log.endpoint ?? ""}`.toLowerCase();
+  if (
+    requestTarget.includes("/cron") ||
+    requestTarget.includes("/schedule") ||
+    requestTarget.includes("scheduled") ||
+    requestTarget.includes("/timer")
+  ) {
+    return true;
+  }
+  const payloadSummary = `${log.requestBody ?? ""} ${log.streamSummary ?? ""} ${log.responseBody ?? ""}`.toLowerCase();
+  return payloadSummary.includes("\"cron\"") || payloadSummary.includes("\"schedule\"") || payloadSummary.includes("定时");
 }
 
 function isToolRuntimeLog(log: OpenClawMessageLogItem) {
@@ -3083,6 +6131,14 @@ function matchesRuntimeLogCategory(log: OpenClawMessageLogItem, category: Utilit
     return true;
   }
   return getRuntimeLogCategory(log) === category;
+}
+
+function matchesRuntimeLogSchedule(log: OpenClawMessageLogItem, filter: UtilityLogScheduleFilter) {
+  if (filter === "all") {
+    return true;
+  }
+  const isScheduled = isScheduledRuntimeLog(log);
+  return filter === "scheduled" ? isScheduled : !isScheduled;
 }
 
 function getRuntimeLogCategoryLabel(log: OpenClawMessageLogItem) {
@@ -3557,10 +6613,170 @@ async function loadRelatedChannelSnapshot() {
 async function loadRelatedTaskSnapshot() {
   const invoke = getTauriInvoke();
   if (invoke) {
-    relatedTaskSnapshot.value = (await invoke("load_task_snapshot")) as TaskSnapshotResponse;
+    const agentId = activeAgent.value?.agentId?.trim() ?? "";
+    relatedTaskSnapshot.value = (await invoke("load_task_snapshot", agentId ? { agentId } : {})) as TaskSnapshotResponse;
     return;
   }
   relatedTaskSnapshot.value = buildTaskFallbackSnapshot(taskItems.value);
+}
+
+function buildTaskReminderOccurrenceKey(job: TaskSnapshotItem) {
+  const nextRunAtMs = typeof job.nextRunAtMs === "number" && Number.isFinite(job.nextRunAtMs)
+    ? Math.floor(job.nextRunAtMs)
+    : 0;
+  return `${job.id}:${nextRunAtMs}`;
+}
+
+function isTaskReminderCandidate(job: TaskSnapshotItem, nowMs: number) {
+  if (!job.enabled || job.statusKind === "disabled") {
+    return false;
+  }
+  if (typeof job.nextRunAtMs !== "number" || !Number.isFinite(job.nextRunAtMs)) {
+    return false;
+  }
+  return job.nextRunAtMs <= nowMs;
+}
+
+async function loadTaskSnapshotForReminder() {
+  const invoke = getTauriInvoke();
+  if (invoke) {
+    return (await invoke("load_task_snapshot")) as TaskSnapshotResponse;
+  }
+  return buildTaskFallbackSnapshot(taskItems.value);
+}
+
+function clearTaskReminderAutoCloseTimer() {
+  if (taskReminderAutoCloseTimer) {
+    window.clearTimeout(taskReminderAutoCloseTimer);
+    taskReminderAutoCloseTimer = 0;
+  }
+}
+
+function showNextTaskReminder() {
+  if (taskReminderPopup.value || taskReminderQueue.value.length === 0) {
+    return;
+  }
+  const [nextJob, ...restJobs] = taskReminderQueue.value;
+  taskReminderQueue.value = restJobs;
+  taskReminderPopup.value = {
+    id: `task-reminder-${nextJob.id}-${nextJob.nextRunAtMs ?? Date.now()}`,
+    job: nextJob,
+    queuedCount: taskReminderQueue.value.length
+  };
+  clearTaskReminderAutoCloseTimer();
+  taskReminderAutoCloseTimer = window.setTimeout(() => {
+    closeTaskReminderPopup();
+  }, taskReminderAutoCloseMs);
+}
+
+function closeTaskReminderPopup() {
+  if (!taskReminderPopup.value) {
+    return;
+  }
+  taskReminderPopup.value = null;
+  clearTaskReminderAutoCloseTimer();
+  if (taskReminderQueue.value.length > 0) {
+    window.setTimeout(() => {
+      showNextTaskReminder();
+    }, 180);
+  }
+}
+
+function openTaskBoardFromReminder() {
+  activeSection.value = "tasks";
+  closeTaskReminderPopup();
+}
+
+function queueTaskReminder(job: TaskSnapshotItem) {
+  const key = buildTaskReminderOccurrenceKey(job);
+  const duplicateInPopup =
+    taskReminderPopup.value !== null && buildTaskReminderOccurrenceKey(taskReminderPopup.value.job) === key;
+  const duplicateInQueue = taskReminderQueue.value.some((item) => buildTaskReminderOccurrenceKey(item) === key);
+  if (duplicateInPopup || duplicateInQueue) {
+    return;
+  }
+
+  taskReminderQueue.value = [...taskReminderQueue.value, job];
+  if (taskReminderPopup.value) {
+    taskReminderPopup.value = {
+      ...taskReminderPopup.value,
+      queuedCount: taskReminderQueue.value.length
+    };
+    return;
+  }
+  showNextTaskReminder();
+}
+
+function bootstrapTaskReminderKeys(jobs: TaskSnapshotItem[]) {
+  const nowMs = Date.now();
+  for (const job of jobs) {
+    if (isTaskReminderCandidate(job, nowMs)) {
+      taskReminderSeenKeys.add(buildTaskReminderOccurrenceKey(job));
+    }
+  }
+  taskReminderBootstrapped = true;
+}
+
+async function pollTaskReminders() {
+  try {
+    const snapshot = await loadTaskSnapshotForReminder();
+    const jobs = Array.isArray(snapshot.jobs) ? snapshot.jobs : [];
+
+    if (!taskReminderBootstrapped) {
+      bootstrapTaskReminderKeys(jobs);
+      return;
+    }
+
+    const nowMs = Date.now();
+    const dueJobs = jobs
+      .filter((job) => isTaskReminderCandidate(job, nowMs))
+      .sort((left, right) => (left.nextRunAtMs ?? 0) - (right.nextRunAtMs ?? 0));
+
+    for (const job of dueJobs) {
+      const key = buildTaskReminderOccurrenceKey(job);
+      if (taskReminderSeenKeys.has(key)) {
+        continue;
+      }
+      taskReminderSeenKeys.add(key);
+      queueTaskReminder(job);
+    }
+
+    if (taskReminderSeenKeys.size > 600) {
+      taskReminderSeenKeys.clear();
+      for (const job of dueJobs.slice(-120)) {
+        taskReminderSeenKeys.add(buildTaskReminderOccurrenceKey(job));
+      }
+    }
+  } catch {
+    // Ignore reminder polling failures; task board can still be refreshed manually.
+  }
+}
+
+function startTaskReminderMonitor() {
+  taskReminderSeenKeys.clear();
+  taskReminderQueue.value = [];
+  taskReminderPopup.value = null;
+  taskReminderBootstrapped = false;
+  clearTaskReminderAutoCloseTimer();
+  if (taskReminderPollTimer) {
+    window.clearInterval(taskReminderPollTimer);
+  }
+  void pollTaskReminders();
+  taskReminderPollTimer = window.setInterval(() => {
+    void pollTaskReminders();
+  }, taskReminderPollIntervalMs);
+}
+
+function stopTaskReminderMonitor() {
+  if (taskReminderPollTimer) {
+    window.clearInterval(taskReminderPollTimer);
+    taskReminderPollTimer = 0;
+  }
+  clearTaskReminderAutoCloseTimer();
+  taskReminderQueue.value = [];
+  taskReminderPopup.value = null;
+  taskReminderSeenKeys.clear();
+  taskReminderBootstrapped = false;
 }
 
 async function refreshDashboardData() {
@@ -3768,6 +6984,7 @@ async function openFeishuConnectModal() {
   closeProxyConfigModal();
   closeRelatedResourceModal();
   closeChannelConfigModal();
+  closeChannelBindingModal();
   closeUtilityModal();
   closeSidebarSettingsModal();
   closeSidebarLogsPanel();
@@ -3989,6 +7206,142 @@ function resetChannelConfigSecretVisibility() {
   channelConfigSecretVisibility.value = {};
 }
 
+function isChannelConfigQrMode(catalog: ChannelPaneCatalogItem | null | undefined) {
+  return catalog?.connectionMode === "qr";
+}
+
+function isChannelQrBindingTerminalStatus(status: string | null | undefined) {
+  const normalizedStatus = (status ?? "").trim().toLowerCase();
+  return normalizedStatus === "success" || normalizedStatus === "error";
+}
+
+function stopChannelQrBindingPolling() {
+  if (channelQrBindingPollTimer) {
+    window.clearInterval(channelQrBindingPollTimer);
+    channelQrBindingPollTimer = 0;
+  }
+}
+
+async function clearChannelQrBindingSession(sessionId: string) {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return;
+  }
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return;
+  }
+  try {
+    await invoke("clear_openclaw_channel_qr_binding_session", { sessionId: normalizedSessionId });
+  } catch {
+    // Ignore cleanup errors.
+  }
+}
+
+function resetChannelQrBindingState(options?: { clearSession?: boolean }) {
+  const shouldClearSession = options?.clearSession === true;
+  const previousSessionId = channelQrBindingSessionId.value.trim();
+  stopChannelQrBindingPolling();
+  channelQrBindingStarting.value = false;
+  channelQrBindingSessionId.value = "";
+  channelQrBindingChannelType.value = "";
+  channelQrBindingSnapshot.value = null;
+  if (shouldClearSession && previousSessionId) {
+    void clearChannelQrBindingSession(previousSessionId);
+  }
+}
+
+function applyChannelQrBindingSnapshot(snapshot: OpenClawChannelQrBindingSessionSnapshot, fallbackChannelType = "") {
+  channelQrBindingSnapshot.value = snapshot;
+  channelQrBindingSessionId.value = (snapshot.sessionId ?? "").trim();
+  const channelType = normalizeChannelPaneType(snapshot.channelType) || normalizeChannelPaneType(fallbackChannelType) || fallbackChannelType;
+  channelQrBindingChannelType.value = channelType;
+}
+
+async function pollChannelQrBindingSession(sessionId: string) {
+  const invoke = getTauriInvoke();
+  const normalizedSessionId = sessionId.trim();
+  if (!invoke || !normalizedSessionId) {
+    return;
+  }
+  try {
+    const snapshot = (await invoke("poll_openclaw_channel_qr_binding", {
+      sessionId: normalizedSessionId
+    })) as OpenClawChannelQrBindingSessionSnapshot;
+    applyChannelQrBindingSnapshot(snapshot, channelQrBindingChannelType.value);
+    const normalizedStatus = (snapshot.status ?? "").trim().toLowerCase();
+    if (normalizedStatus === "success") {
+      stopChannelQrBindingPolling();
+      channelConfigNotice.value = "二维码绑定成功。";
+      channelConfigError.value = "";
+      await refreshDashboardData();
+      return;
+    }
+    if (normalizedStatus === "error") {
+      stopChannelQrBindingPolling();
+    }
+  } catch (error) {
+    stopChannelQrBindingPolling();
+    const detail = error instanceof Error ? error.message : "读取二维码绑定状态失败。";
+    if (detail.includes("未找到二维码会话")) {
+      resetChannelQrBindingState();
+      return;
+    }
+    channelConfigError.value = detail;
+  }
+}
+
+function startChannelQrBindingPolling(sessionId: string) {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return;
+  }
+  stopChannelQrBindingPolling();
+  void pollChannelQrBindingSession(normalizedSessionId);
+  channelQrBindingPollTimer = window.setInterval(() => {
+    void pollChannelQrBindingSession(normalizedSessionId);
+  }, CHANNEL_QR_BINDING_POLL_INTERVAL_MS);
+}
+
+async function handleStartChannelQrBinding() {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    channelConfigError.value = "当前环境不支持二维码绑定。";
+    return;
+  }
+  if (channelQrBindingStarting.value) {
+    return;
+  }
+  const backendType = normalizeChannelPaneType(channelConfigBackendType.value);
+  if (backendType !== "weixin" && backendType !== "wecom") {
+    channelConfigError.value = "当前频道暂不支持二维码绑定。";
+    return;
+  }
+
+  channelConfigNotice.value = "";
+  channelConfigError.value = "";
+  resetChannelQrBindingState({ clearSession: true });
+  channelQrBindingChannelType.value = backendType;
+  channelQrBindingStarting.value = true;
+
+  try {
+    const snapshot = (await invoke("start_openclaw_channel_qr_binding", {
+      channelType: backendType
+    })) as OpenClawChannelQrBindingSessionSnapshot;
+    applyChannelQrBindingSnapshot(snapshot, backendType);
+    const normalizedStatus = (snapshot.status ?? "").trim().toLowerCase();
+    if (normalizedStatus === "success") {
+      await refreshDashboardData();
+    } else if (!isChannelQrBindingTerminalStatus(normalizedStatus)) {
+      startChannelQrBindingPolling(snapshot.sessionId ?? "");
+    }
+  } catch (error) {
+    channelConfigError.value = error instanceof Error ? error.message : "启动二维码绑定失败。";
+  } finally {
+    channelQrBindingStarting.value = false;
+  }
+}
+
 function isChannelConfigSecretVisible(fieldKey: string) {
   return channelConfigSecretVisibility.value[fieldKey] === true;
 }
@@ -4028,21 +7381,26 @@ async function openChannelConfigModal(
   closeSidebarSettingsModal();
   closeSidebarLogsPanel();
   closeFeishuConnectModal();
+  closeChannelBindingModal();
 
   const invoke = getTauriInvoke();
   const allowEdit = options?.allowEditAccountId === true;
   const loadExisting = options?.loadExisting === true;
+  const catalog = chatChannelCatalogMap.get(catalogId) ?? null;
+  const isQrMode = isChannelConfigQrMode(catalog);
   channelConfigCatalogId.value = catalogId;
   channelConfigBackendType.value = backendType;
   channelConfigAccountId.value = accountId;
   channelConfigAllowEditAccountId.value = allowEdit;
   channelConfigExistingAccountIds.value = options?.existingAccountIds ?? [];
   channelConfigForm.value = {};
+  channelConfigNotice.value = "";
   channelConfigError.value = "";
   channelConfigSaving.value = false;
+  channelConfigSyncing.value = false;
   resetChannelConfigSecretVisibility();
 
-  if (loadExisting && invoke) {
+  if (!isQrMode && loadExisting && invoke) {
     try {
       const values = (await invoke("load_openclaw_channel_form_values", {
         channelType: backendType,
@@ -4055,10 +7413,30 @@ async function openChannelConfigModal(
     }
   }
 
+  if (isQrMode) {
+    const normalizedBackendType = normalizeChannelPaneType(backendType);
+    const normalizedSessionType = normalizeChannelPaneType(channelQrBindingChannelType.value);
+    if (normalizedSessionType && normalizedSessionType !== normalizedBackendType) {
+      resetChannelQrBindingState({ clearSession: true });
+    }
+    if (!channelQrBindingSessionId.value.trim()) {
+      channelQrBindingChannelType.value = normalizedBackendType;
+    } else if (!isChannelQrBindingTerminalStatus(channelQrBindingSnapshot.value?.status)) {
+      startChannelQrBindingPolling(channelQrBindingSessionId.value);
+    }
+  } else {
+    resetChannelQrBindingState({ clearSession: true });
+  }
+
   isChannelConfigModalOpen.value = true;
 }
 
 function closeChannelConfigModal() {
+  const shouldKeepQrSession = isChannelConfigQrMode(activeChannelConfigMeta.value);
+  stopChannelQrBindingPolling();
+  if (!shouldKeepQrSession) {
+    resetChannelQrBindingState({ clearSession: true });
+  }
   isChannelConfigModalOpen.value = false;
   channelConfigCatalogId.value = "";
   channelConfigBackendType.value = "";
@@ -4066,8 +7444,10 @@ function closeChannelConfigModal() {
   channelConfigAllowEditAccountId.value = false;
   channelConfigExistingAccountIds.value = [];
   channelConfigForm.value = {};
+  channelConfigNotice.value = "";
   channelConfigError.value = "";
   channelConfigSaving.value = false;
+  channelConfigSyncing.value = false;
   resetChannelConfigSecretVisibility();
 }
 
@@ -4079,6 +7459,80 @@ async function handleOpenChannelConfigDocs() {
   await openExternalUrl(url);
 }
 
+async function loadActiveChannelConfigFormValues() {
+  const invoke = getTauriInvoke();
+  const backendType = channelConfigBackendType.value.trim().toLowerCase();
+  const accountId = channelConfigAccountId.value.trim();
+  if (!invoke || !backendType || !accountId) {
+    return;
+  }
+  const values = (await invoke("load_openclaw_channel_form_values", {
+    channelType: backendType,
+    accountId
+  })) as Record<string, string>;
+  channelConfigForm.value = values && typeof values === "object" ? values : {};
+}
+
+async function handleInstallDingtalkPlugin() {
+  if (channelConfigSaving.value || channelConfigSyncing.value) {
+    return;
+  }
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    channelConfigError.value = "当前环境不支持安装频道插件。";
+    return;
+  }
+  const backendType = channelConfigBackendType.value.trim().toLowerCase() || "dingtalk";
+
+  channelConfigSyncing.value = true;
+  channelConfigNotice.value = "";
+  channelConfigError.value = "";
+  try {
+    const result = (await invoke("install_openclaw_channel_plugin", {
+      channelType: backendType
+    })) as OpenClawChannelPluginInstallResult;
+    if (!result.success) {
+      throw new Error(result.detail || "安装钉钉插件失败。");
+    }
+    channelConfigNotice.value = result.detail || "钉钉插件安装完成。";
+    await refreshDashboardData();
+  } catch (error) {
+    channelConfigError.value = error instanceof Error ? error.message : "安装钉钉插件失败。";
+  } finally {
+    channelConfigSyncing.value = false;
+  }
+}
+
+async function handleRefreshChannelConfigStatus() {
+  if (channelConfigSaving.value || channelConfigSyncing.value) {
+    return;
+  }
+  channelConfigSyncing.value = true;
+  channelConfigNotice.value = "";
+  channelConfigError.value = "";
+  try {
+    await loadActiveChannelConfigFormValues();
+    await refreshDashboardData();
+    channelConfigNotice.value = "状态已刷新。";
+  } catch (error) {
+    channelConfigError.value = error instanceof Error ? error.message : "刷新频道状态失败。";
+  } finally {
+    channelConfigSyncing.value = false;
+  }
+}
+
+async function handleAuthorizeDiscordBot() {
+  const applicationId = (channelConfigForm.value.appId ?? "").trim();
+  if (!applicationId) {
+    channelConfigError.value = "请先填写 Application ID，再进行机器人授权。";
+    return;
+  }
+  channelConfigNotice.value = "";
+  channelConfigError.value = "";
+  const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(applicationId)}&permissions=8&scope=bot%20applications.commands`;
+  await openExternalUrl(inviteUrl);
+}
+
 async function handleOpenLegacyChannelConfigFromCatalog(channelId: string) {
   const catalog = resolveChannelConfigCatalog(channelId);
   if (!catalog) {
@@ -4088,13 +7542,14 @@ async function handleOpenLegacyChannelConfigFromCatalog(channelId: string) {
   if (!backendType) {
     return;
   }
+  const isQrMode = isChannelConfigQrMode(catalog);
 
   const group = getChannelConfigGroup(catalog.id, backendType);
   if (group && group.accounts.length > 0) {
     const target = group.accounts.find((account) => account.isDefault) ?? group.accounts[0];
     await openChannelConfigModal(catalog.id, backendType, target.accountId, {
       allowEditAccountId: false,
-      loadExisting: true,
+      loadExisting: !isQrMode,
       existingAccountIds: group.accounts.map((account) => account.accountId)
     });
     return;
@@ -4102,15 +7557,21 @@ async function handleOpenLegacyChannelConfigFromCatalog(channelId: string) {
 
   await openChannelConfigModal(catalog.id, backendType, FEISHU_DEFAULT_ACCOUNT_ID, {
     allowEditAccountId: false,
-    // Non-Feishu cards should keep the legacy migration behavior on first open.
-    loadExisting: true,
+    loadExisting: !isQrMode,
     existingAccountIds: []
   });
 }
 
 async function handleSaveChannelConfig() {
+  if (channelConfigSyncing.value) {
+    return;
+  }
   const invoke = getTauriInvoke();
   const meta = activeChannelConfigMeta.value;
+  if (isChannelConfigQrMode(meta)) {
+    channelConfigError.value = "该频道使用二维码绑定，无需手动保存参数。";
+    return;
+  }
   const backendType = channelConfigBackendType.value.trim().toLowerCase();
   const accountId = channelConfigAccountId.value.trim();
   if (!meta) {
@@ -4149,8 +7610,18 @@ async function handleSaveChannelConfig() {
   }
 
   channelConfigSaving.value = true;
+  channelConfigNotice.value = "";
   channelConfigError.value = "";
   try {
+    if (meta.id === "dingtalk") {
+      const pluginInstallResult = (await invoke("install_openclaw_channel_plugin", {
+        channelType: backendType
+      })) as OpenClawChannelPluginInstallResult;
+      if (!pluginInstallResult.success) {
+        throw new Error(pluginInstallResult.detail || "安装钉钉插件失败。");
+      }
+    }
+
     await invoke("save_openclaw_channel_config", {
       payload: {
         channelType: backendType,
@@ -4158,6 +7629,16 @@ async function handleSaveChannelConfig() {
         config: payloadConfig
       }
     });
+
+    if (isChannelConfigGuidedLayout.value) {
+      const restartResult = (await invoke("run_lobster_action", {
+        action: "restart_gateway"
+      })) as LobsterActionResult;
+      if (!restartResult.success) {
+        throw new Error(`配置已保存，但网关重启失败：${restartResult.detail}`);
+      }
+    }
+
     closeChannelConfigModal();
     await refreshDashboardData();
   } catch (error) {
@@ -4174,6 +7655,182 @@ function handleChannelPaneCatalogCardClick(channelId: string) {
     return;
   }
   void handleOpenLegacyChannelConfigFromCatalog(normalized || channelId);
+}
+
+function resolveMainStaffAgent() {
+  const staff = agents.value.filter((agent) => agent.groupKind === "staff");
+  if (staff.length === 0) {
+    return null;
+  }
+  return (
+    staff.find((agent) => equalsIgnoreCase(agent.agentId, "main")) ??
+    staff.find((agent) => (agent.channel ?? "").trim().toLowerCase() === "main") ??
+    staff[0]
+  );
+}
+
+function findChannelAccountSnapshot(channelType: string, accountId: string) {
+  const normalizedType = normalizeChannelPaneType(channelType);
+  const rawType = channelType.trim().toLowerCase();
+  const normalizedAccountId = accountId.trim().toLowerCase();
+  if (!normalizedAccountId) {
+    return null;
+  }
+
+  const groups = dashboardChannelSnapshot.value?.channels ?? [];
+  for (const group of groups) {
+    const groupNormalizedType = normalizeChannelPaneType(group.channelType);
+    const groupRawType = (group.channelType ?? "").trim().toLowerCase();
+    if (normalizedType) {
+      if (groupNormalizedType !== normalizedType) {
+        continue;
+      }
+    } else if (groupRawType !== rawType) {
+      continue;
+    }
+
+    const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+    const matched = accounts.find((account) => account.accountId.trim().toLowerCase() === normalizedAccountId);
+    if (matched) {
+      return matched;
+    }
+  }
+
+  return null;
+}
+
+function closeChannelBindingModal() {
+  isChannelBindingModalOpen.value = false;
+  channelBindingModalItem.value = null;
+  channelBindingTargetAgentId.value = "";
+  channelBindingSaving.value = false;
+  channelBindingError.value = "";
+}
+
+function handleChannelPaneChatItemConfigClick(item: ChannelPaneChatItem) {
+  closeProxyConfigModal();
+  closeRelatedResourceModal();
+  closeChannelConfigModal();
+  closeFeishuConnectModal();
+  closeUtilityModal();
+  closeSidebarSettingsModal();
+  closeSidebarLogsPanel();
+
+  const staff = agents.value.filter((agent) => agent.groupKind === "staff");
+  const explicitBoundAgent = item.boundAgentId?.trim()
+    ? staff.find((agent) => equalsIgnoreCase(agent.agentId, item.boundAgentId ?? "")) ?? null
+    : null;
+  const mainAgent = resolveMainStaffAgent();
+  const initialTargetAgent = explicitBoundAgent ?? mainAgent ?? staff[0] ?? null;
+
+  channelBindingModalItem.value = { ...item };
+  channelBindingTargetAgentId.value = initialTargetAgent?.agentId ?? "";
+  channelBindingSaving.value = false;
+  channelBindingError.value = "";
+  isChannelBindingModalOpen.value = true;
+}
+
+async function handleSaveChannelBinding() {
+  const invoke = getTauriInvoke();
+  const item = channelBindingModalItem.value;
+  const targetAgentId = channelBindingTargetAgentId.value.trim();
+  if (!item || channelBindingSaving.value) {
+    return;
+  }
+  if (!targetAgentId) {
+    channelBindingError.value = "请选择要绑定的数字员工。";
+    return;
+  }
+  const targetAgent =
+    agents.value.find((agent) => agent.groupKind === "staff" && equalsIgnoreCase(agent.agentId, targetAgentId)) ?? null;
+  if (!targetAgent) {
+    channelBindingError.value = "所选数字员工不可用，请重新选择。";
+    return;
+  }
+  if (!invoke) {
+    channelBindingError.value = "当前环境不支持保存频道绑定。";
+    return;
+  }
+
+  channelBindingSaving.value = true;
+  channelBindingError.value = "";
+  try {
+    await invoke("save_openclaw_channel_binding", {
+      channelType: item.channelType,
+      accountId: item.accountId,
+      agentId: targetAgent.agentId
+    });
+    await refreshDashboardData();
+
+    const activeSession = activeChannelChatSession.value;
+    if (activeSession && activeSession.id === item.id) {
+      switchAgent(targetAgent.agentId, {
+        channelSession: {
+          ...activeSession,
+          boundAgentId: targetAgent.agentId
+        },
+        force: true
+      });
+    }
+
+    closeChannelBindingModal();
+  } catch (error) {
+    channelBindingError.value = error instanceof Error ? error.message : "保存频道绑定失败。";
+  } finally {
+    channelBindingSaving.value = false;
+  }
+}
+
+async function handleChannelPaneChatItemClick(item: ChannelPaneChatItem) {
+  const account = findChannelAccountSnapshot(item.channelType, item.accountId);
+  const configuredBoundAgentId = account?.agentId?.trim() ?? "";
+  const configuredBoundAgent = configuredBoundAgentId
+    ? agents.value.find((agent) => equalsIgnoreCase(agent.agentId, configuredBoundAgentId)) ?? null
+    : null;
+  const mainAgent = resolveMainStaffAgent();
+  const targetAgent = configuredBoundAgent ?? mainAgent;
+
+  if (!targetAgent) {
+    return;
+  }
+
+  const shouldPersistDefaultBinding = !configuredBoundAgent;
+  const invoke = getTauriInvoke();
+  if (invoke && shouldPersistDefaultBinding) {
+    try {
+      await invoke("save_openclaw_channel_binding", {
+        channelType: item.channelType,
+        accountId: item.accountId,
+        agentId: targetAgent.agentId
+      });
+      await refreshDashboardData();
+    } catch {
+      // Keep UX smooth: still allow entering chat even if binding persistence fails.
+    }
+  }
+
+  switchAgent(targetAgent.agentId, {
+    channelSession: {
+      ...item,
+      boundAgentId: targetAgent.agentId
+    }
+  });
+}
+
+function isChannelChatItemActive(item: ChannelPaneChatItem) {
+  const activeSession = activeChannelChatSession.value;
+  const selectedAgent = selectedAgentId.value;
+  if (!activeSession || !selectedAgent) {
+    return false;
+  }
+  if (activeSession.id !== item.id) {
+    return false;
+  }
+  const boundAgentId = item.boundAgentId?.trim();
+  if (!boundAgentId) {
+    return true;
+  }
+  return equalsIgnoreCase(boundAgentId, selectedAgent);
 }
 
 function getSkillMarketCacheKey(category: SkillMarketSectionCategory, sortBy: SkillMarketSortBy) {
@@ -4471,6 +8128,57 @@ function buildRoleWorkflowInstallPrompt(roleName: string, sourcePath: string, de
   ].join("\n");
 }
 
+function buildRoleWorkflowInstallNoticeText(roleName: string, workspaceDir: string, dispatchSummary = "") {
+  const normalizedDispatchSummary = dispatchSummary.trim();
+  return [
+    `角色已安装：${roleName}。`,
+    `配置文件目录：${workspaceDir}。`,
+    normalizedDispatchSummary
+  ]
+    .filter(Boolean)
+    .join("");
+}
+
+function upsertOptimisticRoleWorkflowAgent(agentId: string, roleName: string, workspaceDir: string) {
+  const normalizedName = roleName.trim() || agentId;
+  const existingIndex = agents.value.findIndex((agent) => equalsIgnoreCase(agent.agentId, agentId));
+  const nextAgent: AgentListItem = {
+    agentId,
+    displayName: normalizedName,
+    roleLabel: "数字员工",
+    channel: "main",
+    model: "llm/petclaw-1.0",
+    workspace: workspaceDir,
+    toolsProfile: "default",
+    toolsEnabledCount: null,
+    statusLabel: "在线",
+    statusTone: "online",
+    currentWorkLabel: "正在处理什么",
+    currentWork: "刚安装完成，等待开始协作",
+    recentOutput: "",
+    scheduledLabel: "随时可用",
+    groupKind: "staff"
+  };
+
+  if (existingIndex >= 0) {
+    const existingAgent = agents.value[existingIndex];
+    agents.value[existingIndex] = {
+      ...existingAgent,
+      ...nextAgent,
+      roleLabel: existingAgent.roleLabel || nextAgent.roleLabel
+    };
+  } else {
+    agents.value = [...agents.value, nextAgent];
+  }
+
+  setAgentMeta(agentId, {
+    preview: "角色安装完成，等待开始对话",
+    timeLabel: formatTimeLabel(Date.now()),
+    unread: 0
+  });
+  syncChatUserAgentOrder();
+}
+
 async function installRoleWorkflowRole() {
   const found = activeRoleWorkflowBase.value;
   if (!found || roleWorkflowDetailLoading.value || isRoleWorkflowInstalling.value) {
@@ -4499,6 +8207,7 @@ async function installRoleWorkflowRole() {
   roleWorkflowDetailNotice.value = null;
   isRoleWorkflowInstalling.value = true;
   try {
+    const installStartedAt = Date.now();
     const result = (await invoke("install_role_workflow_agent", {
       agentId,
       displayName: selectedNameZh || found.role.nameEn || found.role.nameZh,
@@ -4509,32 +8218,74 @@ async function installRoleWorkflowRole() {
     const roleName = selectedNameZh || found.role.nameZh || found.role.nameEn || agentId;
     const workspaceDir = resolveInstalledRoleWorkspaceDir(result ?? "", agentId);
     const openclawPrompt = buildRoleWorkflowInstallPrompt(roleName, found.role.sourcePath, markdown);
-
-    let openclawDispatchSummary = "已将角色详情发送到 OpenClaw。";
-    try {
-      await sendOpenClawChat(
-        [{ role: "user", content: openclawPrompt }],
-        selectedAgentId.value ? { agentId: selectedAgentId.value } : {}
-      );
-    } catch (dispatchError) {
-      openclawDispatchSummary = `角色已安装，但发送角色详情到 OpenClaw 失败：${
-        dispatchError instanceof Error ? dispatchError.message : "未知错误"
-      }`;
-    }
-
+    const dispatchAgentId = selectedAgentId.value;
+    upsertOptimisticRoleWorkflowAgent(agentId, roleName, workspaceDir);
+    switchAgent(agentId, { force: true });
     roleWorkflowDetailNotice.value = {
       tone: "success",
-      text: `角色已安装：${roleName}。配置文件目录：${workspaceDir}。${openclawDispatchSummary}`
+      text: buildRoleWorkflowInstallNoticeText(roleName, workspaceDir, "正在同步角色详情到 OpenClaw...")
     };
-    await loadAgents();
-    const installedAgent =
-      agents.value.find((agent) => equalsIgnoreCase(agent.agentId, agentId)) ??
-      agents.value.find((agent) => stripRoleLabel(agent.displayName) === roleName);
-    if (installedAgent) {
-      switchAgent(installedAgent.agentId);
-      return installedAgent.agentId;
-    }
-    return null;
+    const installDurationMs = Date.now() - installStartedAt;
+    console.info(`[role-install] install_role_workflow_agent completed in ${installDurationMs}ms`, {
+      agentId,
+      roleName
+    });
+
+    void (async () => {
+      const dispatchStartedAt = Date.now();
+      try {
+        await sendOpenClawChat(
+          [{ role: "user", content: openclawPrompt }],
+          dispatchAgentId ? { agentId: dispatchAgentId } : {}
+        );
+        const dispatchDurationMs = Date.now() - dispatchStartedAt;
+        console.info(`[role-install] sendOpenClawChat completed in ${dispatchDurationMs}ms`, {
+          agentId,
+          dispatchAgentId: dispatchAgentId ?? null
+        });
+        roleWorkflowDetailNotice.value = {
+          tone: "success",
+          text: buildRoleWorkflowInstallNoticeText(roleName, workspaceDir, "已将角色详情发送到 OpenClaw。")
+        };
+      } catch (dispatchError) {
+        const dispatchDurationMs = Date.now() - dispatchStartedAt;
+        console.warn(`[role-install] sendOpenClawChat failed after ${dispatchDurationMs}ms`, dispatchError);
+        roleWorkflowDetailNotice.value = {
+          tone: "success",
+          text: buildRoleWorkflowInstallNoticeText(
+            roleName,
+            workspaceDir,
+            `发送角色详情到 OpenClaw 失败：${dispatchError instanceof Error ? dispatchError.message : "未知错误"}`
+          )
+        };
+      }
+    })();
+
+    void (async () => {
+      const reloadStartedAt = Date.now();
+      try {
+        await loadAgents();
+        const reloadDurationMs = Date.now() - reloadStartedAt;
+        console.info(`[role-install] loadAgents completed in ${reloadDurationMs}ms`, {
+          agentId,
+          roleName
+        });
+        const installedAgent =
+          agents.value.find((agent) => equalsIgnoreCase(agent.agentId, agentId)) ??
+          agents.value.find((agent) => stripRoleLabel(agent.displayName) === roleName);
+        if (installedAgent) {
+          switchAgent(installedAgent.agentId, { force: true });
+        } else {
+          upsertOptimisticRoleWorkflowAgent(agentId, roleName, workspaceDir);
+          switchAgent(agentId, { force: true });
+        }
+      } catch (reloadError) {
+        const reloadDurationMs = Date.now() - reloadStartedAt;
+        console.warn(`[role-install] loadAgents failed after ${reloadDurationMs}ms`, reloadError);
+      }
+    })();
+
+    return agentId;
   } catch (error) {
     roleWorkflowDetailNotice.value = {
       tone: "error",
@@ -4729,6 +8480,10 @@ function deleteRoleWorkflowSavedVersion(versionId: string) {
   persistRoleWorkflowOverrides();
 }
 
+function handleRecruitmentOpenRoleDetail(role: AgencyRosterRole) {
+  void openRoleWorkflowEditor(role);
+}
+
 function handleRecruitRole(role: AgencyRosterRole) {
   void (async () => {
     await openRoleWorkflowEditor(role);
@@ -4744,7 +8499,352 @@ function handleRecruitRole(role: AgencyRosterRole) {
   })();
 }
 
+function selectRecruitmentDivisionFilter(divisionId: string) {
+  recruitmentDivisionFilter.value = divisionId;
+}
+
+function cloneCreateEmployeeDefaultRules() {
+  return CREATE_EMPLOYEE_DEFAULT_RULES.map((rule) => ({
+    ...rule
+  }));
+}
+
+function getCreateEmployeeFormalityLabel(value: number) {
+  if (value < 30) return "非常正式";
+  if (value < 45) return "比较正式";
+  if (value > 70) return "非常随意";
+  if (value > 55) return "比较随意";
+  return "平衡";
+}
+
+function getCreateEmployeeDetailLabel(value: number) {
+  if (value < 30) return "非常简洁";
+  if (value < 45) return "比较简洁";
+  if (value > 70) return "非常详细";
+  if (value > 55) return "比较详细";
+  return "平衡";
+}
+
+function resolveCreateEmployeeRoleLabel(identityIds: string[]) {
+  const selectedNames = CREATE_EMPLOYEE_IDENTITY_OPTIONS.filter((identity) => identityIds.includes(identity.id)).map(
+    (identity) => identity.name
+  );
+  if (selectedNames.length === 0) {
+    return "数字员工";
+  }
+  if (selectedNames.length === 1) {
+    return selectedNames[0];
+  }
+  if (selectedNames.length === 2) {
+    return `${selectedNames[0]} + ${selectedNames[1]}`;
+  }
+  return `${selectedNames.slice(0, 2).join(" + ")} 等多功能助手`;
+}
+
+function resolveCreateEmployeeWorkspace(scope: ChatUserCustomAgentKnowledgeScope, specificDomain: string) {
+  if (scope === "document") {
+    return "knowledge-base";
+  }
+  if (scope === "specific") {
+    const normalizedDomain = specificDomain
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 24);
+    return normalizedDomain ? `domain-${normalizedDomain}` : "domain-lab";
+  }
+  return "general-lab";
+}
+
+function resolveCreateEmployeeCurrentWork(mission: string, tasks: string[]) {
+  const normalizedMission = mission.trim();
+  if (normalizedMission) {
+    return normalizedMission.slice(0, 120);
+  }
+  if (tasks.length > 0) {
+    return `擅长：${tasks.slice(0, 3).join("、")}${tasks.length > 3 ? "等任务" : ""}`;
+  }
+  return "等待分配任务";
+}
+
+function resetCreateEmployeeModalDraft() {
+  createEmployeeStep.value = 1;
+  createEmployeeError.value = "";
+  createEmployeeNotice.value = "";
+  createEmployeeNameDraft.value = "";
+  createEmployeeSelectedIdentityIds.value = [];
+  createEmployeeMissionDraft.value = "";
+  createEmployeeTasks.value = [];
+  createEmployeeTaskInput.value = "";
+  createEmployeeKnowledgeScope.value = "general";
+  createEmployeeSpecificDomain.value = "";
+  createEmployeeFormality.value = 50;
+  createEmployeeDetail.value = 50;
+  createEmployeeOpeningLine.value = "";
+  createEmployeeRules.value = cloneCreateEmployeeDefaultRules();
+}
+
+function openCreateEmployeeModal() {
+  resetCreateEmployeeModalDraft();
+  isCreateEmployeeModalOpen.value = true;
+  void nextTick(() => {
+    createEmployeeNameInputRef.value?.focus();
+  });
+}
+
+function closeCreateEmployeeModal() {
+  isCreateEmployeeModalOpen.value = false;
+  resetCreateEmployeeModalDraft();
+}
+
+function selectCreateEmployeeStep(step: CreateEmployeeModalStep) {
+  createEmployeeStep.value = step;
+}
+
+function validateCreateEmployeeStep(step: CreateEmployeeModalStep) {
+  if (step >= 1) {
+    const normalizedName = normalizeChatUserGroupName(createEmployeeNameDraft.value);
+    if (!normalizedName) {
+      createEmployeeError.value = "请先填写员工名称。";
+      selectCreateEmployeeStep(1);
+      void nextTick(() => {
+        createEmployeeNameInputRef.value?.focus();
+      });
+      return false;
+    }
+    if (createEmployeeSelectedIdentityIds.value.length === 0) {
+      createEmployeeError.value = "请至少选择 1 个核心身份。";
+      selectCreateEmployeeStep(1);
+      return false;
+    }
+  }
+  if (step >= 2 && createEmployeeKnowledgeScope.value === "specific" && !createEmployeeSpecificDomain.value.trim()) {
+    createEmployeeError.value = "请填写具体领域，或切换为通用知识范围。";
+    selectCreateEmployeeStep(2);
+    return false;
+  }
+  if (step >= 3 && createEmployeeRules.value.every((rule) => !rule.enabled)) {
+    createEmployeeError.value = "请至少保留 1 条重要规则。";
+    selectCreateEmployeeStep(3);
+    return false;
+  }
+  createEmployeeError.value = "";
+  return true;
+}
+
+function handleCreateEmployeeNextStep() {
+  const step = createEmployeeStep.value;
+  if (!validateCreateEmployeeStep(step)) {
+    return;
+  }
+  if (step >= 3) {
+    return;
+  }
+  createEmployeeError.value = "";
+  selectCreateEmployeeStep((step + 1) as CreateEmployeeModalStep);
+}
+
+function handleCreateEmployeePrevStep() {
+  const step = createEmployeeStep.value;
+  if (step <= 1) {
+    return;
+  }
+  createEmployeeError.value = "";
+  selectCreateEmployeeStep((step - 1) as CreateEmployeeModalStep);
+}
+
+function handleCreateEmployeePickRandomName() {
+  const randomName = CREATE_EMPLOYEE_RANDOM_NAMES[Math.floor(Math.random() * CREATE_EMPLOYEE_RANDOM_NAMES.length)];
+  createEmployeeNameDraft.value = randomName;
+  createEmployeeError.value = "";
+}
+
+function toggleCreateEmployeeIdentity(identityId: string) {
+  const current = new Set(createEmployeeSelectedIdentityIds.value);
+  if (current.has(identityId)) {
+    current.delete(identityId);
+  } else {
+    current.add(identityId);
+  }
+  createEmployeeSelectedIdentityIds.value = Array.from(current);
+  createEmployeeError.value = "";
+}
+
+function addCreateEmployeeTask(rawTask: string) {
+  const normalizedTask = rawTask.trim();
+  if (!normalizedTask) {
+    return;
+  }
+  if (createEmployeeTasks.value.includes(normalizedTask)) {
+    createEmployeeTaskInput.value = "";
+    return;
+  }
+  if (createEmployeeTasks.value.length >= CREATE_EMPLOYEE_MAX_TASKS) {
+    createEmployeeNotice.value = `最多保留 ${CREATE_EMPLOYEE_MAX_TASKS} 条任务指令。`;
+    return;
+  }
+  createEmployeeTasks.value = [...createEmployeeTasks.value, normalizedTask];
+  createEmployeeTaskInput.value = "";
+  createEmployeeNotice.value = "";
+}
+
+function removeCreateEmployeeTask(task: string) {
+  createEmployeeTasks.value = createEmployeeTasks.value.filter((item) => item !== task);
+}
+
+function handleCreateEmployeeTaskAdd() {
+  addCreateEmployeeTask(createEmployeeTaskInput.value);
+  void nextTick(() => {
+    createEmployeeTaskInputRef.value?.focus();
+  });
+}
+
+function handleCreateEmployeeTaskInputKeydown(event: KeyboardEvent) {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  handleCreateEmployeeTaskAdd();
+}
+
+function handleCreateEmployeeRuleToggle(ruleId: string, nextEnabled: boolean) {
+  createEmployeeRules.value = createEmployeeRules.value.map((rule) =>
+    rule.id === ruleId
+      ? {
+          ...rule,
+          enabled: nextEnabled
+        }
+      : rule
+  );
+}
+
+function handleCreateEmployeeAddCustomRule() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (createEmployeeRules.value.length >= CREATE_EMPLOYEE_MAX_RULES) {
+    createEmployeeNotice.value = `最多添加 ${CREATE_EMPLOYEE_MAX_RULES} 条规则。`;
+    return;
+  }
+  const input = window.prompt("请输入自定义规则");
+  if (input === null) {
+    return;
+  }
+  const normalizedRule = input.trim();
+  if (!normalizedRule) {
+    return;
+  }
+  const exists = createEmployeeRules.value.some((rule) => rule.text.trim() === normalizedRule);
+  if (exists) {
+    createEmployeeNotice.value = "该规则已存在。";
+    return;
+  }
+  createEmployeeRules.value = [
+    ...createEmployeeRules.value,
+    {
+      id: `custom-rule-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      text: normalizedRule,
+      enabled: true,
+      custom: true
+    }
+  ];
+  createEmployeeNotice.value = "";
+}
+
+function handleCreateEmployeeSubmit() {
+  if (!validateCreateEmployeeStep(3)) {
+    return;
+  }
+  const normalizedName = normalizeChatUserGroupName(createEmployeeNameDraft.value);
+  if (!normalizedName) {
+    createEmployeeError.value = "请先填写员工名称。";
+    return;
+  }
+
+  const duplicateAgent =
+    agents.value.find(
+      (agent) =>
+        agent.groupKind === "staff" &&
+        !isChatConversationGroupAgentId(agent.agentId) &&
+        equalsIgnoreCase(stripRoleLabel(agent.displayName), normalizedName)
+    ) ?? null;
+  if (duplicateAgent) {
+    createEmployeeError.value = `员工名称「${normalizedName}」已存在，请更换后再创建。`;
+    selectCreateEmployeeStep(1);
+    return;
+  }
+
+  const roleLabel = resolveCreateEmployeeRoleLabel(createEmployeeSelectedIdentityIds.value);
+  const mission = createEmployeeMissionDraft.value.trim();
+  const tasks = [...createEmployeeTasks.value];
+  const workspace = resolveCreateEmployeeWorkspace(createEmployeeKnowledgeScope.value, createEmployeeSpecificDomain.value);
+  const currentWork = resolveCreateEmployeeCurrentWork(mission, tasks);
+  const createdAgent = createOrGetChatUserCustomAgent(normalizedName, {
+    kind: "staff",
+    roleLabel,
+    channel: "custom",
+    workspace,
+    currentWork,
+    scheduledLabel: "随时可用",
+    mission,
+    tasks,
+    knowledgeScope: createEmployeeKnowledgeScope.value,
+    specificDomain: createEmployeeSpecificDomain.value.trim()
+  });
+  if (!createdAgent) {
+    createEmployeeError.value = "创建员工失败，请稍后重试。";
+    return;
+  }
+
+  closeCreateEmployeeModal();
+  staffSourceDetail.value = `已创建自定义员工「${normalizedName}」。`;
+  activeSection.value = "chat";
+  activeAgentPaneTab.value = "staff";
+  switchAgent(createdAgent.agentId, { force: true });
+  chatInput.value = mission ? `请以「${normalizedName}」身份协助我，目标是：${mission}` : `请以「${normalizedName}」身份协助我，目标是：`;
+}
+
+function hashTextToUnsigned(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 33 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function getRecruitmentRoleAvatarLabel(role: AgencyRosterRole) {
+  const englishName = role.nameEn.trim();
+  if (englishName) {
+    const words = englishName.split(/[^A-Za-z0-9]+/).filter(Boolean);
+    if (words.length >= 2) {
+      return `${words[0][0]}${words[1][0]}`.toUpperCase();
+    }
+    if (words.length === 1) {
+      return words[0].slice(0, 2).toUpperCase();
+    }
+  }
+
+  const chineseName = role.nameZh.trim().replace(/\s+/g, "");
+  if (!chineseName) {
+    return "AI";
+  }
+  return chineseName.slice(0, 2);
+}
+
+function getRecruitmentRoleAvatarStyle(role: AgencyRosterRole) {
+  const hue = hashTextToUnsigned(role.id || role.nameZh || role.sourcePath) % 360;
+  const hueOffset = (hue + 36) % 360;
+  const textHue = (hue + 228) % 360;
+  return {
+    background: `linear-gradient(145deg, hsl(${hue}, 70%, 91%), hsl(${hueOffset}, 76%, 84%))`,
+    color: `hsl(${textHue}, 58%, 22%)`
+  };
+}
+
 function handleSidebarSectionChange(section: SidebarSection) {
+  closeChatQuickCreateMenu();
+  closeSidebarThemePopover();
   activeSection.value = section;
   if (section !== "chat") {
     isAgentSettingsOpen.value = false;
@@ -4963,9 +9063,11 @@ async function openRelatedResource(target: RelatedResourceTarget) {
   closeProxyConfigModal();
   closeFeishuConnectModal();
   closeChannelConfigModal();
+  closeChannelBindingModal();
   relatedResourceModalTarget.value = target;
   relatedSkillSearch.value = "";
   relatedMemorySearch.value = "";
+  relatedToolsFilter.value = RELATED_TOOLS_FILTER_ALL;
   relatedScheduleFilter.value = "all";
   relatedResourceModalError.value = "";
   relatedResourceModalNotice.value = "";
@@ -4988,6 +9090,7 @@ function closeRelatedResourceModal() {
   relatedMemorySelectedId.value = null;
   relatedMemoryDraftContent.value = "";
   relatedSkillSearch.value = "";
+  relatedToolsFilter.value = RELATED_TOOLS_FILTER_ALL;
   relatedScheduleFilter.value = "all";
   relatedModelDraft.value = null;
   relatedModelCustomExpanded.value = false;
@@ -5040,6 +9143,8 @@ function resetUtilityLogViewState() {
   utilityLogTab.value = "runtime";
   utilityLogDetailTab.value = "response";
   utilityRuntimeCategory.value = "all";
+  utilityRuntimeRoleFilter.value = UTILITY_LOG_ROLE_FILTER_ACTIVE;
+  utilityRuntimeScheduleFilter.value = "all";
   utilitySelectedLogId.value = null;
 }
 
@@ -5049,10 +9154,15 @@ function clearUtilityViewStatus() {
 }
 
 function closeSidebarLogsPanel() {
-  if (!isSidebarLogsOpen.value) {
+  const closeSidebarLogsView = chatSettingsPanelMode.value === "logs";
+  if (!isSidebarLogsOpen.value && !closeSidebarLogsView) {
     return;
   }
   isSidebarLogsOpen.value = false;
+  if (closeSidebarLogsView) {
+    isAgentSettingsOpen.value = false;
+    chatSettingsPanelMode.value = "agent";
+  }
   utilityModalLoading.value = false;
   clearUtilityViewStatus();
   resetUtilityLogViewState();
@@ -5072,11 +9182,13 @@ async function refreshUtilityModalData(type: UtilityModalType) {
 
   try {
     if (type === "history") {
-      if (!agent) {
+      const conversationScopeKey = resolveConversationScopeKey(agent?.agentId ?? null, activeChannelChatSession.value);
+      if (!agent || !conversationScopeKey) {
         chatHistoryArchives.value = [];
         return;
       }
-      chatHistoryArchives.value = loadChatArchives(agent.agentId);
+      const readOptions: ConversationStorageReadOptions = activeChannelChatSession.value ? {} : { legacyAgentId: agent.agentId };
+      chatHistoryArchives.value = loadChatArchives(conversationScopeKey, readOptions);
       return;
     }
 
@@ -5090,10 +9202,8 @@ async function refreshUtilityModalData(type: UtilityModalType) {
       return;
     }
     chatRuntimeLogs.value = (await invoke("load_openclaw_message_logs")) as OpenClawMessageLogResponse;
-    const filteredLogs = (chatRuntimeLogs.value?.logs ?? [])
-      .filter((log) => matchesAgentLog(log, agent?.agentId ?? null))
-      .sort((left, right) => right.createdAt - left.createdAt);
-    const categorizedLogs = filteredLogs.filter((log) => matchesRuntimeLogCategory(log, utilityRuntimeCategory.value));
+    const filteredLogs = runtimeLogItems.value;
+    const categorizedLogs = runtimeCategoryLogItems.value;
     const selected = pickLogForDetail(utilitySelectedLogId.value, categorizedLogs);
     if (utilityLogTab.value === "errorAnalysis") {
       const errorLog =
@@ -5111,6 +9221,7 @@ async function refreshUtilityModalData(type: UtilityModalType) {
 }
 
 async function openUtilityModal(type: UtilityModalType) {
+  closeChannelBindingModal();
   closeSidebarLogsPanel();
   utilityModalType.value = type;
   utilityModalNotice.value = "";
@@ -5126,14 +9237,15 @@ async function handleUtilityModalRefresh() {
     await refreshUtilityModalData(utilityModalType.value);
     return;
   }
-  if (isSidebarLogsOpen.value) {
+  if (isLogsPanelActive.value || isSidebarLogsOpen.value) {
     await refreshUtilityModalData("logs");
   }
 }
 
 async function handleArchiveCurrentChat() {
   const agent = activeAgent.value;
-  if (!agent) {
+  const conversationScopeKey = resolveConversationScopeKey(agent?.agentId ?? null, activeChannelChatSession.value);
+  if (!agent || !conversationScopeKey) {
     return;
   }
 
@@ -5146,7 +9258,8 @@ async function handleArchiveCurrentChat() {
     return;
   }
 
-  const archives = loadChatArchives(agent.agentId);
+  const readOptions: ConversationStorageReadOptions = activeChannelChatSession.value ? {} : { legacyAgentId: agent.agentId };
+  const archives = loadChatArchives(conversationScopeKey, readOptions);
   const archiveRecord: ChatArchiveRecord = {
     id: createMessageId("archive"),
     archivedAt: Date.now(),
@@ -5154,16 +9267,18 @@ async function handleArchiveCurrentChat() {
     messages: meaningfulMessages.map((item) => ({ ...item }))
   };
   const nextArchives = [archiveRecord, ...archives].slice(0, 60);
-  persistChatArchives(agent.agentId, nextArchives);
+  persistChatArchives(conversationScopeKey, nextArchives);
   chatHistoryArchives.value = nextArchives;
 
   chatMessages.value = createWelcomeMessages(agent);
+  chatAttachments.value = [];
+  chatComposerError.value = "";
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
   currentSessionId.value = createSessionId();
-  persistChatHistory(agent.agentId);
-  agentHistories.value[agent.agentId] = [...chatMessages.value];
+  persistChatHistory(conversationScopeKey);
+  agentHistories.value[conversationScopeKey] = [...chatMessages.value];
   refreshAgentMetaFromHistory(agent.agentId, chatMessages.value, agent.currentWork);
 
   utilityModalNotice.value = "当前会话已归档，可在聊天记录中查看。";
@@ -5175,16 +9290,19 @@ async function handleArchiveCurrentChat() {
 
 function handleRestoreArchive(record: ChatArchiveRecord) {
   const agent = activeAgent.value;
-  if (!agent) {
+  const conversationScopeKey = resolveConversationScopeKey(agent?.agentId ?? null, activeChannelChatSession.value);
+  if (!agent || !conversationScopeKey) {
     return;
   }
   const restoredMessages = record.messages.map((message) => ({ ...message }));
   chatMessages.value = restoredMessages.length > 0 ? restoredMessages : createWelcomeMessages(agent);
+  chatAttachments.value = [];
+  chatComposerError.value = "";
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
-  persistChatHistory(agent.agentId);
-  agentHistories.value[agent.agentId] = [...chatMessages.value];
+  persistChatHistory(conversationScopeKey);
+  agentHistories.value[conversationScopeKey] = [...chatMessages.value];
   refreshAgentMetaFromHistory(agent.agentId, chatMessages.value, agent.currentWork);
   utilityModalNotice.value = `已恢复归档会话「${record.title}」。`;
   closeUtilityModal();
@@ -5204,6 +9322,22 @@ function handleUtilityLogTabChange(tab: UtilityLogTab) {
 
 function handleUtilityRuntimeCategoryChange(category: UtilityLogCategory) {
   utilityRuntimeCategory.value = category;
+  if (utilityLogTab.value !== "runtime") {
+    return;
+  }
+  const target = pickLogForDetail(utilitySelectedLogId.value, runtimeCategoryLogItems.value);
+  selectUtilityLog(target);
+}
+
+function handleUtilityRuntimeRoleFilterChange() {
+  if (utilityLogTab.value !== "runtime") {
+    return;
+  }
+  const target = pickLogForDetail(utilitySelectedLogId.value, runtimeCategoryLogItems.value);
+  selectUtilityLog(target);
+}
+
+function handleUtilityRuntimeScheduleFilterChange() {
   if (utilityLogTab.value !== "runtime") {
     return;
   }
@@ -5235,26 +9369,7 @@ async function copyTextToClipboard(text: string, successText: string) {
   }
 
   try {
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(payload);
-    } else if (typeof document !== "undefined") {
-      const temp = document.createElement("textarea");
-      temp.value = payload;
-      temp.setAttribute("readonly", "true");
-      temp.style.position = "fixed";
-      temp.style.opacity = "0";
-      temp.style.left = "-9999px";
-      document.body.appendChild(temp);
-      temp.focus();
-      temp.select();
-      const copied = document.execCommand("copy");
-      document.body.removeChild(temp);
-      if (!copied) {
-        throw new Error("复制失败，请手动复制。");
-      }
-    } else {
-      throw new Error("当前环境不支持复制。");
-    }
+    await writeTextToClipboard(payload);
     utilityModalNotice.value = successText;
     utilityModalError.value = "";
   } catch (error) {
@@ -5552,6 +9667,50 @@ const activeAgent = computed(() => {
   }
   return agents.value.find((item) => item.agentId === selectedAgentId.value) ?? null;
 });
+const activeConversationGroup = computed(() => findChatConversationGroupByAgentId(activeAgent.value?.agentId ?? null));
+const activeAgentIsConversationGroup = computed(() => Boolean(activeConversationGroup.value));
+const activeConversationGroupMembers = computed(() =>
+  activeConversationGroup.value ? getChatConversationGroupMembers(activeConversationGroup.value) : []
+);
+const activeConversationGroupPreviewMembers = computed(() => activeConversationGroupMembers.value.slice(0, 3));
+const activeConversationGroupMemberCount = computed(() => activeConversationGroupMembers.value.length);
+const isLogsPanelActive = computed(() => isAgentSettingsOpen.value && chatSettingsPanelMode.value === "logs");
+const isGroupInfoPanelActive = computed(() => chatSettingsPanelMode.value === "group" && activeAgentIsConversationGroup.value);
+const activeAgentAvatarUrl = computed(() => {
+  const agent = activeAgent.value;
+  if (!agent || isChatConversationGroupAgentId(agent.agentId)) {
+    return null;
+  }
+  return getAgentAvatarUrl(agent);
+});
+const sidebarProfileCanCustomizeAvatar = computed(() => {
+  const agent = activeAgent.value;
+  if (!agent) {
+    return false;
+  }
+  return !isChatConversationGroupAgentId(agent.agentId);
+});
+const sidebarProfileLobsterId = computed(() => {
+  const seed = activeAgent.value?.agentId?.trim() || "dragonclaw";
+  return formatLobsterNumberBySeed(seed);
+});
+const sidebarProfileAvatarPreviewUrl = computed(() => {
+  const agent = activeAgent.value;
+  if (agent && !isChatConversationGroupAgentId(agent.agentId)) {
+    return getAgentAvatarUrl(agent);
+  }
+  const previewMember = activeConversationGroupPreviewMembers.value.find((member) => Boolean(getAgentAvatarUrl(member)));
+  return previewMember ? getAgentAvatarUrl(previewMember) : null;
+});
+const sidebarProfileAvatarOptionItems = computed(() => sidebarAvatarPresetOptions[sidebarAvatarPresetCategory.value] ?? []);
+const sidebarProfileHasAvatarOverride = computed(() => {
+  const agent = activeAgent.value;
+  if (!agent || isChatConversationGroupAgentId(agent.agentId)) {
+    return false;
+  }
+  const override = sidebarAgentAvatarOverrides.value[agent.agentId];
+  return typeof override === "string" && override.trim().length > 0;
+});
 
 const normalizedQuery = computed(() => searchQuery.value.trim().toLowerCase());
 
@@ -5567,10 +9726,105 @@ const filteredAgents = computed(() => {
 });
 
 const isChannelPaneActive = computed(() => activeAgentPaneTab.value === "channel");
+const isConversationGroupPaneActive = computed(() => activeAgentPaneTab.value === "group");
 const staffAgents = computed(() => filteredAgents.value.filter((agent) => agent.groupKind === "staff"));
 const groupAgents = computed(() => filteredAgents.value.filter((agent) => agent.groupKind === "group"));
+const staffAgentsAll = computed(() => agents.value.filter((agent) => agent.groupKind === "staff"));
+const groupAgentsAll = computed(() => agents.value.filter((agent) => agent.groupKind === "group"));
+const channelBindingCandidateAgents = computed(() => agents.value.filter((agent) => agent.groupKind === "staff"));
+const channelBindingModalSubtitle = computed(() => {
+  const item = channelBindingModalItem.value;
+  if (!item) {
+    return "";
+  }
+  const channelName = item.name?.trim() || item.channelType || "频道";
+  const accountId = item.accountId?.trim();
+  return accountId ? `${channelName} / ${accountId}` : channelName;
+});
 const currentPaneAgents = computed(() => (activeAgentPaneTab.value === "group" ? groupAgents.value : staffAgents.value));
-const currentPaneEmptyText = computed(() => (activeAgentPaneTab.value === "group" ? "暂无群组 Agent" : "暂无数字员工"));
+const createChatUserGroupSelectableAgents = computed(() =>
+  sortAgentsByChatUserOrder(agents.value.filter((agent) => agent.groupKind === "staff" && !isChatConversationGroupAgentId(agent.agentId)))
+);
+const createChatUserGroupSearchNormalized = computed(() => createChatUserGroupSearch.value.trim().toLowerCase());
+const createChatUserGroupFilteredAgents = computed(() => {
+  const keyword = createChatUserGroupSearchNormalized.value;
+  if (!keyword) {
+    return createChatUserGroupSelectableAgents.value;
+  }
+  return createChatUserGroupSelectableAgents.value.filter((agent) => {
+    const name = stripRoleLabel(agent.displayName);
+    const blob = `${name} ${agent.agentId} ${agent.roleLabel} ${agent.channel}`.toLowerCase();
+    return blob.includes(keyword);
+  });
+});
+const createChatUserGroupSelectedMembers = computed(() => {
+  const selectedIdSet = new Set(createChatUserGroupSelectedAgentIds.value);
+  return createChatUserGroupSelectableAgents.value.filter((agent) => selectedIdSet.has(agent.agentId));
+});
+const currentPaneEmptyText = computed(() => (activeAgentPaneTab.value === "group" ? "暂无群聊" : "暂无数字员工"));
+const currentPaneAgentSections = computed<ChatUserListSection[]>(() => {
+  if (currentPaneAgents.value.length === 0) {
+    return [];
+  }
+  const orderedPaneAgents = sortAgentsByChatUserOrder(currentPaneAgents.value);
+  if (isConversationGroupPaneActive.value) {
+    return [
+      {
+        id: "conversation-group-chat-list",
+        title: "",
+        agents: orderedPaneAgents,
+        isDefault: true
+      }
+    ];
+  }
+
+  const groupedAgents = new Map<string, AgentListItem[]>();
+  for (const group of chatUserGroups.value) {
+    groupedAgents.set(group.id, []);
+  }
+
+  const ungroupedAgents: AgentListItem[] = [];
+  for (const agent of orderedPaneAgents) {
+    const groupId = chatUserGroupMembership.value[agent.agentId];
+    if (groupId && groupedAgents.has(groupId)) {
+      groupedAgents.get(groupId)?.push(agent);
+      continue;
+    }
+    ungroupedAgents.push(agent);
+  }
+
+  const sections: ChatUserListSection[] = [];
+  for (const group of chatUserGroups.value) {
+    const sectionAgents = groupedAgents.get(group.id) ?? [];
+    if (sectionAgents.length === 0 && normalizedQuery.value) {
+      continue;
+    }
+    if (sectionAgents.length > 0 || group.id === CHAT_USER_PINNED_GROUP_ID) {
+      sections.push({
+        id: group.id,
+        title: group.name,
+        agents: sectionAgents
+      });
+    }
+  }
+
+  if (ungroupedAgents.length > 0 || sections.length === 0) {
+    const allChatsSection: ChatUserListSection = {
+      id: "all-chats",
+      title: "全部聊天",
+      agents: ungroupedAgents,
+      isDefault: true
+    };
+    const pinnedIndex = sections.findIndex((section) => section.id === CHAT_USER_PINNED_GROUP_ID);
+    if (pinnedIndex >= 0) {
+      sections.splice(pinnedIndex + 1, 0, allChatsSection);
+    } else {
+      sections.unshift(allChatsSection);
+    }
+  }
+
+  return sections;
+});
 const configuredChannelPaneGroups = computed(() => {
   const groups = dashboardChannelSnapshot.value?.channels ?? [];
   return groups
@@ -5601,6 +9855,9 @@ const configuredChannelPaneGroups = computed(() => {
 const configuredChannelPaneIdSet = computed(() => {
   const configuredIds = new Set<string>();
   for (const group of configuredChannelPaneGroups.value) {
+    if (group.configuredAccounts <= 0) {
+      continue;
+    }
     if (group.id) {
       configuredIds.add(group.id);
     }
@@ -5611,13 +9868,67 @@ const configuredChannelPaneIdSet = computed(() => {
   }
   return configuredIds;
 });
-const configuredChannelPaneGroupsForDisplay = computed(() => {
-  if (!normalizedQuery.value) {
-    return configuredChannelPaneGroups.value;
+const configuredChannelChatItems = computed(() => {
+  const groups = dashboardChannelSnapshot.value?.channels ?? [];
+  const items: ChannelPaneChatItem[] = [];
+  const mainStaffAgent = resolveMainStaffAgent();
+  const toneWeight: Record<AgentStatusTone, number> = {
+    online: 0,
+    busy: 1,
+    offline: 2
+  };
+
+  for (const group of groups) {
+    const rawChannelType = (group.channelType ?? "").trim();
+    const normalizedType = normalizeChannelPaneType(rawChannelType);
+    const catalog = chatChannelCatalogMap.get(normalizedType);
+    const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+    const configuredAccounts = accounts.filter((account) => account.configured);
+    if (configuredAccounts.length === 0) {
+      continue;
+    }
+
+    const preferredAccount = configuredAccounts.find((account) => account.isDefault) ?? configuredAccounts[0];
+    const normalizedStatus = (preferredAccount.status ?? "").trim().toLowerCase();
+    const isOnline = normalizedStatus === "connected" || normalizedStatus === "online";
+    const statusLabel = isOnline ? "在线" : "已配置";
+    const statusTone: AgentStatusTone = isOnline ? "online" : "busy";
+    const configuredBoundAgent =
+      preferredAccount.agentId?.trim()
+        ? agents.value.find((agent) => equalsIgnoreCase(agent.agentId, preferredAccount.agentId)) ?? null
+        : null;
+    const boundAgent = configuredBoundAgent ?? mainStaffAgent;
+    const summary = configuredBoundAgent
+      ? `已绑定 ${stripRoleLabel(configuredBoundAgent.displayName)}`
+      : boundAgent
+        ? `默认 ${stripRoleLabel(boundAgent.displayName)}`
+        : `账号 ${preferredAccount.accountId}`;
+
+    items.push({
+      id: `${normalizedType || rawChannelType.toLowerCase()}::${preferredAccount.accountId}`,
+      catalogId: normalizedType || rawChannelType.toLowerCase(),
+      channelType: rawChannelType || normalizedType || "unknown",
+      name: catalog?.name || rawChannelType || normalizedType || "未命名频道",
+      icon: catalog?.icon ?? null,
+      accountId: preferredAccount.accountId,
+      summary,
+      statusLabel,
+      statusTone,
+      boundAgentId: boundAgent?.agentId ?? null
+    });
   }
-  return configuredChannelPaneGroups.value.filter((group) =>
-    `${group.name} ${group.channelType}`.toLowerCase().includes(normalizedQuery.value)
-  );
+
+  const filtered = !normalizedQuery.value
+    ? items
+    : items.filter((item) => `${item.name} ${item.channelType} ${item.accountId} ${item.summary}`.toLowerCase().includes(normalizedQuery.value));
+
+  return filtered.sort((left, right) => {
+    const toneDiff = toneWeight[left.statusTone] - toneWeight[right.statusTone];
+    if (toneDiff !== 0) {
+      return toneDiff;
+    }
+    return left.name.localeCompare(right.name, "zh-CN");
+  });
 });
 const visibleChannelPaneCatalog = computed(() => {
   const base = chatChannelCatalog.map((channel) => ({
@@ -5682,18 +9993,118 @@ const activeChannelConfigMeta = computed(() => {
   }
   return chatChannelCatalogMap.get(channelId) ?? null;
 });
-const sidebarChatBadge = computed(() => {
-  const unread = agents.value.reduce((sum, agent) => sum + getAgentMeta(agent.agentId).unread, 0);
-  const value = unread > 0 ? unread : agents.value.length;
-  if (value > 99) {
-    return "99+";
-  }
-  return String(value);
+const isDingtalkChannelConfig = computed(() => activeChannelConfigMeta.value?.id === "dingtalk");
+const isTelegramChannelConfig = computed(() => activeChannelConfigMeta.value?.id === "telegram");
+const isDiscordChannelConfig = computed(() => activeChannelConfigMeta.value?.id === "discord");
+const isChannelConfigGuidedLayout = computed(() => {
+  const channelId = activeChannelConfigMeta.value?.id ?? "";
+  return CHANNEL_CONFIG_GUIDED_LAYOUT_IDS.has(channelId);
 });
-const sidebarDisplayName = computed(() => (activeAgent.value ? stripRoleLabel(activeAgent.value.displayName) : "ClawPet"));
-const chatComposerPlaceholder = computed(() =>
-  activeAgent.value ? `发送给 ${stripRoleLabel(activeAgent.value.displayName)}` : "发送给 ClawPet"
+const activeChannelConfigGuidedFieldKeys = computed(() => {
+  const channelId = activeChannelConfigMeta.value?.id ?? "";
+  return CHANNEL_CONFIG_GUIDED_FIELD_ORDER[channelId] ?? [];
+});
+const activeChannelConfigGuidedFields = computed(() => {
+  const fieldMap = new Map<string, ChannelPaneConfigField>();
+  for (const field of activeChannelConfigMeta.value?.fields ?? []) {
+    fieldMap.set(field.key, field);
+  }
+  return activeChannelConfigGuidedFieldKeys.value
+    .map((fieldKey) => fieldMap.get(fieldKey))
+    .filter((field): field is ChannelPaneConfigField => Boolean(field));
+});
+const activeChannelConfigConnectionMode = computed<ChannelPaneConnectionMode>(() =>
+  isChannelConfigQrMode(activeChannelConfigMeta.value) ? "qr" : "form"
 );
+const activeChannelConfigIsQrMode = computed(() => activeChannelConfigConnectionMode.value === "qr");
+const channelQrBindingConnectTitle = computed(() => {
+  const channelName = activeChannelConfigMeta.value?.name?.trim() || "频道";
+  return `连接${channelName}`;
+});
+const channelQrBindingConnectSubtitle = computed(() => {
+  const channelId = activeChannelConfigMeta.value?.id ?? "";
+  if (channelId === "wecom") {
+    return "点击按钮会展示企业微信登录二维码，用手机企业微信扫码即可完成连接。";
+  }
+  return "点击按钮会展示微信登录二维码，用手机微信扫码即可完成连接。";
+});
+const channelQrBindingImageUrl = computed(() => {
+  const qrUrl = (channelQrBindingSnapshot.value?.qrUrl ?? "").trim();
+  if (!qrUrl) {
+    return "";
+  }
+  const cacheBuster = channelQrBindingSnapshot.value?.updatedAtMs ?? Date.now();
+  return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=${encodeURIComponent(qrUrl)}&t=${cacheBuster}`;
+});
+const channelQrBindingConnecting = computed(() => {
+  const normalizedStatus = (channelQrBindingSnapshot.value?.status ?? "").trim().toLowerCase();
+  const hasQrImage = Boolean(channelQrBindingImageUrl.value);
+  return channelQrBindingStarting.value || ((normalizedStatus === "running" || normalizedStatus === "waiting_scan") && !hasQrImage);
+});
+const channelQrBindingStartButtonLabel = computed(() => {
+  if (channelQrBindingConnecting.value) {
+    return "正在连接中...";
+  }
+  if (channelQrBindingImageUrl.value) {
+    return "重新获取二维码";
+  }
+  const channelName = activeChannelConfigMeta.value?.name?.trim() || "频道";
+  return `开始${channelName}连接`;
+});
+const channelConfigModalTitle = computed(() => {
+  if (activeChannelConfigIsQrMode.value) {
+    return channelQrBindingConnectTitle.value;
+  }
+  const channelName = activeChannelConfigMeta.value?.name?.trim() || "频道";
+  if (isChannelConfigGuidedLayout.value) {
+    return `连接 ${channelName}`;
+  }
+  return `配置 ${channelName}`;
+});
+const channelConfigModalSubtitle = computed(() => {
+  if (activeChannelConfigIsQrMode.value) {
+    return channelQrBindingConnectSubtitle.value;
+  }
+  if (isDingtalkChannelConfig.value) {
+    return "完成插件安装与应用凭据填写后，即可在频道中使用钉钉机器人。";
+  }
+  return activeChannelConfigMeta.value?.description ?? "";
+});
+const shouldShowChannelConfigHeaderDocsButton = computed(() => {
+  const docsUrl = activeChannelConfigMeta.value?.docsUrl?.trim() ?? "";
+  return !activeChannelConfigIsQrMode.value && !isChannelConfigGuidedLayout.value && docsUrl.length > 0;
+});
+const channelConfigSubmitButtonLabel = computed(() => {
+  if (isTelegramChannelConfig.value || isDiscordChannelConfig.value) {
+    return "连接";
+  }
+  return "保存配置";
+});
+const activeChannelSessionLabel = computed(() => {
+  const session = activeChannelChatSession.value;
+  if (!session) {
+    return "";
+  }
+  const channelName = session.name?.trim() || session.channelType || "频道";
+  const accountId = session.accountId?.trim();
+  return accountId ? `${channelName} / ${accountId}` : channelName;
+});
+const activeConversationChannelLabel = computed(() => activeChannelSessionLabel.value || activeAgent.value?.channel || "");
+const sidebarDisplayName = computed(() => (activeAgent.value ? stripRoleLabel(activeAgent.value.displayName) : "DragonClaw"));
+const chatComposerPlaceholder = computed(() => {
+  const agent = activeAgent.value;
+  if (!agent) {
+    return "发送给 DragonClaw";
+  }
+  const conversationGroup = findChatConversationGroupByAgentId(agent.agentId);
+  if (conversationGroup) {
+    return `发送到群聊 ${conversationGroup.name}`;
+  }
+  if (activeChannelSessionLabel.value) {
+    return `发送到 ${activeChannelSessionLabel.value}`;
+  }
+  return `发送给 ${stripRoleLabel(agent.displayName)}`;
+});
 const chatMessagesForDisplay = computed(() => chatMessages.value.filter((item) => !isLegacyWelcomeMessage(item)));
 const isConversationEmpty = computed(() => chatMessagesForDisplay.value.length === 0);
 const proxyConfigPlatforms = computed(() => proxyConfigSnapshot.value?.platforms ?? []);
@@ -5814,8 +10225,98 @@ const utilityModalSubtitle = computed(() => {
   if (!agent) {
     return "当前未选择员工。";
   }
+  if (activeChannelSessionLabel.value) {
+    return `${stripRoleLabel(agent.displayName)} · ${activeChannelSessionLabel.value}`;
+  }
   return `${stripRoleLabel(agent.displayName)} · ${agent.agentId}`;
 });
+const utilityRuntimeRoleFilterOptions = computed(() => {
+  const logs = chatRuntimeLogs.value?.logs ?? [];
+  const activeAgentId = activeAgent.value?.agentId ?? null;
+  const activeAgentName = activeAgent.value ? stripRoleLabel(activeAgent.value.displayName) : "当前角色";
+  const activeCount = activeAgentId ? logs.filter((log) => matchesAgentLog(log, activeAgentId)).length : logs.length;
+  const options: Array<{ id: string; label: string; count: number }> = [
+    { id: UTILITY_LOG_ROLE_FILTER_ACTIVE, label: `当前角色：${activeAgentName}`, count: activeCount },
+    { id: UTILITY_LOG_ROLE_FILTER_ALL, label: "全部角色", count: logs.length }
+  ];
+
+  const seenIds = new Set<string>([UTILITY_LOG_ROLE_FILTER_ACTIVE, UTILITY_LOG_ROLE_FILTER_ALL]);
+  const orderedAgents = [...agents.value].sort((left, right) =>
+    stripRoleLabel(left.displayName).localeCompare(stripRoleLabel(right.displayName), "zh-CN")
+  );
+  for (const agent of orderedAgents) {
+    const agentId = agent.agentId.trim();
+    if (!agentId || seenIds.has(agentId)) {
+      continue;
+    }
+    seenIds.add(agentId);
+    const count = logs.filter((log) => matchesAgentLog(log, agentId)).length;
+    options.push({
+      id: agentId,
+      label: `${stripRoleLabel(agent.displayName)} · ${agent.roleLabel || agent.agentId}`,
+      count
+    });
+  }
+
+  const unknownRoleCountMap = new Map<string, number>();
+  for (const log of logs) {
+    const agentId = getLogAgentId(log)?.trim();
+    if (!agentId || seenIds.has(agentId)) {
+      continue;
+    }
+    unknownRoleCountMap.set(agentId, (unknownRoleCountMap.get(agentId) ?? 0) + 1);
+  }
+  for (const [agentId, count] of Array.from(unknownRoleCountMap.entries()).sort((left, right) => left[0].localeCompare(right[0], "zh-CN"))) {
+    options.push({
+      id: agentId,
+      label: `${agentId} · 未识别角色`,
+      count
+    });
+  }
+
+  return options;
+});
+const utilityRuntimeResolvedRoleAgentId = computed(() =>
+  resolveUtilityRuntimeRoleFilterAgentId(utilityRuntimeRoleFilter.value, activeAgent.value?.agentId ?? null)
+);
+const runtimeRoleFilteredLogItems = computed(() =>
+  [...(chatRuntimeLogs.value?.logs ?? [])]
+    .filter((log) => {
+      const roleAgentId = isLogsPanelActive.value
+        ? (activeAgent.value?.agentId?.trim() ?? null)
+        : utilityRuntimeResolvedRoleAgentId.value;
+      if (!roleAgentId) {
+        return !isLogsPanelActive.value;
+      }
+      return matchesAgentLog(log, roleAgentId);
+    })
+    .sort((left, right) => right.createdAt - left.createdAt)
+);
+const utilityRuntimeScheduleCounts = computed(() => {
+  let scheduled = 0;
+  for (const log of runtimeRoleFilteredLogItems.value) {
+    if (isScheduledRuntimeLog(log)) {
+      scheduled += 1;
+    }
+  }
+  const total = runtimeRoleFilteredLogItems.value.length;
+  return {
+    total,
+    scheduled,
+    manual: Math.max(0, total - scheduled)
+  };
+});
+const utilityRuntimeScheduleFilterOptions = computed(() =>
+  utilityRuntimeScheduleFilters.map((item) => {
+    if (item.id === "scheduled") {
+      return { ...item, count: utilityRuntimeScheduleCounts.value.scheduled };
+    }
+    if (item.id === "manual") {
+      return { ...item, count: utilityRuntimeScheduleCounts.value.manual };
+    }
+    return { ...item, count: utilityRuntimeScheduleCounts.value.total };
+  })
+);
 const currentSessionMessages = computed(() =>
   getStableChatMessages(chatMessagesForDisplay.value).filter(
     (item) => (item.role === "assistant" || item.role === "user") && !isRuntimeToolMessage(item)
@@ -5835,12 +10336,9 @@ const currentSessionPreviewText = computed(() => {
   }
   return text;
 });
-const runtimeLogItems = computed(() => {
-  const agentId = activeAgent.value?.agentId ?? null;
-  return [...(chatRuntimeLogs.value?.logs ?? [])]
-    .filter((log) => matchesAgentLog(log, agentId))
-    .sort((left, right) => right.createdAt - left.createdAt);
-});
+const runtimeLogItems = computed(() =>
+  runtimeRoleFilteredLogItems.value.filter((log) => matchesRuntimeLogSchedule(log, utilityRuntimeScheduleFilter.value))
+);
 const runtimeCategoryLogItems = computed(() =>
   runtimeLogItems.value.filter((log) => matchesRuntimeLogCategory(log, utilityRuntimeCategory.value))
 );
@@ -5914,11 +10412,30 @@ const selectedErrorSummary = computed(() => {
   const key = getErrorSignature(selected);
   return errorAnalysisSummaries.value.find((item) => item.key === key) ?? null;
 });
-const relatedToolsEnabledCount = computed(() => (relatedToolsSnapshot.value?.tools ?? []).filter((tool) => tool.enabled).length);
+function normalizeRelatedToolCategory(category: string) {
+  const normalized = category.trim();
+  return normalized || "other";
+}
+const relatedTools = computed(() => relatedToolsSnapshot.value?.tools ?? []);
+const relatedToolsEnabledCount = computed(() => relatedTools.value.filter((tool) => tool.enabled).length);
+const relatedToolsCategoryCounts = computed(() => {
+  const counts = new Map<string, number>();
+  for (const tool of relatedTools.value) {
+    const category = normalizeRelatedToolCategory(tool.category || "");
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+  return Array.from(counts.entries()).map(([category, count]) => ({ category, count }));
+});
+const filteredRelatedTools = computed(() => {
+  if (relatedToolsFilter.value === RELATED_TOOLS_FILTER_ALL) {
+    return relatedTools.value;
+  }
+  return relatedTools.value.filter((tool) => normalizeRelatedToolCategory(tool.category || "") === relatedToolsFilter.value);
+});
 const relatedToolsByCategory = computed(() => {
   const groups = new Map<string, OpenClawToolListItem[]>();
-  for (const tool of relatedToolsSnapshot.value?.tools ?? []) {
-    const category = tool.category || "other";
+  for (const tool of filteredRelatedTools.value) {
+    const category = normalizeRelatedToolCategory(tool.category || "");
     const list = groups.get(category) ?? [];
     list.push(tool);
     groups.set(category, list);
@@ -5931,8 +10448,7 @@ const relatedScheduleJobs = computed(() => {
   if (!agent) {
     return jobs;
   }
-  const matched = jobs.filter((job) => equalsIgnoreCase(job.agentId, agent.agentId) || equalsIgnoreCase(job.agentId, stripRoleLabel(agent.displayName)));
-  return matched.length > 0 ? matched : jobs;
+  return jobs.filter((job) => equalsIgnoreCase(job.agentId, agent.agentId) || equalsIgnoreCase(job.agentId, stripRoleLabel(agent.displayName)));
 });
 
 function isRelatedScheduleDisabled(job: TaskSnapshotItem) {
@@ -6186,65 +10702,49 @@ const dashboardLegacyStatCards = computed<DashboardMetricCard[]>(() => {
       id: "platforms",
       label: "代理平台",
       value: formatInteger(summary.platformCount),
-      detail: `已读取 ${summary.platformCount} 个平台配置`,
-      tone: summary.platformCount > 0 ? "online" : "neutral",
-      icon: "platform"
+      tone: summary.platformCount > 0 ? "online" : "neutral"
     },
     {
       id: "request-count",
       label: "调用总数",
       value: formatInteger(summary.callCount),
-      detail: "基于 OpenClaw 运行日志统计",
-      tone: "neutral",
-      icon: "request"
+      tone: "neutral"
     },
     {
       id: "gateway-status",
       label: "网关状态",
       value: gatewayValue,
-      detail: `端口 ${gateway.portLabel} · ${gateway.detail}`,
-      tone: gateway.tone,
-      icon: "gateway"
+      tone: gateway.tone
     },
     {
       id: "avg-duration",
       label: "平均耗时",
       value: `${formatInteger(summary.averageDuration)} ms`,
-      detail: "按全部请求平均计算",
-      tone: summary.averageDuration > 0 ? "neutral" : "warn",
-      icon: "latency"
+      tone: summary.averageDuration > 0 ? "neutral" : "warn"
     },
     {
       id: "today-token",
       label: "今日 Token",
       value: formatInteger(summary.todayTokens),
-      detail: "今日 00:00 以来累计",
-      tone: summary.todayTokens > 0 ? "online" : "neutral",
-      icon: "tokenToday"
+      tone: summary.todayTokens > 0 ? "online" : "neutral"
     },
     {
       id: "seven-day-token",
       label: "7 天 Token",
       value: formatInteger(summary.sevenDayTokens),
-      detail: "最近 7 天滑动窗口",
-      tone: summary.sevenDayTokens > 0 ? "neutral" : "warn",
-      icon: "tokenWeek"
+      tone: summary.sevenDayTokens > 0 ? "neutral" : "warn"
     },
     {
       id: "total-token",
       label: "累计 Token",
       value: formatInteger(summary.totalTokens),
-      detail: "全部可用日志累计",
-      tone: summary.totalTokens > 0 ? "neutral" : "warn",
-      icon: "tokenTotal"
+      tone: summary.totalTokens > 0 ? "neutral" : "warn"
     },
     {
       id: "failure-count",
       label: "失败请求",
       value: formatInteger(summary.failures),
-      detail: summary.callCount > 0 ? `失败率 ${Math.round((summary.failures / summary.callCount) * 100)}%` : "暂无请求",
-      tone: summary.failures > 0 ? "warn" : "online",
-      icon: "failure"
+      tone: summary.failures > 0 ? "warn" : "online"
     }
   ];
 });
@@ -6260,8 +10760,7 @@ const dashboardStatusCards = computed<DashboardMetricCard[]>(() => {
       label: "OpenClaw",
       value: dashboardRuntimeStatus.value.label,
       detail: dashboardRuntimeStatus.value.detail,
-      tone: dashboardRuntimeStatus.value.tone,
-      icon: "runtime"
+      tone: dashboardRuntimeStatus.value.tone
     },
     {
       id: "channels",
@@ -6273,16 +10772,14 @@ const dashboardStatusCards = computed<DashboardMetricCard[]>(() => {
           ? ("online" as DashboardHealthTone)
           : dashboardChannelStats.value.totalGroups > 0
             ? ("warn" as DashboardHealthTone)
-            : ("neutral" as DashboardHealthTone),
-      icon: "channel"
+            : ("neutral" as DashboardHealthTone)
     },
     {
       id: "model",
       label: "AI 模型",
       value: dashboardPrimaryModel.value,
       detail: "优先使用当前员工模型，未选择时按全局占比推断。",
-      tone: "neutral",
-      icon: "model"
+      tone: "neutral"
     },
     {
       id: "uptime",
@@ -6292,40 +10789,35 @@ const dashboardStatusCards = computed<DashboardMetricCard[]>(() => {
         typeof dashboardTodayStats.value.oldestLogAt === "number"
           ? `起始于 ${formatDateTime(dashboardTodayStats.value.oldestLogAt)}`
           : "暂无可用于估算运行时长的日志。",
-      tone: uptimeMs ? "online" : "neutral",
-      icon: "uptime"
+      tone: uptimeMs ? "online" : "neutral"
     },
     {
       id: "memory",
       label: "内存占用",
       value: dashboardJsHeapUsageMb.value === null ? "暂不可用" : `${dashboardJsHeapUsageMb.value} MB`,
       detail: "基于 WebView JS Heap 采样，供趋势观察。",
-      tone: dashboardJsHeapUsageMb.value === null ? "warn" : "neutral",
-      icon: "memory"
+      tone: dashboardJsHeapUsageMb.value === null ? "warn" : "neutral"
     },
     {
       id: "today",
       label: "今日消息",
       value: `${dashboardTodayStats.value.today} 条`,
       detail: `失败 ${dashboardTodayStats.value.failedToday} 条，累计 ${dashboardTodayStats.value.total} 条`,
-      tone: dashboardTodayStats.value.failedToday > 0 ? "warn" : "online",
-      icon: "message"
+      tone: dashboardTodayStats.value.failedToday > 0 ? "warn" : "online"
     },
     {
       id: "connected",
       label: "已连接通道",
       value: `${dashboardChannelStats.value.connectedAccounts} 个`,
       detail: `已绑定员工 ${dashboardChannelStats.value.boundAccounts} 个`,
-      tone: dashboardChannelStats.value.connectedAccounts > 0 ? "online" : "neutral",
-      icon: "connected"
+      tone: dashboardChannelStats.value.connectedAccounts > 0 ? "online" : "neutral"
     },
     {
       id: "staff-online",
       label: "在线员工",
       value: `${dashboardOnlineAgentCount.value} 个`,
       detail: `忙碌 ${dashboardBusyAgentCount.value} 个 · 总计 ${agents.value.length} 个`,
-      tone: dashboardOnlineAgentCount.value > 0 ? "online" : "offline",
-      icon: "staff"
+      tone: dashboardOnlineAgentCount.value > 0 ? "online" : "offline"
     }
   ];
 });
@@ -6419,8 +10911,33 @@ const canSaveRoleWorkflowDraft = computed(
   () => Boolean(roleWorkflowDetailRoleId.value) && isRoleWorkflowDraftChanged.value && !roleWorkflowDetailLoading.value
 );
 
+const createEmployeeRoleLabel = computed(() => resolveCreateEmployeeRoleLabel(createEmployeeSelectedIdentityIds.value));
+const createEmployeeResolvedName = computed(() => normalizeChatUserGroupName(createEmployeeNameDraft.value) || "智能体助手");
+const createEmployeeAvatarLabel = computed(() => createEmployeeResolvedName.value.slice(0, 1) || "智");
+const createEmployeeFormalityLabel = computed(() => getCreateEmployeeFormalityLabel(createEmployeeFormality.value));
+const createEmployeeDetailLabel = computed(() => getCreateEmployeeDetailLabel(createEmployeeDetail.value));
+const createEmployeeStylePreviewText = computed(() => {
+  const formality = createEmployeeFormality.value;
+  const detail = createEmployeeDetail.value;
+  const formalityText =
+    formality < 30 ? "非常正式专业" : formality < 45 ? "比较正式" : formality > 70 ? "非常轻松随意" : formality > 55 ? "比较随意" : "语气适中";
+  const detailText =
+    detail < 30 ? "简洁扼要" : detail < 45 ? "较为简洁" : detail > 70 ? "非常详细生动" : detail > 55 ? "比较详细" : "详略得当";
+  return `沟通风格预览：${formalityText}，${detailText}。`;
+});
+const createEmployeeProgressPercent = computed(() => {
+  if (createEmployeeStep.value <= 1) {
+    return 0;
+  }
+  if (createEmployeeStep.value === 2) {
+    return 50;
+  }
+  return 100;
+});
+const createEmployeeEnabledRules = computed(() => createEmployeeRules.value.filter((rule) => rule.enabled));
+
 const recruitmentKeywordNormalized = computed(() => recruitmentKeyword.value.trim().toLowerCase());
-const filteredRecruitmentDivisions = computed<AgencyRosterDivision[]>(() => {
+const recruitmentKeywordFilteredDivisions = computed<AgencyRosterDivision[]>(() => {
   const keyword = recruitmentKeywordNormalized.value;
 
   return recruitmentDivisions
@@ -6453,7 +10970,59 @@ const filteredRecruitmentDivisions = computed<AgencyRosterDivision[]>(() => {
     .filter((division) => division.count > 0);
 });
 const recruitmentTotalCount = computed(() => recruitmentDivisions.reduce((sum, division) => sum + division.count, 0));
+const recruitmentDivisionFilterOptions = computed(() => {
+  const visibleCountMap = new Map(recruitmentKeywordFilteredDivisions.value.map((division) => [division.id, division.count]));
+  return [
+    {
+      id: RECRUITMENT_DIVISION_FILTER_ALL,
+      label: "全部",
+      totalCount: recruitmentTotalCount.value,
+      visibleCount: recruitmentKeywordFilteredDivisions.value.reduce((sum, division) => sum + division.count, 0)
+    },
+    ...recruitmentDivisions.map((division) => ({
+      id: division.id,
+      label: division.titleZh,
+      totalCount: division.count,
+      visibleCount: visibleCountMap.get(division.id) ?? 0
+    }))
+  ];
+});
+const isRecruitmentAllDivisionFilter = computed(() => recruitmentDivisionFilter.value === RECRUITMENT_DIVISION_FILTER_ALL);
+const filteredRecruitmentDivisions = computed<AgencyRosterDivision[]>(() => {
+  if (isRecruitmentAllDivisionFilter.value) {
+    return recruitmentKeywordFilteredDivisions.value;
+  }
+  return recruitmentKeywordFilteredDivisions.value.filter((division) => division.id === recruitmentDivisionFilter.value);
+});
+const recruitmentTotalInFilter = computed(() => {
+  if (isRecruitmentAllDivisionFilter.value) {
+    return recruitmentTotalCount.value;
+  }
+  const selected = recruitmentDivisions.find((division) => division.id === recruitmentDivisionFilter.value);
+  return selected?.count ?? recruitmentTotalCount.value;
+});
 const recruitmentVisibleCount = computed(() => filteredRecruitmentDivisions.value.reduce((sum, division) => sum + division.count, 0));
+watch(
+  () => recruitmentDivisionFilterOptions.value.map((option) => option.id).join("|"),
+  () => {
+    const optionIds = recruitmentDivisionFilterOptions.value.map((option) => option.id);
+    if (!optionIds.includes(recruitmentDivisionFilter.value)) {
+      recruitmentDivisionFilter.value = RECRUITMENT_DIVISION_FILTER_ALL;
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => utilityRuntimeRoleFilterOptions.value.map((option) => option.id).join("|"),
+  () => {
+    const optionIds = utilityRuntimeRoleFilterOptions.value.map((option) => option.id);
+    if (!optionIds.includes(utilityRuntimeRoleFilter.value)) {
+      utilityRuntimeRoleFilter.value = UTILITY_LOG_ROLE_FILTER_ACTIVE;
+    }
+  },
+  { immediate: true }
+);
 
 const skillMarketCurrentCategory = computed(
   () => skillMarketCategories.find((item) => item.id === activeSkillMarketCategory.value) ?? skillMarketCategories[0]
@@ -6524,11 +11093,15 @@ const skillMarketPageNumbers = computed(() => {
 });
 const skillMarketCanPrevPage = computed(() => skillMarketPage.value > 1);
 const skillMarketCanNextPage = computed(() => skillMarketPage.value < skillMarketCurrentTotalPages.value);
+const skillMarketMetaTotal = computed(() => {
+  const isSearching = Boolean(skillMarketSearch.value.trim());
+  return isSearching ? skillMarketLocalTotal.value : Math.max(skillMarketTotal.value, skillMarketLocalTotal.value);
+});
+const skillMarketMetaVisible = computed(() => pagedSkillMarketSkills.value.length);
 const skillMarketSummaryText = computed(() => {
   const categoryLabel = skillMarketCurrentCategory.value?.label ?? "技能市场";
   const displayed = pagedSkillMarketSkills.value.length;
-  const isSearching = Boolean(skillMarketSearch.value.trim());
-  const total = isSearching ? skillMarketLocalTotal.value : Math.max(skillMarketTotal.value, skillMarketLocalTotal.value);
+  const total = skillMarketMetaTotal.value;
   return `分类：${categoryLabel} · 展示 ${displayed} / ${total} · 第 ${skillMarketPage.value}/${skillMarketCurrentTotalPages.value} 页`;
 });
 
@@ -6580,6 +11153,30 @@ const activeProjectTaskColumns = computed(() =>
   }))
 );
 
+watch(
+  [() => sidebarThemeMode.value, () => sidebarThemePreset.value],
+  ([mode, preset]) => {
+    safeStorageSet(SIDEBAR_THEME_MODE_STORAGE_KEY, mode);
+    safeStorageSet(SIDEBAR_THEME_PRESET_STORAGE_KEY, preset);
+    applySidebarThemeToDocument(mode, preset);
+  },
+  { immediate: true }
+);
+
+watch(
+  () => sidebarSettingsAppearance.value,
+  (appearance) => {
+    if (appearance === "system") {
+      ensureSystemThemeModeListener();
+      syncSidebarThemeModeFromAppearance("system");
+      return;
+    }
+    stopSystemThemeModeListener();
+    syncSidebarThemeModeFromAppearance(appearance);
+  },
+  { immediate: true }
+);
+
 const taskProjectCards = computed<TaskProjectCard[]>(() =>
   taskProjectNames.value.map((projectName) => {
     const records = taskItems.value.filter((item) => isTaskInProject(item, projectName));
@@ -6596,22 +11193,61 @@ const taskProjectCards = computed<TaskProjectCard[]>(() =>
 );
 
 onMounted(async () => {
+  if (typeof document !== "undefined") {
+    document.addEventListener("mousedown", handleChatQuickCreateMenuDocumentMouseDown);
+    document.addEventListener("keydown", handleChatQuickCreateMenuDocumentKeyDown);
+    document.addEventListener("mousedown", handleSidebarProfilePopoverDocumentMouseDown);
+    document.addEventListener("keydown", handleSidebarProfilePopoverDocumentKeyDown);
+    document.addEventListener("mousedown", handleSidebarThemePopoverDocumentMouseDown);
+    document.addEventListener("keydown", handleSidebarThemePopoverDocumentKeyDown);
+    document.addEventListener("mousedown", handleChatAgentContextMenuDocumentMouseDown);
+    document.addEventListener("keydown", handleChatAgentContextMenuDocumentKeyDown);
+  }
+  pruneChatUserGroupMembership();
   taskItems.value = loadTasks();
   taskProjectNames.value = loadTaskProjectsFromStorage();
   syncTaskProjectNamesFromTasks();
+  startTaskReminderMonitor();
   await ensureStartupOpenClawReady();
   await Promise.all([loadAgents(), refreshDashboardData()]);
   await scrollMessagesToBottom();
+  await nextTick();
+  resizeChatComposerInput();
 });
 
 onBeforeUnmount(() => {
+  if (typeof document !== "undefined") {
+    document.removeEventListener("mousedown", handleChatQuickCreateMenuDocumentMouseDown);
+    document.removeEventListener("keydown", handleChatQuickCreateMenuDocumentKeyDown);
+    document.removeEventListener("mousedown", handleSidebarProfilePopoverDocumentMouseDown);
+    document.removeEventListener("keydown", handleSidebarProfilePopoverDocumentKeyDown);
+    document.removeEventListener("mousedown", handleSidebarThemePopoverDocumentMouseDown);
+    document.removeEventListener("keydown", handleSidebarThemePopoverDocumentKeyDown);
+    document.removeEventListener("mousedown", handleChatAgentContextMenuDocumentMouseDown);
+    document.removeEventListener("keydown", handleChatAgentContextMenuDocumentKeyDown);
+  }
+  stopSystemThemeModeListener();
   clearRuntimeToolSyncRetryTimer();
   stopFeishuQrCountdown();
+  resetChannelQrBindingState({ clearSession: true });
+  stopTaskReminderMonitor();
 });
+
+watch(
+  () => [activeSection.value, activeAgentPaneTab.value],
+  ([section, pane]) => {
+    if (section === "chat" && pane === "staff") {
+      return;
+    }
+    closeChatAgentContextMenu();
+  }
+);
 
 watch(
   () => activeSection.value,
   (section) => {
+    closeSidebarProfilePopover();
+    closeChatAgentContextMenu();
     if (section === "dashboard") {
       void refreshDashboardData();
       return;
@@ -6619,6 +11255,15 @@ watch(
     if (section === "skills" && !skillMarketLoading.value && skillMarketTopSkills.value.length === 0 && skillMarketCategorySkills.value.length === 0) {
       void refreshSkillMarket();
     }
+  }
+);
+
+watch(
+  () => selectedAgentId.value,
+  () => {
+    sidebarAvatarUploadError.value = "";
+    sidebarProfileNotice.value = "";
+    sidebarAvatarPresetCategory.value = "pixel";
   }
 );
 
@@ -6633,14 +11278,14 @@ watch(
 </script>
 
 <template>
-  <div class="chat-page">
+  <div class="chat-page" :class="{ 'is-sidebar-profile-panel-open': isSidebarProfilePopoverOpen }">
     <div v-if="startupOpenClawOverlayVisible" class="startup-openclaw-overlay" aria-live="polite">
       <section class="startup-openclaw-card" role="dialog" aria-modal="true" aria-label="安装 OpenClaw">
         <div class="startup-openclaw-orbit" :class="{ 'is-spinning': startupOpenClawInstalling }" aria-hidden="true">
           <span class="startup-openclaw-orbit__arc startup-openclaw-orbit__arc--outer" />
           <span class="startup-openclaw-orbit__arc startup-openclaw-orbit__arc--inner" />
           <span class="startup-openclaw-orbit__core">
-            <img class="startup-openclaw-orbit__logo" :src="appLogoUrl" alt="ClawPet Logo" />
+            <img class="startup-openclaw-orbit__logo" :src="appLogoUrl" alt="DragonClaw Logo" />
           </span>
         </div>
         <h2>安装 OpenClaw</h2>
@@ -6679,17 +11324,209 @@ watch(
       </section>
     </div>
 
+    <div class="task-reminder-stack" aria-live="assertive" aria-atomic="true">
+      <transition name="task-reminder-pop">
+        <section
+          v-if="taskReminderPopup"
+          :key="taskReminderPopup.id"
+          class="task-reminder-toast"
+          role="alert"
+          :style="{ '--task-reminder-duration': `${taskReminderAutoCloseMs}ms` }"
+        >
+          <div class="task-reminder-toast__head">
+            <span class="task-reminder-toast__badge">任务到点提醒</span>
+            <button class="task-reminder-toast__close" type="button" aria-label="关闭提醒" @click="closeTaskReminderPopup">×</button>
+          </div>
+          <strong class="task-reminder-toast__title">{{ taskReminderPopup.job.name }}</strong>
+          <p class="task-reminder-toast__meta">
+            {{ formatTaskScheduleKind(taskReminderPopup.job.scheduleKind, taskReminderPopup.job.deleteAfterRun) }}
+            · 到点 {{ formatDateTime(taskReminderPopup.job.nextRunAtMs) }}
+            <template v-if="taskReminderPopup.job.agentId"> · {{ taskReminderPopup.job.agentId }}</template>
+          </p>
+          <p v-if="taskReminderPopup.job.summary" class="task-reminder-toast__summary">{{ taskReminderPopup.job.summary }}</p>
+          <div class="task-reminder-toast__footer">
+            <button class="task-reminder-toast__action" type="button" @click="openTaskBoardFromReminder">查看任务面板</button>
+            <span v-if="taskReminderPopup.queuedCount > 0" class="task-reminder-toast__queued">
+              后续还有 {{ taskReminderPopup.queuedCount }} 条
+            </span>
+          </div>
+          <span class="task-reminder-toast__progress" aria-hidden="true"><i /></span>
+        </section>
+      </transition>
+    </div>
+
+    <Teleport to="body">
+      <transition name="sidebar-profile-panel-fade">
+        <div v-if="isSidebarProfilePopoverOpen" class="sidebar-profile-panel-layer" @click="closeSidebarProfilePopover">
+          <section
+            ref="sidebarProfilePanelRef"
+            class="sidebar-profile-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="邀请成员"
+            data-no-window-drag
+            @click.stop
+            @mousedown.stop
+          >
+            <span class="sidebar-profile-panel__drag-handle" aria-hidden="true" />
+            <button class="sidebar-profile-panel__close" type="button" aria-label="关闭头像设置" @click="closeSidebarProfilePopover">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7l-10 10" /></svg>
+            </button>
+            <p class="sidebar-profile-panel__title">邀请成员</p>
+            <span class="sidebar-profile-panel__avatar">
+              <img
+                v-if="sidebarProfileAvatarPreviewUrl"
+                :src="sidebarProfileAvatarPreviewUrl"
+                :alt="`${sidebarDisplayName} 当前头像`"
+                loading="lazy"
+                decoding="async"
+              />
+              <span v-else>{{ activeAgent ? getAgentInitial(activeAgent) : "M" }}</span>
+            </span>
+            <strong class="sidebar-profile-panel__name" :title="sidebarDisplayName">{{ sidebarDisplayName }}</strong>
+            <button class="sidebar-profile-panel__lobster" type="button" @click="handleSidebarLobsterIdCopy">
+              <span>龙虾号 {{ sidebarProfileLobsterId }}</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2zm-3-5h9a2 2 0 0 1 2 2v1h-2V5H5v9h1v2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /></svg>
+            </button>
+
+            <div class="sidebar-profile-panel__tabs" role="tablist" aria-label="头像分类">
+              <button
+                v-for="category in sidebarAvatarCategoryTabs"
+                :key="`sidebar-avatar-category-${category.id}`"
+                class="sidebar-profile-panel__tab"
+                :class="{ 'is-active': sidebarAvatarPresetCategory === category.id }"
+                type="button"
+                role="tab"
+                :aria-selected="sidebarAvatarPresetCategory === category.id"
+                @click.stop="setSidebarAvatarPresetCategory(category.id)"
+              >
+                {{ category.label }}
+              </button>
+            </div>
+
+            <div class="sidebar-profile-panel__avatar-row" role="list">
+              <button
+                v-for="option in sidebarProfileAvatarOptionItems"
+                :key="option.id"
+                class="sidebar-profile-panel__avatar-option"
+                :class="{
+                  'is-active': isSidebarAvatarOptionSelected(option),
+                  'is-disabled': !sidebarProfileCanCustomizeAvatar
+                }"
+                type="button"
+                :disabled="!sidebarProfileCanCustomizeAvatar"
+                :title="option.label"
+                @click.stop="applySidebarAvatarOption(option)"
+              >
+                <img :src="option.url" :alt="option.label" loading="lazy" decoding="async" />
+              </button>
+            </div>
+
+            <div class="sidebar-profile-panel__actions">
+              <button
+                class="sidebar-profile-panel__primary"
+                type="button"
+                :disabled="!sidebarProfileCanCustomizeAvatar"
+                @click.stop="openSidebarAvatarUploadPicker"
+              >
+                上传自定义图片
+              </button>
+              <button
+                v-if="sidebarProfileHasAvatarOverride"
+                class="sidebar-profile-panel__secondary"
+                type="button"
+                @click.stop="resetSidebarAvatarOverride"
+              >
+                恢复默认
+              </button>
+            </div>
+
+            <p v-if="!sidebarProfileCanCustomizeAvatar" class="sidebar-profile-panel__hint">
+              当前为群聊头像，暂不支持单独设置。
+            </p>
+            <p v-if="sidebarProfileNotice" class="sidebar-profile-panel__notice">{{ sidebarProfileNotice }}</p>
+            <p v-if="sidebarAvatarUploadError" class="sidebar-profile-panel__error">{{ sidebarAvatarUploadError }}</p>
+          </section>
+        </div>
+      </transition>
+    </Teleport>
+
     <div class="window-shell">
       <div class="chat-app">
-        <aside class="sidebar-icons" aria-label="功能模块" @mousedown.left="handleRegionMouseDown">
+        <input ref="sidebarAvatarUploadInputRef" class="sidebar-profile-panel__upload-input" type="file" accept="image/*" @change="handleSidebarAvatarUploadChange" />
+        <aside
+          class="sidebar-icons"
+          :class="{ 'is-profile-popover-open': isSidebarProfilePopoverOpen }"
+          aria-label="功能模块"
+          @mousedown.left="handleRegionMouseDown"
+        >
           <div class="sidebar-top">
             <div class="window-controls" aria-label="窗口控制">
-              <button class="window-control window-control--close" type="button" title="关闭" @click="handleWindowClose" />
-              <button class="window-control window-control--minimize" type="button" title="最小化" @click="handleWindowMinimize" />
-              <button class="window-control window-control--expand" type="button" title="全屏 / 还原" @click="handleWindowExpand" />
+              <button
+                class="window-control window-control--close"
+                type="button"
+                :title="isSidebarProfilePopoverOpen ? undefined : '关闭'"
+                @click="handleWindowClose"
+              />
+              <button
+                class="window-control window-control--minimize"
+                type="button"
+                :title="isSidebarProfilePopoverOpen ? undefined : '最小化'"
+                @click="handleWindowMinimize"
+              />
+              <button
+                class="window-control window-control--expand"
+                type="button"
+                :title="isSidebarProfilePopoverOpen ? undefined : '全屏 / 还原'"
+                @click="handleWindowExpand"
+              />
             </div>
-            <div class="sidebar-profile" data-no-window-drag>
-              <span class="sidebar-profile__avatar">{{ activeAgent ? getAgentInitial(activeAgent) : "M" }}</span>
+            <div
+              ref="sidebarProfileTriggerRef"
+              class="sidebar-profile"
+              :class="{ 'is-open': isSidebarProfilePopoverOpen }"
+              data-no-window-drag
+              role="button"
+              tabindex="0"
+              aria-label="打开头像设置"
+              :aria-expanded="isSidebarProfilePopoverOpen"
+              aria-haspopup="dialog"
+              @click.stop="toggleSidebarProfilePopover"
+              @keydown.enter.prevent="toggleSidebarProfilePopover"
+              @keydown.space.prevent="toggleSidebarProfilePopover"
+            >
+              <span class="sidebar-profile__avatar" :class="{ 'is-group': activeAgentIsConversationGroup }">
+                <span
+                  v-if="activeAgentIsConversationGroup && activeConversationGroupPreviewMembers.length > 0"
+                  class="group-avatar-stack group-avatar-stack--lg"
+                  aria-hidden="true"
+                >
+                  <span
+                    v-for="member in activeConversationGroupPreviewMembers"
+                    :key="`sidebar-group-avatar-${member.agentId}`"
+                    class="group-avatar-stack__item"
+                  >
+                    <img
+                      v-if="getAgentAvatarUrl(member)"
+                      class="group-avatar-stack__image"
+                      :src="getAgentAvatarUrl(member) ?? undefined"
+                      :alt="`${stripRoleLabel(member.displayName)} 头像`"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <span v-else>{{ getAgentInitial(member) }}</span>
+                  </span>
+                </span>
+                <img
+                  v-else-if="activeAgentAvatarUrl"
+                  class="sidebar-profile__avatar-image"
+                  :src="activeAgentAvatarUrl"
+                  :alt="`${sidebarDisplayName} 头像`"
+                  loading="lazy"
+                  decoding="async"
+                />
+                <span v-else>{{ activeAgent ? getAgentInitial(activeAgent) : "M" }}</span>
+              </span>
               <i class="sidebar-profile__status" aria-hidden="true" />
               <div class="sidebar-profile__meta">
                 <small>在线中</small>
@@ -6704,7 +11541,7 @@ watch(
               :key="item.id"
               class="nav-item"
               :class="{ active: activeSection === item.id }"
-              :title="item.label"
+              :title="isSidebarProfilePopoverOpen ? undefined : item.label"
               type="button"
               @click="handleSidebarSectionChange(item.id)"
             >
@@ -6717,77 +11554,156 @@ watch(
                 <svg v-else viewBox="0 0 24 24"><path d="M9 11H7v2h2zm4 0h-2v2h2zm4 0h-2v2h2zm2-8H5a2 2 0 0 0-2 2v14l4-4h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" /></svg>
               </span>
               <span class="nav-item__label">{{ item.label }}</span>
-              <span v-if="item.id === 'chat'" class="nav-item__badge">{{ sidebarChatBadge }}</span>
             </button>
           </div>
 
           <div class="sidebar-spacer" />
-          <div class="sidebar-bottom-actions">
+          <div class="sidebar-quick-actions" data-no-window-drag>
+            <div ref="sidebarThemeQuickActionRef" class="sidebar-quick-action-wrap" data-no-window-drag>
+              <button
+                class="sidebar-quick-action"
+                :class="{ 'is-active': isSidebarThemePopoverOpen }"
+                type="button"
+                :title="isSidebarProfilePopoverOpen ? undefined : '主题'"
+                aria-label="打开主题切换"
+                :aria-expanded="isSidebarThemePopoverOpen"
+                aria-haspopup="dialog"
+                @click.stop="toggleSidebarThemePopover"
+              >
+                <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--theme" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path
+                      class="sidebar-icon-tee__stroke"
+                      d="M8 4.9c1 .8 2.3 1.2 4 1.2s3-.4 4-1.2l3 2.8-2.2 2.1-1.6-1.4V19H8.8V8.4L7.2 9.8 5 7.7z"
+                    />
+                    <rect class="sidebar-icon-tee__tag" x="10.2" y="10" width="3.6" height="5.8" rx="0.8" />
+                  </svg>
+                </span>
+                <span class="sidebar-quick-action__label">主题</span>
+              </button>
+              <transition name="sidebar-theme-pop">
+                <div
+                  v-if="isSidebarThemePopoverOpen"
+                  class="sidebar-theme-popover"
+                  role="dialog"
+                  aria-label="主题切换面板"
+                  data-no-window-drag
+                >
+                  <div class="sidebar-theme-switcher">
+                    <div
+                      class="sidebar-theme-switcher__mode-row"
+                      role="group"
+                      aria-label="日夜模式"
+                      :style="{
+                        '--switch-count': String(sidebarThemeModeOptions.length),
+                        '--switch-index': String(sidebarThemeModeActiveIndex)
+                      }"
+                    >
+                      <button
+                        v-for="mode in sidebarThemeModeOptions"
+                        :key="`sidebar-theme-mode-${mode.id}`"
+                        class="sidebar-theme-switcher__mode"
+                        :class="{ 'is-active': sidebarThemeMode === mode.id }"
+                        :aria-pressed="sidebarThemeMode === mode.id"
+                        type="button"
+                        @click="setSidebarThemeMode(mode.id)"
+                      >
+                        {{ mode.label }}
+                      </button>
+                    </div>
+                    <div
+                      class="sidebar-theme-switcher__preset-row"
+                      role="group"
+                      aria-label="主题切换"
+                      :style="{
+                        '--switch-count': String(sidebarThemePresetOptions.length),
+                        '--switch-index': String(sidebarThemePresetActiveIndex)
+                      }"
+                    >
+                      <button
+                        v-for="preset in sidebarThemePresetOptions"
+                        :key="`sidebar-theme-preset-${preset.id}`"
+                        class="sidebar-theme-switcher__preset"
+                        :class="{ 'is-active': sidebarThemePreset === preset.id }"
+                        :aria-pressed="sidebarThemePreset === preset.id"
+                        type="button"
+                        @click="setSidebarThemePreset(preset.id)"
+                      >
+                        {{ preset.label }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </transition>
+            </div>
+
             <button
-              class="nav-item nav-item--secondary"
-              :class="{ active: activeSection === 'chat' && isSidebarSettingsModalOpen }"
+              class="sidebar-quick-action"
+              :class="{ 'is-active': isProxyConfigModalOpen }"
               type="button"
-              title="设置"
-              aria-label="打开设置"
-              @click="openSidebarSettings"
-            >
-              <span class="nav-item__icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="3.2" />
-                  <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.8 1.8 0 1 1-2.5 2.5l-.1-.1a1 1 0 0 0-1.1-.2h-.1a1 1 0 0 0-.6.9V20a1.8 1.8 0 0 1-3.6 0v-.1a1 1 0 0 0-.6-.9h-.1a1 1 0 0 0-1.1.2l-.1.1a1.8 1.8 0 0 1-2.5-2.5l.1-.1a1 1 0 0 0 .2-1.1v-.1a1 1 0 0 0-.9-.6H4a1.8 1.8 0 0 1 0-3.6h.1a1 1 0 0 0 .9-.6v-.1a1 1 0 0 0-.2-1.1l-.1-.1a1.8 1.8 0 1 1 2.5-2.5l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a1.8 1.8 0 0 1 3.6 0v.1a1 1 0 0 0 .6.9h.1a1 1 0 0 0 1.1-.2l.1-.1a1.8 1.8 0 1 1 2.5 2.5l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6H20a1.8 1.8 0 0 1 0 3.6h-.1a1 1 0 0 0-.9.6z" />
-                </svg>
-              </span>
-              <span class="nav-item__label">设置</span>
-            </button>
-            <button
-              class="nav-item nav-item--secondary"
-              :class="{ active: activeSection === 'chat' && (isSidebarLogsOpen || utilityModalType === 'logs') }"
-              type="button"
-              title="日志"
-              aria-label="打开日志"
-              @click="openSidebarLogs"
-            >
-              <span class="nav-item__icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M8 4h8M8 4a2 2 0 0 0-2 2v1h12V6a2 2 0 0 0-2-2M6 7h12v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z" /><path d="m8 15 3-3 2 2 3-4" /></svg>
-              </span>
-              <span class="nav-item__label">日志</span>
-            </button>
-            <button
-              class="nav-item nav-item--secondary"
-              :class="{ active: isProxyConfigModalOpen }"
-              type="button"
-              title="代理配置"
+              :title="isSidebarProfilePopoverOpen ? undefined : '代理配置'"
               aria-label="打开代理配置"
               @click="openSidebarProxyConfig"
             >
-              <span class="nav-item__icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M4 6h16v4H4zM4 14h16v4H4zM8 10v4M16 10v4" /></svg>
+              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--proxy" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <rect x="4" y="7" width="16" height="12" rx="1.8" />
+                  <path d="M8 7V6.2A1.7 1.7 0 0 1 9.7 4.5h4.6A1.7 1.7 0 0 1 16 6.2V7M4 11.2h16M9 11.2v2.2M15 11.2v2.2" />
+                </svg>
               </span>
-              <span class="nav-item__label">代理配置</span>
+              <span class="sidebar-quick-action__label">代理</span>
             </button>
             <button
-              class="nav-item nav-item--secondary"
+              class="sidebar-quick-action"
+              :class="{ 'is-active': activeSection === 'chat' && (isLogsPanelActive || utilityModalType === 'logs') }"
               type="button"
-              title="OpenClaw 网页版"
-              aria-label="访问 OpenClaw 网页版"
+              :title="isSidebarProfilePopoverOpen ? undefined : '日志'"
+              aria-label="打开日志"
+              @click="openSidebarLogs"
+            >
+              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--logs" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path class="sidebar-icon-file__stroke" d="M6 3.8h8.1L19.5 9v11.2a1.8 1.8 0 0 1-1.8 1.8H6.3a1.8 1.8 0 0 1-1.8-1.8V5.6A1.8 1.8 0 0 1 6 3.8z" />
+                  <path class="sidebar-icon-file__stroke" d="M14.1 3.8V9h5.4" />
+                  <rect class="sidebar-icon-file__card" x="7.4" y="11" width="8.8" height="6.4" rx="1.2" />
+                  <line class="sidebar-icon-file__line1" x1="9.1" y1="13.3" x2="14.8" y2="13.3" />
+                  <line class="sidebar-icon-file__line2" x1="9.1" y1="15.2" x2="13.7" y2="15.2" />
+                </svg>
+              </span>
+              <span class="sidebar-quick-action__label">日志</span>
+            </button>
+            <button
+              class="sidebar-quick-action"
+              :class="{ 'is-active': activeSection === 'chat' && isSidebarSettingsModalOpen }"
+              type="button"
+              :title="isSidebarProfilePopoverOpen ? undefined : '设置'"
+              aria-label="打开设置"
+              @click="openSidebarSettings"
+            >
+              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--settings" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M8 5.5h8l4 6.5-4 6.5H8L4 12z" />
+                  <circle cx="12" cy="12" r="2.8" />
+                </svg>
+              </span>
+              <span class="sidebar-quick-action__label">设置</span>
+            </button>
+            <button
+              class="sidebar-quick-action sidebar-quick-action--web-bar"
+              type="button"
+              :title="isSidebarProfilePopoverOpen ? undefined : '打开 OpenClaw 原站点'"
+              aria-label="打开 OpenClaw 原站点"
               @click="openSidebarOpenClawWeb"
             >
-              <span class="nav-item__icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M3 12h18M12 3a9 9 0 1 0 0 18M12 3c2.5 2.3 4 5.4 4 9s-1.5 6.7-4 9M12 3c-2.5 2.3-4 5.4-4 9s1.5 6.7 4 9" /></svg>
+              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--web" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <rect x="4" y="4.5" width="16" height="15" rx="1.2" />
+                  <path d="M4 8.7h16" />
+                  <circle class="sidebar-icon-browser__dot" cx="7.2" cy="6.7" r="0.95" />
+                  <circle class="sidebar-icon-browser__dot" cx="10.2" cy="6.7" r="0.95" />
+                </svg>
               </span>
-              <span class="nav-item__label">OpenClaw 网页版</span>
-            </button>
-            <button
-              class="nav-item nav-item--secondary nav-item--legacy"
-              type="button"
-              title="旧版运营控制台"
-              aria-label="打开旧版运营控制台"
-              @click="openSidebarLegacyConsole"
-            >
-              <span class="nav-item__icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M4 5h16v10H4zM8 19h8M10 15v4M14 15v4" /><path d="M8 9h8M8 12h4" /></svg>
-              </span>
-              <span class="nav-item__label">旧版运营控制台</span>
+              <span class="sidebar-quick-action__label">打开 OpenClaw 原站点</span>
             </button>
           </div>
         </aside>
@@ -6812,7 +11728,7 @@ watch(
 
               <template v-else>
                 <p class="utility-modal__detail">
-                  {{ chatRuntimeLogs?.detail || "展示 OpenClaw 运行日志。" }} · 当前员工
+                  {{ chatRuntimeLogs?.detail || "展示 OpenClaw 运行日志。" }} · 当前筛选
                   {{ utilityLogTab === "runtime" ? runtimeCategoryLogItems.length : runtimeLogItems.length }} / {{ runtimeLogItems.length }} 条
                 </p>
 
@@ -6836,17 +11752,45 @@ watch(
                 </div>
 
                 <template v-if="utilityLogTab === 'runtime'">
-                  <div class="utility-log-categories" role="tablist" aria-label="运行日志分类">
-                    <button
-                      v-for="category in utilityRuntimeCategories"
-                      :key="category.id"
-                      type="button"
-                      class="utility-log-category"
-                      :class="{ 'is-active': utilityRuntimeCategory === category.id }"
-                      @click="handleUtilityRuntimeCategoryChange(category.id)"
-                    >
-                      {{ category.label }}
-                    </button>
+                  <div class="utility-log-categories-wrap">
+                    <div class="utility-log-categories" role="tablist" aria-label="运行日志分类">
+                      <button
+                        v-for="category in utilityRuntimeCategories"
+                        :key="category.id"
+                        type="button"
+                        class="utility-log-category"
+                        :class="{ 'is-active': utilityRuntimeCategory === category.id }"
+                        @click="handleUtilityRuntimeCategoryChange(category.id)"
+                      >
+                        {{ category.label }}
+                      </button>
+                    </div>
+                    <div class="utility-log-filters">
+                      <label class="utility-log-filter">
+                        <span>角色</span>
+                        <select
+                          v-model="utilityRuntimeRoleFilter"
+                          class="utility-log-filter__select"
+                          @change="handleUtilityRuntimeRoleFilterChange"
+                        >
+                          <option v-for="option in utilityRuntimeRoleFilterOptions" :key="option.id" :value="option.id">
+                            {{ option.label }}（{{ option.count }}）
+                          </option>
+                        </select>
+                      </label>
+                      <label class="utility-log-filter">
+                        <span>定时任务</span>
+                        <select
+                          v-model="utilityRuntimeScheduleFilter"
+                          class="utility-log-filter__select"
+                          @change="handleUtilityRuntimeScheduleFilterChange"
+                        >
+                          <option v-for="option in utilityRuntimeScheduleFilterOptions" :key="option.id" :value="option.id">
+                            {{ option.label }}（{{ option.count }}）
+                          </option>
+                        </select>
+                      </label>
+                    </div>
                   </div>
 
                   <div v-if="runtimeCategoryLogItems.length === 0" class="utility-modal__empty">当前分类暂无运行日志。</div>
@@ -6875,20 +11819,47 @@ watch(
                     <section v-if="selectedRuntimeLog && activeRuntimeLogDetailSection" class="utility-log-detail">
                       <div class="utility-log-detail__head">
                         <header class="utility-log-detail__header">
-                          <div>
-                            <strong>{{ selectedRuntimeLog.method }} {{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</strong>
-                            <p>{{ selectedRuntimeLog.platformName }} · {{ formatDateTime(selectedRuntimeLog.createdAt) }}</p>
+                          <div class="utility-log-detail__title-wrap">
+                            <div class="utility-log-detail__route">
+                              <span class="utility-log-detail__method">{{ selectedRuntimeLog.method }}</span>
+                              <strong>{{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</strong>
+                            </div>
+                            <p>{{ getLogRequestUrl(selectedRuntimeLog) }}</p>
+                            <div class="utility-log-detail__meta">
+                              <span class="utility-log-detail__meta-item">{{ selectedRuntimeLog.platformName }}</span>
+                              <span class="utility-log-detail__meta-item">{{ formatDateTime(selectedRuntimeLog.createdAt) }}</span>
+                              <span class="utility-log-kind" :data-kind="getRuntimeLogCategory(selectedRuntimeLog)">
+                                {{ getRuntimeLogCategoryLabel(selectedRuntimeLog) }}
+                              </span>
+                            </div>
                           </div>
-                          <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
-                            selectedRuntimeLog.responseStatus
-                          }}</span>
+                          <div class="utility-log-detail__header-side">
+                            <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
+                              selectedRuntimeLog.responseStatus
+                            }}</span>
+                          </div>
                         </header>
                         <div class="utility-log-detail__stats">
-                          <span>耗时 {{ formatDurationLabel(selectedRuntimeLog.duration) }}</span>
-                          <span v-if="typeof selectedRuntimeLog.firstTokenTime === 'number'">
-                            首 Token {{ formatDurationLabel(selectedRuntimeLog.firstTokenTime) }}
+                          <span class="utility-log-detail__stat">
+                            <small>耗时</small>
+                            <strong>{{ formatDurationLabel(selectedRuntimeLog.duration) }}</strong>
                           </span>
-                          <span v-if="typeof selectedRuntimeLog.totalTokens === 'number'">Token {{ selectedRuntimeLog.totalTokens }}</span>
+                          <span v-if="typeof selectedRuntimeLog.firstTokenTime === 'number'" class="utility-log-detail__stat">
+                            <small>首 Token</small>
+                            <strong>{{ formatDurationLabel(selectedRuntimeLog.firstTokenTime) }}</strong>
+                          </span>
+                          <span
+                            v-if="
+                              typeof selectedRuntimeLog.totalTokens === 'number' ||
+                              typeof selectedRuntimeLog.promptTokens === 'number' ||
+                              typeof selectedRuntimeLog.completionTokens === 'number' ||
+                              typeof selectedRuntimeLog.cacheReadInputTokens === 'number'
+                            "
+                            class="utility-log-detail__stat"
+                          >
+                            <small>总 Token</small>
+                            <strong>{{ getEffectiveLogTotalTokens(selectedRuntimeLog) }}</strong>
+                          </span>
                         </div>
                         <div class="utility-log-detail-tabs" role="tablist" aria-label="日志详情分栏">
                           <button
@@ -6920,7 +11891,7 @@ watch(
                 </template>
 
                 <template v-else>
-                  <div v-if="errorAnalysisSummaries.length === 0" class="utility-modal__empty">当前员工暂无错误日志。</div>
+                  <div v-if="errorAnalysisSummaries.length === 0" class="utility-modal__empty">当前筛选暂无错误日志。</div>
                   <div v-else class="utility-log-layout">
                     <div class="utility-error-list">
                       <button
@@ -6991,9 +11962,30 @@ watch(
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2a8 8 0 1 0 4.9 14.3l4.4 4.4 1.4-1.4-4.4-4.4A8 8 0 0 0 10 2zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6z" /></svg>
                   <input v-model="searchQuery" type="text" placeholder="搜索 Agent" />
                 </label>
-                <button class="search-add" type="button" title="新会话" @click="handleNewChat">
-                  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
-                </button>
+                <div ref="chatQuickCreateMenuRef" class="search-create-menu" data-no-window-drag>
+                  <button
+                    class="search-add"
+                    type="button"
+                    title="快捷新建"
+                    aria-label="快捷新建"
+                    aria-haspopup="menu"
+                    :aria-expanded="isChatQuickCreateMenuOpen"
+                    @click.stop="toggleChatQuickCreateMenu"
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v14M3 10h14" /></svg>
+                  </button>
+                  <div v-if="isChatQuickCreateMenuOpen" class="search-create-menu__popover" role="menu" aria-label="快捷新建菜单">
+                    <button type="button" class="search-create-menu__item" role="menuitem" @click="handleChatQuickCreateAction('role')">
+                      新建角色
+                    </button>
+                    <button type="button" class="search-create-menu__item" role="menuitem" @click="handleChatQuickCreateAction('group')">
+                      新建群聊
+                    </button>
+                    <button type="button" class="search-create-menu__item" role="menuitem" @click="handleChatQuickCreateAction('friend')">
+                      添加虾友
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="agent-pane-tabs" role="tablist" aria-label="Agent 分组">
                 <button
@@ -7012,119 +12004,340 @@ watch(
             <div class="chat-list__body">
               <template v-if="isChannelPaneActive">
                 <div class="chat-channel-pane">
-                  <section class="chat-channel-pane__section">
-                    <header class="chat-channel-pane__head">
-                      <h4>已配置</h4>
-                      <small>{{ configuredChannelPaneGroupsForDisplay.length }} 个</small>
-                    </header>
-                    <p class="chat-channel-pane__hint">{{ dashboardChannelSnapshot?.detail || "已接入频道会在这里显示。" }}</p>
-                    <div v-if="configuredChannelPaneGroupsForDisplay.length > 0" class="chat-channel-pane__configured-list">
-                      <article
-                        v-for="group in configuredChannelPaneGroupsForDisplay"
-                        :key="`configured-channel-pane-${group.channelType}`"
-                        class="chat-channel-pane__configured-card"
-                      >
-                        <div class="chat-channel-pane__identity">
-                          <span class="chat-channel-pane__icon-shell">
-                            <img v-if="group.icon" :src="group.icon" :alt="group.name" />
-                            <span v-else>{{ group.name.charAt(0).toUpperCase() }}</span>
-                          </span>
-                          <div>
-                            <strong>{{ group.name }}</strong>
-                            <p>{{ group.channelType }}</p>
-                          </div>
-                        </div>
-                        <small>{{ group.configuredAccounts }}/{{ group.totalAccounts }} 已配置 · {{ group.connectedAccounts }} 在线</small>
-                      </article>
-                    </div>
-                    <p v-else class="list-empty list-empty--compact">暂无已配置频道。</p>
-                  </section>
-
-                  <section class="chat-channel-pane__section">
-                    <header class="chat-channel-pane__head">
-                      <h4>频道列表</h4>
-                      <small>{{ visibleChannelPaneCatalog.length }} 个</small>
-                    </header>
-                    <div v-if="visibleChannelPaneCatalog.length > 0" class="chat-channel-pane__catalog-grid">
-                      <article
-                        v-for="channel in visibleChannelPaneCatalog"
-                        :key="`channel-pane-${channel.id}`"
-                        class="chat-channel-pane__catalog-card"
-                        :class="{ 'chat-channel-pane__catalog-card--interactive': true }"
-                        @click="handleChannelPaneCatalogCardClick(channel.id)"
-                      >
-                        <div class="chat-channel-pane__identity">
-                          <span class="chat-channel-pane__icon-shell">
-                            <img :src="channel.icon" :alt="channel.name" />
-                          </span>
-                          <div>
-                            <strong>{{ channel.name }}</strong>
-                            <p>{{ channel.description }}</p>
-                          </div>
-                        </div>
-                        <span class="chat-channel-pane__tag" :class="{ 'is-configured': channel.configured }">
-                          {{ channel.configured ? "已配置" : "未配置" }}
+                  <section v-if="configuredChannelChatItems.length > 0" class="chat-channel-pane__chat-list">
+                    <article
+                      v-for="item in configuredChannelChatItems"
+                      :key="`channel-chat-${item.id}`"
+                      class="chat-channel-pane__chat-item"
+                      :class="{ 'is-active': isChannelChatItemActive(item) }"
+                      role="button"
+                      tabindex="0"
+                      @click="handleChannelPaneChatItemClick(item)"
+                      @keydown.enter.prevent="handleChannelPaneChatItemClick(item)"
+                      @keydown.space.prevent="handleChannelPaneChatItemClick(item)"
+                    >
+                      <div class="chat-channel-pane__chat-item-main">
+                        <span class="chat-channel-pane__icon-shell">
+                          <img v-if="item.icon" :src="item.icon" :alt="item.name" />
+                          <span v-else>{{ item.name.charAt(0).toUpperCase() }}</span>
                         </span>
-                      </article>
-                    </div>
-                    <p v-else class="list-empty list-empty--compact">没有匹配的频道。</p>
+                        <div class="chat-channel-pane__chat-item-copy">
+                          <strong>{{ item.name }}</strong>
+                          <small>{{ item.summary }}</small>
+                        </div>
+                      </div>
+                      <div class="chat-channel-pane__chat-item-actions">
+                        <button
+                          class="chat-channel-pane__chat-item-config"
+                          type="button"
+                          title="配置频道绑定"
+                          aria-label="配置频道绑定"
+                          @click.stop="handleChannelPaneChatItemConfigClick(item)"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm8 3.5-.94-.36a7.9 7.9 0 0 0-.42-1.01l.53-.85a1 1 0 0 0-.14-1.24l-1.23-1.23a1 1 0 0 0-1.24-.14l-.85.53c-.33-.16-.67-.3-1.02-.42L14 3.98A1 1 0 0 0 13.03 3h-2.06a1 1 0 0 0-.97.73l-.35 1.22c-.35.11-.69.25-1.02.42l-.85-.53a1 1 0 0 0-1.24.14L5.31 6.2a1 1 0 0 0-.14 1.24l.53.85c-.16.33-.3.67-.42 1.02L4.06 10a1 1 0 0 0-.73.97v2.06a1 1 0 0 0 .73.97l1.22.35c.11.35.25.69.42 1.02l-.53.85a1 1 0 0 0 .14 1.24l1.23 1.23a1 1 0 0 0 1.24.14l.85-.53c.33.16.67.3 1.02.42l.35 1.22a1 1 0 0 0 .97.73h2.06a1 1 0 0 0 .97-.73l.35-1.22c.35-.11.69-.25 1.02-.42l.85.53a1 1 0 0 0 1.24-.14l1.23-1.23a1 1 0 0 0 .14-1.24l-.53-.85c.16-.33.3-.67.42-1.02l1.22-.35a1 1 0 0 0 .73-.97v-2.06a1 1 0 0 0-.73-.97Z" />
+                          </svg>
+                        </button>
+                        <i class="chat-channel-pane__chat-item-dot" :data-tone="item.statusTone" :title="item.statusLabel" />
+                      </div>
+                    </article>
                   </section>
+                  <section v-else class="chat-channel-pane__placeholder">
+                    <p>{{ normalizedQuery ? "没有匹配的频道聊天项" : "暂无已配置频道" }}</p>
+                    <small>{{
+                      normalizedQuery
+                        ? "尝试清空搜索条件，或先在下方频道列表完成配置。"
+                        : "点击下方频道卡片开始配置，配置成功后会在这里加载对应频道聊天项。"
+                    }}</small>
+                  </section>
+                  <div class="chat-channel-pane__bottom">
+                    <section class="chat-channel-pane__section">
+                      <header class="chat-channel-pane__head">
+                        <h4>频道列表</h4>
+                        <small>{{ visibleChannelPaneCatalog.length }} 个</small>
+                      </header>
+                      <div v-if="visibleChannelPaneCatalog.length > 0" class="chat-channel-pane__catalog-grid">
+                        <article
+                          v-for="channel in visibleChannelPaneCatalog"
+                          :key="`channel-pane-${channel.id}`"
+                          class="chat-channel-pane__catalog-card"
+                          :class="{ 'chat-channel-pane__catalog-card--interactive': true }"
+                          @click="handleChannelPaneCatalogCardClick(channel.id)"
+                        >
+                          <div class="chat-channel-pane__identity">
+                            <span class="chat-channel-pane__icon-shell">
+                              <img :src="channel.icon" :alt="channel.name" />
+                            </span>
+                            <strong>{{ channel.name }}</strong>
+                          </div>
+                          <span
+                            class="chat-channel-pane__status-dot"
+                            :class="{ 'is-configured': channel.configured }"
+                            :title="channel.configured ? '已配置' : '未配置'"
+                            :aria-label="channel.configured ? '已配置' : '未配置'"
+                          />
+                        </article>
+                      </div>
+                      <p v-else class="list-empty list-empty--compact">没有匹配的频道。</p>
+                    </section>
+                  </div>
                 </div>
               </template>
               <template v-else>
-                <button
-                  v-for="agent in currentPaneAgents"
-                  :key="agent.agentId"
-                  class="agent-item"
-                  :class="{ active: selectedAgentId === agent.agentId }"
-                  type="button"
-                  @click="switchAgent(agent.agentId)"
+                <div
+                  v-if="currentPaneAgentSections.length > 0"
+                  class="agent-group-list"
+                  :class="{ 'agent-group-list--flat': isConversationGroupPaneActive }"
                 >
-                  <div class="agent-avatar" :class="{ 'agent-avatar--group': agent.groupKind === 'group' }">
-                    <img
-                      v-if="getAgentAvatarUrl(agent)"
-                      class="agent-avatar__image"
-                      :src="getAgentAvatarUrl(agent) ?? undefined"
-                      :alt="`${stripRoleLabel(agent.displayName)} 头像`"
-                      loading="lazy"
-                      decoding="async"
-                    />
-                    <span v-else>{{ getAgentInitial(agent) }}</span>
-                    <i class="status-dot" :data-tone="agent.statusTone" />
+                  <div v-if="isConversationGroupPaneActive" class="agent-flat-head">
+                    <small>{{ currentPaneAgentSections[0]?.agents.length ?? 0 }} 个群聊</small>
+                    <button
+                      class="agent-group-add"
+                      type="button"
+                      title="新建群聊"
+                      aria-label="新建群聊"
+                      @click="handleCreateChatUserGroup"
+                    >
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+                    </button>
                   </div>
-                  <div class="agent-content">
-                    <div class="agent-top-line">
-                      <strong>{{ stripRoleLabel(agent.displayName) }}</strong>
-                      <span class="agent-channel">{{ agent.channel }}</span>
-                    </div>
-                    <p class="agent-preview">{{ getAgentMeta(agent.agentId).preview }}</p>
-                    <small class="agent-status">{{ getAgentStatusLabel(agent) }}</small>
-                  </div>
-                  <div class="agent-meta">
-                    <span>{{ getAgentMeta(agent.agentId).timeLabel }}</span>
-                    <span v-if="getAgentMeta(agent.agentId).unread" class="agent-unread">{{ getAgentMeta(agent.agentId).unread }}</span>
-                  </div>
-                </button>
-                <p v-if="currentPaneAgents.length === 0" class="list-empty">
+                  <section
+                    v-for="(section, sectionIndex) in currentPaneAgentSections"
+                    :key="`agent-group-${activeAgentPaneTab}-${section.id}`"
+                    class="agent-group-section"
+                    :class="{
+                      'agent-group-section--default': section.isDefault,
+                      'agent-group-section--collapsed': !isConversationGroupPaneActive && isChatUserSectionCollapsed(section.id),
+                      'agent-group-section--flat': isConversationGroupPaneActive
+                    }"
+                  >
+                    <header v-if="!isConversationGroupPaneActive" class="agent-group-head">
+                      <strong>{{ section.title }}</strong>
+                      <div class="agent-group-head__actions">
+                        <small>{{ section.agents.length }}</small>
+                        <button
+                          class="agent-group-collapse"
+                          :class="{ 'is-collapsed': isChatUserSectionCollapsed(section.id) }"
+                          type="button"
+                          :title="isChatUserSectionCollapsed(section.id) ? `展开 ${section.title}` : `折叠 ${section.title}`"
+                          :aria-label="isChatUserSectionCollapsed(section.id) ? `展开 ${section.title}` : `折叠 ${section.title}`"
+                          @click="toggleChatUserSectionCollapsed(section.id)"
+                        >
+                          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 8 5 5 5-5" /></svg>
+                        </button>
+                        <button
+                          v-if="section.id !== CHAT_USER_PINNED_GROUP_ID && !section.isDefault"
+                          class="agent-group-delete"
+                          type="button"
+                          :title="`删除 ${section.title}`"
+                          :aria-label="`删除 ${section.title}`"
+                          @click="handleDeleteChatUserGroup(section.id)"
+                        >
+                          <svg viewBox="0 0 20 20" aria-hidden="true">
+                            <path d="M4.5 5.5h11" />
+                            <path d="M7.8 5.5V4.2a1 1 0 0 1 1-1h2.4a1 1 0 0 1 1 1v1.3" />
+                            <path d="M6 5.5 6.7 15a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-9.5" />
+                            <path d="M8.6 8v5.6M11.4 8v5.6" />
+                          </svg>
+                        </button>
+                        <button
+                          v-if="sectionIndex === 0"
+                          class="agent-group-add"
+                          type="button"
+                          title="新建群聊"
+                          aria-label="新建群聊"
+                          @click="handleCreateChatUserGroup"
+                        >
+                          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+                        </button>
+                      </div>
+                    </header>
+
+                    <template v-if="isConversationGroupPaneActive || !isChatUserSectionCollapsed(section.id)">
+                      <p v-if="section.agents.length === 0" class="list-empty list-empty--compact">该分组暂无成员。</p>
+                      <button
+                        v-for="agent in section.agents"
+                        :key="`${section.id}-${agent.agentId}`"
+                        class="agent-item"
+                        :class="{
+                          active: selectedAgentId === agent.agentId,
+                          'agent-item--dragging': !isConversationGroupPaneActive && chatUserDragAgentId === agent.agentId,
+                          'agent-item--drag-over':
+                            !isConversationGroupPaneActive &&
+                            chatUserDragSectionId === section.id &&
+                            chatUserDragOverAgentId === agent.agentId &&
+                            chatUserDragAgentId !== agent.agentId
+                        }"
+                        type="button"
+                        @click="switchAgent(agent.agentId)"
+                        :draggable="!isConversationGroupPaneActive"
+                        @dragstart="!isConversationGroupPaneActive && handleChatUserAgentDragStart(section.id, agent.agentId, $event)"
+                        @dragover.prevent="!isConversationGroupPaneActive && handleChatUserAgentDragOver(section.id, agent.agentId, $event)"
+                        @drop.prevent="!isConversationGroupPaneActive && handleChatUserAgentDrop(section.id, agent.agentId)"
+                        @dragend="!isConversationGroupPaneActive && handleChatUserAgentDragEnd()"
+                        @contextmenu.prevent="activeAgentPaneTab === 'staff' && handleChatAgentItemContextMenu(agent, $event)"
+                      >
+                        <div class="agent-avatar" :class="{ 'agent-avatar--group': agent.groupKind === 'group' }">
+                          <span
+                            v-if="isChatConversationGroupAgentId(agent.agentId) && getConversationGroupPreviewMembers(agent.agentId).length > 0"
+                            class="group-avatar-stack group-avatar-stack--md"
+                            aria-hidden="true"
+                          >
+                            <span
+                              v-for="member in getConversationGroupPreviewMembers(agent.agentId)"
+                              :key="`chat-list-group-avatar-${agent.agentId}-${member.agentId}`"
+                              class="group-avatar-stack__item"
+                            >
+                              <img
+                                v-if="getAgentAvatarUrl(member)"
+                                class="group-avatar-stack__image"
+                                :src="getAgentAvatarUrl(member) ?? undefined"
+                                :alt="`${stripRoleLabel(member.displayName)} 头像`"
+                                loading="lazy"
+                                decoding="async"
+                              />
+                              <span v-else>{{ getAgentInitial(member) }}</span>
+                            </span>
+                          </span>
+                          <img
+                            v-else-if="getAgentAvatarUrl(agent)"
+                            class="agent-avatar__image"
+                            :src="getAgentAvatarUrl(agent) ?? undefined"
+                            :alt="`${stripRoleLabel(agent.displayName)} 头像`"
+                            loading="lazy"
+                            decoding="async"
+                          />
+                          <span v-else>{{ getAgentInitial(agent) }}</span>
+                          <i class="status-dot" :data-tone="agent.statusTone" />
+                        </div>
+                        <div class="agent-content">
+                          <div class="agent-top-line">
+                            <strong>{{ stripRoleLabel(agent.displayName) }}</strong>
+                            <span class="agent-channel">{{ agent.channel }}</span>
+                          </div>
+                          <p class="agent-preview">{{ getAgentMeta(agent.agentId).preview }}</p>
+                          <small class="agent-status">{{ getAgentStatusLabel(agent) }}</small>
+                        </div>
+                      </button>
+                    </template>
+                  </section>
+                </div>
+                <p v-else class="list-empty">
                   {{ normalizedQuery ? "没有匹配的 Agent" : currentPaneEmptyText }}
                 </p>
               </template>
             </div>
           </section>
 
+          <div
+            v-if="isChatAgentContextMenuOpen"
+            ref="chatAgentContextMenuRef"
+            class="agent-context-menu"
+            role="menu"
+            aria-label="数字员工操作菜单"
+            data-no-window-drag
+            :style="{
+              left: `${chatAgentContextMenuPosition.x}px`,
+              top: `${chatAgentContextMenuPosition.y}px`
+            }"
+            @mousedown.stop
+          >
+            <button type="button" class="agent-context-menu__item" role="menuitem" @click="handleChatAgentContextMenuDetail">
+              详情
+            </button>
+            <button type="button" class="agent-context-menu__item" role="menuitem" @click="handleChatAgentContextMenuPin">
+              置顶
+            </button>
+            <button
+              type="button"
+              class="agent-context-menu__item agent-context-menu__item--danger"
+              role="menuitem"
+              @click="handleChatAgentContextMenuDelete"
+            >
+              删除
+            </button>
+          </div>
+
           <section class="chat-window" :class="{ 'chat-window--settings-open': isAgentSettingsOpen }">
             <header class="chat-window__header" @mousedown.left="handleRegionMouseDown">
               <div class="chat-agent-header">
-                <div class="chat-agent-header__avatar">{{ activeAgent ? getAgentInitial(activeAgent) : "?" }}</div>
+                <div
+                  class="chat-agent-header__avatar"
+                  :class="{ 'is-group': activeAgentIsConversationGroup, 'is-clickable': activeAgentIsConversationGroup }"
+                  :role="activeAgentIsConversationGroup ? 'button' : undefined"
+                  :tabindex="activeAgentIsConversationGroup ? 0 : undefined"
+                  @click="activeAgentIsConversationGroup && openGroupInfoPanel()"
+                  @keydown.enter.prevent="activeAgentIsConversationGroup && openGroupInfoPanel()"
+                  @keydown.space.prevent="activeAgentIsConversationGroup && openGroupInfoPanel()"
+                >
+                  <span
+                    v-if="activeAgentIsConversationGroup && activeConversationGroupPreviewMembers.length > 0"
+                    class="group-avatar-stack group-avatar-stack--lg"
+                    aria-hidden="true"
+                  >
+                    <span
+                      v-for="member in activeConversationGroupPreviewMembers"
+                      :key="`chat-header-group-avatar-${member.agentId}`"
+                      class="group-avatar-stack__item"
+                    >
+                      <img
+                        v-if="getAgentAvatarUrl(member)"
+                        class="group-avatar-stack__image"
+                        :src="getAgentAvatarUrl(member) ?? undefined"
+                        :alt="`${stripRoleLabel(member.displayName)} 头像`"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <span v-else>{{ getAgentInitial(member) }}</span>
+                    </span>
+                  </span>
+                  <img
+                    v-else-if="activeAgentAvatarUrl"
+                    class="chat-agent-header__avatar-image"
+                    :src="activeAgentAvatarUrl"
+                    :alt="`${activeAgent ? stripRoleLabel(activeAgent.displayName) : '当前角色'} 头像`"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <span v-else>{{ activeAgent ? getAgentInitial(activeAgent) : "?" }}</span>
+                </div>
                 <div>
                   <strong>{{ activeAgent ? stripRoleLabel(activeAgent.displayName) : "请选择 Agent" }}</strong>
                   <p>
                     {{ activeAgent ? getAgentStatusLabel(activeAgent) : "未选择" }}
-                    <span v-if="activeAgent">· {{ activeAgent.channel }}</span>
+                    <span v-if="activeAgent && activeConversationChannelLabel">· {{ activeConversationChannelLabel }}</span>
                   </p>
                 </div>
               </div>
-              <div class="chat-window__actions">
+              <div class="chat-window__header-right">
+                <button
+                  v-if="activeAgentIsConversationGroup && activeConversationGroupMemberCount > 0"
+                  type="button"
+                  class="chat-window__group-summary chat-window__group-summary--trigger"
+                  :class="{ 'is-active': isGroupInfoPanelActive }"
+                  :aria-label="`查看群聊 ${activeConversationGroup?.name ?? ''} 成员信息`"
+                  @click="openGroupInfoPanel"
+                >
+                  <span class="group-avatar-stack group-avatar-stack--xs" aria-hidden="true">
+                    <span
+                      v-for="member in activeConversationGroupPreviewMembers"
+                      :key="`chat-header-group-summary-${member.agentId}`"
+                      class="group-avatar-stack__item"
+                    >
+                      <img
+                        v-if="getAgentAvatarUrl(member)"
+                        class="group-avatar-stack__image"
+                        :src="getAgentAvatarUrl(member) ?? undefined"
+                        :alt="`${stripRoleLabel(member.displayName)} 头像`"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <span v-else>{{ getAgentInitial(member) }}</span>
+                    </span>
+                  </span>
+                  <span class="chat-window__group-summary-text">等{{ activeConversationGroupMemberCount }}个朋友</span>
+                </button>
+                <div class="chat-window__actions">
                 <button
                   type="button"
                   class="header-btn"
@@ -7138,7 +12351,7 @@ watch(
                 <button
                   type="button"
                   class="header-btn"
-                  :class="{ 'is-active': isSidebarLogsOpen || utilityModalType === 'logs' }"
+                  :class="{ 'is-active': isLogsPanelActive || utilityModalType === 'logs' }"
                   title="运行日志"
                   aria-label="打开运行日志"
                   @click="openSidebarLogs"
@@ -7148,17 +12361,7 @@ watch(
                 <button
                   type="button"
                   class="header-btn"
-                  title="归档当前会话"
-                  aria-label="归档当前会话"
-                  :disabled="!activeAgent"
-                  @click="handleArchiveCurrentChat"
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v4H4zM6 11v8h12v-8" /><path d="M12 13v4m0 0-2-2m2 2 2-2" /></svg>
-                </button>
-                <button
-                  type="button"
-                  class="header-btn"
-                  :class="{ 'is-active': isAgentSettingsOpen }"
+                  :class="{ 'is-active': isAgentSettingsOpen && !isLogsPanelActive }"
                   title="设置"
                   aria-label="打开会话设置"
                   @click="toggleAgentSettingsPanel"
@@ -7168,6 +12371,7 @@ watch(
                     <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.8 1.8 0 1 1-2.5 2.5l-.1-.1a1 1 0 0 0-1.1-.2h-.1a1 1 0 0 0-.6.9V20a1.8 1.8 0 0 1-3.6 0v-.1a1 1 0 0 0-.6-.9h-.1a1 1 0 0 0-1.1.2l-.1.1a1.8 1.8 0 0 1-2.5-2.5l.1-.1a1 1 0 0 0 .2-1.1v-.1a1 1 0 0 0-.9-.6H4a1.8 1.8 0 0 1 0-3.6h.1a1 1 0 0 0 .9-.6v-.1a1 1 0 0 0-.2-1.1l-.1-.1a1.8 1.8 0 1 1 2.5-2.5l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a1.8 1.8 0 0 1 3.6 0v.1a1 1 0 0 0 .6.9h.1a1 1 0 0 0 1.1-.2l.1-.1a1.8 1.8 0 1 1 2.5 2.5l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6H20a1.8 1.8 0 0 1 0 3.6h-.1a1 1 0 0 0-.9.6z" />
                   </svg>
                 </button>
+                </div>
               </div>
             </header>
 
@@ -7180,33 +12384,27 @@ watch(
               <div ref="messageScroller" class="chat-window__messages" :class="{ 'chat-window__messages--empty': isConversationEmpty }">
                 <div v-if="isConversationEmpty" class="chat-empty-state">
                   <div class="chat-empty-state__logo" aria-hidden="true">
-                    <svg viewBox="0 0 48 48">
-                      <circle cx="14" cy="15" r="5.2" />
-                      <circle cx="34" cy="15" r="5.2" />
-                      <circle cx="11.5" cy="27" r="4.2" />
-                      <circle cx="36.5" cy="27" r="4.2" />
-                      <path d="M24 40c7.8 0 13-4.4 13-10 0-4.6-3.9-8.4-8.5-8.4-2.2 0-4.3.9-5.5 2.5-1.2-1.6-3.2-2.5-5.5-2.5C12.9 21.6 9 25.4 9 30c0 5.6 5.2 10 15 10z" />
-                    </svg>
+                    <img :src="appLogoUrl" alt="DragonClaw logo" />
                   </div>
-                  <h3>ClawPet</h3>
-                  <p>描述你的目标，ClawPet 会分解任务并执行反馈。</p>
-                  <div class="chat-empty-state__actions">
-                    <button class="chat-empty-action" type="button" :disabled="!activeAgent" @click="openRelatedResource('model')">
+                  <h3>DragonClaw</h3>
+                  <p>描述你的目标，DragonClaw 会分解任务并执行反馈。</p>
+                  <div v-if="!activeAgentIsConversationGroup" class="chat-empty-state__actions">
+                    <button class="chat-empty-action" type="button" :disabled="!activeAgent" @click="openRelatedResource('memory')">
                       <span class="chat-empty-action__icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" /><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.8 1.8 0 1 1-2.5 2.5l-.1-.1a1 1 0 0 0-1.1-.2h-.1a1 1 0 0 0-.6.9V20a1.8 1.8 0 0 1-3.6 0v-.1a1 1 0 0 0-.6-.9h-.1a1 1 0 0 0-1.1.2l-.1.1a1.8 1.8 0 0 1-2.5-2.5l.1-.1a1 1 0 0 0 .2-1.1v-.1a1 1 0 0 0-.9-.6H4a1.8 1.8 0 0 1 0-3.6h.1a1 1 0 0 0 .9-.6v-.1a1 1 0 0 0-.2-1.1l-.1-.1a1.8 1.8 0 1 1 2.5-2.5l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a1.8 1.8 0 0 1 3.6 0v.1a1 1 0 0 0 .6.9h.1a1 1 0 0 0 1.1-.2l.1-.1a1.8 1.8 0 1 1 2.5 2.5l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6H20a1.8 1.8 0 0 1 0 3.6h-.1a1 1 0 0 0-.9.6z" /></svg>
                       </span>
                       <span class="chat-empty-action__content">
                         <strong>快速配置</strong>
-                        <small>设置名字、角色，让 ClawPet 更了解你</small>
+                        <small>定制角色身份，为你服务</small>
                       </span>
                     </button>
-                    <button class="chat-empty-action" type="button" :disabled="!activeAgent" @click="openFeishuConnectModal">
+                    <button class="chat-empty-action" type="button" :disabled="!activeAgent" @click="openRelatedResource('channel')">
                       <span class="chat-empty-action__icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24"><path d="M8 10h.01M12 10h.01M16 10h.01" /><path d="M4 5h16v10H7l-3 4z" /></svg>
                       </span>
                       <span class="chat-empty-action__content">
-                        <strong>一键接入飞书</strong>
-                        <small>自动配置飞书机器人，无需手动操作</small>
+                        <strong>聊天渠道设置</strong>
+                        <small>快速配置不同平台的聊天机器人</small>
                       </span>
                     </button>
                   </div>
@@ -7263,7 +12461,14 @@ watch(
                         <span class="typing-indicator__dot" />
                       </span>
                     </div>
-                    <div v-else class="message-bubble">{{ message.text }}</div>
+                    <div v-else class="message-bubble">
+                      <div v-if="message.attachments && message.attachments.length > 0" class="message-bubble__attachments">
+                        <span v-for="attachment in message.attachments" :key="`${message.id}-${attachment.id}`" class="message-bubble__attachment">
+                          {{ attachment.name }} · {{ formatAttachmentSize(attachment.size) }}
+                        </span>
+                      </div>
+                      <span v-if="getMessageDisplayText(message)">{{ getMessageDisplayText(message) }}</span>
+                    </div>
                     <span v-if="!isRuntimeToolMessage(message)" class="message-time">{{ getMessageTimeLabel(message) }}</span>
                   </article>
                 </template>
@@ -7271,10 +12476,283 @@ watch(
 
               <aside v-if="isAgentSettingsOpen" class="chat-settings-sidebar" data-no-window-drag @mousedown.left.stop>
                 <header class="chat-settings-sidebar__header chat-settings-sidebar__header--plain">
-                  <button type="button" class="chat-settings-sidebar__close" aria-label="关闭设置" @click="closeAgentSettingsPanel">×</button>
+                  <button
+                    type="button"
+                    class="chat-settings-sidebar__close"
+                    :aria-label="isLogsPanelActive ? '关闭日志' : '关闭设置'"
+                    @click="closeAgentSettingsPanel"
+                  >
+                    ×
+                  </button>
                 </header>
 
-                <div v-if="activeAgent" class="chat-settings-sidebar__body">
+                <div v-if="isLogsPanelActive" class="chat-settings-sidebar__body chat-settings-sidebar__body--logs">
+                  <div class="chat-settings-logs-head">
+                    <strong>运行日志</strong>
+                    <button class="utility-modal__refresh" type="button" :disabled="utilityModalLoading" @click="handleUtilityModalRefresh">
+                      刷新
+                    </button>
+                  </div>
+                  <p class="utility-modal__detail">
+                    仅展示当前角色日志 · 当前筛选
+                    {{ utilityLogTab === "runtime" ? runtimeCategoryLogItems.length : runtimeLogItems.length }} / {{ runtimeLogItems.length }} 条
+                  </p>
+                  <p v-if="utilityModalNotice" class="utility-modal__notice">{{ utilityModalNotice }}</p>
+                  <p v-if="utilityModalError" class="utility-modal__error">{{ utilityModalError }}</p>
+
+                  <div v-if="utilityModalLoading" class="utility-modal__empty">正在加载数据...</div>
+                  <div v-else-if="!activeAgent" class="utility-modal__empty">请选择员工后查看日志。</div>
+
+                  <template v-else>
+                    <div class="utility-log-tabs" role="tablist" aria-label="日志视图切换">
+                      <button
+                        type="button"
+                        class="utility-log-tab"
+                        :class="{ 'is-active': utilityLogTab === 'runtime' }"
+                        @click="handleUtilityLogTabChange('runtime')"
+                      >
+                        运行日志
+                      </button>
+                      <button
+                        type="button"
+                        class="utility-log-tab"
+                        :class="{ 'is-active': utilityLogTab === 'errorAnalysis' }"
+                        @click="handleUtilityLogTabChange('errorAnalysis')"
+                      >
+                        错误日志分析
+                      </button>
+                    </div>
+
+                    <template v-if="utilityLogTab === 'runtime'">
+                      <div class="utility-log-categories-wrap">
+                        <div class="utility-log-categories" role="tablist" aria-label="运行日志分类">
+                          <button
+                            v-for="category in utilityRuntimeCategories"
+                            :key="category.id"
+                            type="button"
+                            class="utility-log-category"
+                            :class="{ 'is-active': utilityRuntimeCategory === category.id }"
+                            @click="handleUtilityRuntimeCategoryChange(category.id)"
+                          >
+                            {{ category.label }}
+                          </button>
+                        </div>
+                        <div class="utility-log-filters">
+                          <label class="utility-log-filter">
+                            <span>定时任务</span>
+                            <select
+                              v-model="utilityRuntimeScheduleFilter"
+                              class="utility-log-filter__select"
+                              @change="handleUtilityRuntimeScheduleFilterChange"
+                            >
+                              <option v-for="option in utilityRuntimeScheduleFilterOptions" :key="option.id" :value="option.id">
+                                {{ option.label }}（{{ option.count }}）
+                              </option>
+                            </select>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div v-if="runtimeCategoryLogItems.length === 0" class="utility-modal__empty">当前角色暂无运行日志。</div>
+                      <div v-else class="utility-log-layout">
+                        <div class="utility-log-list">
+                          <button
+                            v-for="log in runtimeCategoryLogItems"
+                            :key="log.id"
+                            type="button"
+                            class="utility-log-item"
+                            :class="{ 'is-active': selectedRuntimeLog?.id === log.id }"
+                            @click="handleUtilityLogSelect(log)"
+                          >
+                            <div class="utility-log-item__head">
+                              <div class="utility-log-item__meta">
+                                <strong>{{ log.method }}</strong>
+                                <span class="utility-log-kind" :data-kind="getRuntimeLogCategory(log)">{{ getRuntimeLogCategoryLabel(log) }}</span>
+                              </div>
+                              <span class="utility-log-status" :data-tone="getLogStatusTone(log.responseStatus)">{{ log.responseStatus }}</span>
+                            </div>
+                            <p>{{ getLogRequestUrl(log) }}</p>
+                            <small>{{ formatDateTime(log.createdAt) }} · 耗时 {{ formatDurationLabel(log.duration) }}</small>
+                          </button>
+                        </div>
+
+                        <section v-if="selectedRuntimeLog && activeRuntimeLogDetailSection" class="utility-log-detail">
+                          <div class="utility-log-detail__head">
+                            <header class="utility-log-detail__header">
+                              <div class="utility-log-detail__title-wrap">
+                                <div class="utility-log-detail__route">
+                                  <span class="utility-log-detail__method">{{ selectedRuntimeLog.method }}</span>
+                                  <strong>{{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</strong>
+                                </div>
+                                <p>{{ getLogRequestUrl(selectedRuntimeLog) }}</p>
+                                <div class="utility-log-detail__meta">
+                                  <span class="utility-log-detail__meta-item">{{ selectedRuntimeLog.platformName }}</span>
+                                  <span class="utility-log-detail__meta-item">{{ formatDateTime(selectedRuntimeLog.createdAt) }}</span>
+                                  <span class="utility-log-kind" :data-kind="getRuntimeLogCategory(selectedRuntimeLog)">
+                                    {{ getRuntimeLogCategoryLabel(selectedRuntimeLog) }}
+                                  </span>
+                                </div>
+                              </div>
+                              <div class="utility-log-detail__header-side">
+                                <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
+                                  selectedRuntimeLog.responseStatus
+                                }}</span>
+                              </div>
+                            </header>
+                            <div class="utility-log-detail__stats">
+                              <span class="utility-log-detail__stat">
+                                <small>耗时</small>
+                                <strong>{{ formatDurationLabel(selectedRuntimeLog.duration) }}</strong>
+                              </span>
+                              <span v-if="typeof selectedRuntimeLog.firstTokenTime === 'number'" class="utility-log-detail__stat">
+                                <small>首 Token</small>
+                                <strong>{{ formatDurationLabel(selectedRuntimeLog.firstTokenTime) }}</strong>
+                              </span>
+                              <span
+                                v-if="
+                                  typeof selectedRuntimeLog.totalTokens === 'number' ||
+                                  typeof selectedRuntimeLog.promptTokens === 'number' ||
+                                  typeof selectedRuntimeLog.completionTokens === 'number' ||
+                                  typeof selectedRuntimeLog.cacheReadInputTokens === 'number'
+                                "
+                                class="utility-log-detail__stat"
+                              >
+                                <small>总 Token</small>
+                                <strong>{{ getEffectiveLogTotalTokens(selectedRuntimeLog) }}</strong>
+                              </span>
+                            </div>
+                            <div class="utility-log-detail-tabs" role="tablist" aria-label="日志详情分栏">
+                              <button
+                                v-for="section in runtimeLogDetailSections"
+                                :key="section.id"
+                                type="button"
+                                class="utility-log-detail-tab"
+                                :class="{ 'is-active': activeRuntimeLogDetailSection.id === section.id }"
+                                @click="handleUtilityLogDetailTabSelect(section.id)"
+                              >
+                                {{ section.label }}
+                              </button>
+                            </div>
+                          </div>
+                          <div class="utility-log-detail__content-wrap">
+                            <button
+                              type="button"
+                              class="utility-log-copy"
+                              title="复制当前内容"
+                              aria-label="复制当前内容"
+                              @click="handleCopyRuntimeLogContent"
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                            </button>
+                            <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
+                          </div>
+                        </section>
+                      </div>
+                    </template>
+
+                    <template v-else>
+                      <div v-if="errorAnalysisSummaries.length === 0" class="utility-modal__empty">当前角色暂无错误日志。</div>
+                      <div v-else class="utility-log-layout">
+                        <div class="utility-error-list">
+                          <button
+                            v-for="summary in errorAnalysisSummaries"
+                            :key="summary.key"
+                            type="button"
+                            class="utility-error-item"
+                            :class="{ 'is-active': selectedErrorSummary?.key === summary.key }"
+                            @click="handleUtilityErrorSummarySelect(summary.key)"
+                          >
+                            <div class="utility-error-item__head">
+                              <strong>{{ summary.title }}</strong>
+                              <span>{{ summary.count }} 次</span>
+                            </div>
+                            <p>{{ summary.latestLog.method }} {{ summary.latestLog.path || summary.latestLog.endpoint || "/" }}</p>
+                            <small>最近 {{ formatDateTime(summary.latestAt) }}</small>
+                          </button>
+                        </div>
+
+                        <section v-if="selectedRuntimeLog && activeRuntimeLogDetailSection" class="utility-log-detail">
+                          <div class="utility-log-detail__head">
+                            <header class="utility-log-detail__header">
+                              <div>
+                                <strong>错误详情</strong>
+                                <p>{{ selectedRuntimeLog.method }} {{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</p>
+                              </div>
+                              <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
+                                selectedRuntimeLog.responseStatus
+                              }}</span>
+                            </header>
+                            <div class="utility-log-detail-tabs" role="tablist" aria-label="错误详情分栏">
+                              <button
+                                v-for="section in runtimeLogDetailSections"
+                                :key="section.id"
+                                type="button"
+                                class="utility-log-detail-tab"
+                                :class="{ 'is-active': activeRuntimeLogDetailSection.id === section.id }"
+                                @click="handleUtilityLogDetailTabSelect(section.id)"
+                              >
+                                {{ section.label }}
+                              </button>
+                            </div>
+                          </div>
+                          <div class="utility-log-detail__content-wrap">
+                            <button
+                              type="button"
+                              class="utility-log-copy"
+                              title="复制当前内容"
+                              aria-label="复制当前内容"
+                              @click="handleCopyRuntimeLogContent"
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                            </button>
+                            <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
+                          </div>
+                        </section>
+                      </div>
+                    </template>
+                  </template>
+                </div>
+
+                <div v-else-if="activeAgent && isGroupInfoPanelActive" class="chat-settings-sidebar__body chat-settings-sidebar__body--group">
+                  <section class="chat-group-info-card">
+                    <header class="chat-group-info-card__header">
+                      <strong>{{ activeConversationGroup?.name || stripRoleLabel(activeAgent.displayName) }}</strong>
+                      <small>{{ activeConversationGroupMemberCount }} 位成员</small>
+                    </header>
+
+                    <section class="chat-group-info-card__section">
+                      <h5>群聊名称</h5>
+                      <div class="chat-group-info-card__name">{{ activeConversationGroup?.name || "未命名群聊" }}</div>
+                    </section>
+
+                    <section class="chat-group-info-card__section">
+                      <h5>群成员</h5>
+                      <div v-if="activeConversationGroupMembers.length > 0" class="chat-group-info-member-grid">
+                        <article
+                          v-for="member in activeConversationGroupMembers"
+                          :key="`group-info-member-${member.agentId}`"
+                          class="chat-group-info-member"
+                        >
+                          <div class="chat-group-info-member__avatar">
+                            <img
+                              v-if="getAgentAvatarUrl(member)"
+                              :src="getAgentAvatarUrl(member) ?? undefined"
+                              :alt="`${stripRoleLabel(member.displayName)} 头像`"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                            <span v-else>{{ getAgentInitial(member) }}</span>
+                          </div>
+                          <strong :title="stripRoleLabel(member.displayName)">{{ stripRoleLabel(member.displayName) }}</strong>
+                          <small>{{ member.channel || "main" }}</small>
+                        </article>
+                      </div>
+                      <p v-else class="chat-group-info-card__empty">该群聊暂无成员。</p>
+                    </section>
+                  </section>
+                </div>
+
+                <div v-else-if="activeAgent" class="chat-settings-sidebar__body">
                   <div class="chat-settings-agent-card">
                     <div class="chat-settings-agent-card__head">
                       <div class="chat-settings-agent-card__avatar">{{ getAgentInitial(activeAgent) }}</div>
@@ -7351,6 +12829,23 @@ watch(
                         </dd>
                       </div>
                       <div class="chat-settings-list__row">
+                        <dt>员工 Id</dt>
+                        <dd>
+                          <div class="chat-settings-copy-field">
+                            <span class="chat-settings-copy-field__value">{{ activeAgent.agentId || "—" }}</span>
+                            <button
+                              class="chat-settings-copy-field__button"
+                              type="button"
+                              title="复制员工 Id"
+                              aria-label="复制员工 Id"
+                              @click="handleCopyActiveAgentId"
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                            </button>
+                          </div>
+                        </dd>
+                      </div>
+                      <div class="chat-settings-list__row">
                         <dt>工具权限</dt>
                         <dd>{{ activeAgent.toolsProfile || "—" }}</dd>
                       </div>
@@ -7383,32 +12878,74 @@ watch(
             <footer class="chat-window__composer">
               <div class="composer-panel">
                 <div class="composer-input-shell">
-                  <button class="composer-input-action" type="button" title="附件" aria-label="添加附件">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 6.5 9 14a3 3 0 1 1-4.2-4.2l8-8a5 5 0 1 1 7.1 7.1l-9 9a7 7 0 1 1-9.9-9.9l8.5-8.5" /></svg>
-                  </button>
-                  <input v-model="chatInput" type="text" :placeholder="chatComposerPlaceholder" :disabled="!activeAgent" @keydown.enter.prevent="submitChat" />
-                  <button class="composer-send" type="button" :disabled="!activeAgent || isSending || !chatInput.trim()" @click="submitChat">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h14M13 5l7 7-7 7" /></svg>
-                  </button>
-                </div>
-                <div class="composer-meta">
-                  <button
-                    class="composer-model-chip composer-model-chip--trigger"
-                    type="button"
+                  <textarea
+                    ref="chatComposerInputRef"
+                    v-model="chatInput"
+                    rows="3"
+                    :placeholder="chatComposerPlaceholder"
                     :disabled="!activeAgent"
-                    @click="openRelatedResource('model')"
-                  >
-                    {{ activeAgent?.model || "ClawPet" }}
-                  </button>
-                  <button
-                    class="composer-btn composer-btn--archive"
-                    type="button"
-                    :disabled="!activeAgent || currentSessionMessages.length === 0"
-                    @click="handleArchiveCurrentChat"
-                  >
-                    归档会话
-                  </button>
+                    @input="handleChatComposerInput"
+                    @keydown="handleChatComposerKeydown"
+                  />
                 </div>
+                <div v-if="chatAttachments.length > 0" class="composer-attachments">
+                  <span v-for="attachment in chatAttachments" :key="attachment.id" class="composer-attachment-chip" :title="attachment.name">
+                    <span class="composer-attachment-chip__name">{{ attachment.name }}</span>
+                    <small>{{ formatAttachmentSize(attachment.size) }}</small>
+                    <button type="button" aria-label="移除附件" @click="removeChatAttachment(attachment.id)">
+                      ×
+                    </button>
+                  </span>
+                </div>
+                <p v-if="chatComposerError" class="composer-error">{{ chatComposerError }}</p>
+                <div class="composer-meta">
+                  <div class="composer-meta__left">
+                    <button
+                      class="composer-input-action"
+                      type="button"
+                      title="附件"
+                      aria-label="添加附件"
+                      :disabled="!activeAgent || isSending"
+                      @click="triggerChatAttachmentPicker"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+                    </button>
+                    <button
+                      class="composer-model-chip composer-model-chip--trigger"
+                      type="button"
+                      :disabled="!activeAgent"
+                      @click="openRelatedResource('model')"
+                    >
+                      <span class="composer-model-chip__label">{{ activeAgent?.model || "DragonClaw" }}</span>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+                    </button>
+                    <button
+                      class="composer-archive-chip"
+                      type="button"
+                      :disabled="!activeAgent || currentSessionMessages.length === 0"
+                      @click="handleArchiveCurrentChat"
+                    >
+                      归档
+                    </button>
+                  </div>
+                  <div class="composer-meta__right">
+                    <button
+                      class="composer-send"
+                      type="button"
+                      :disabled="!activeAgent || isSending || (!chatInput.trim() && chatAttachments.length === 0)"
+                      @click="submitChat"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6m0 0-4 4m4-4 4 4" /></svg>
+                    </button>
+                  </div>
+                </div>
+                <input
+                  ref="chatAttachmentInputRef"
+                  class="composer-file-input"
+                  type="file"
+                  multiple
+                  @change="handleChatAttachmentInputChange"
+                />
               </div>
             </footer>
           </section>
@@ -7440,29 +12977,8 @@ watch(
 
               <div class="dashboard-stats-grid">
                 <article v-for="card in dashboardLegacyStatCards" :key="card.id" class="dashboard-metric-card dashboard-metric-card--compact" :data-tone="card.tone">
-                  <div class="dashboard-metric-card__head">
-                    <span>{{ card.label }}</span>
-                    <span class="dashboard-card-icon" :data-tone="card.tone" aria-hidden="true">
-                      <svg v-if="card.icon === 'platform'" viewBox="0 0 24 24"><path d="M4 6h16v4H4zM4 14h16v4H4zM8 10v4M16 10v4" /></svg>
-                      <svg v-else-if="card.icon === 'request'" viewBox="0 0 24 24"><path d="M4 5h16v10H7l-3 4zM8 9h8M8 12h5" /></svg>
-                      <svg v-else-if="card.icon === 'gateway'" viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M11.5 12a.5.5 0 0 1 1 0" /><circle cx="12" cy="17" r="1.4" /></svg>
-                      <svg v-else-if="card.icon === 'latency'" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></svg>
-                      <svg v-else-if="card.icon === 'tokenToday'" viewBox="0 0 24 24"><path d="M13 3 6 14h5l-1 7 8-12h-5z" /></svg>
-                      <svg v-else-if="card.icon === 'tokenWeek'" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M8 3v4M16 3v4M4 10h16" /></svg>
-                      <svg v-else-if="card.icon === 'tokenTotal'" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v8c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 10c0 1.7 3.1 3 7 3s7-1.3 7-3" /></svg>
-                      <svg v-else-if="card.icon === 'failure'" viewBox="0 0 24 24"><path d="M12 4 3.5 19h17L12 4z" /><path d="M12 9v4M12 16h.01" /></svg>
-                      <svg v-else-if="card.icon === 'runtime'" viewBox="0 0 24 24"><path d="M7 8a8 8 0 1 0 10 0M12 5v7" /></svg>
-                      <svg v-else-if="card.icon === 'channel'" viewBox="0 0 24 24"><path d="M12 4v2M6.3 6.3l1.4 1.4M4 12h2M17.7 7.7l1.4-1.4M18 12h2M8 12a4 4 0 0 1 8 0M6 12a6 6 0 0 1 12 0" /><circle cx="12" cy="16" r="1.4" /></svg>
-                      <svg v-else-if="card.icon === 'model'" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" /><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2" /></svg>
-                      <svg v-else-if="card.icon === 'uptime'" viewBox="0 0 24 24"><path d="M12 6v6l4 2" /><circle cx="12" cy="12" r="8" /></svg>
-                      <svg v-else-if="card.icon === 'memory'" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2" /><path d="M8 11h8M8 14h5M7 4v3M11 4v3M15 4v3M19 4v3M7 17v3M11 17v3M15 17v3M19 17v3" /></svg>
-                      <svg v-else-if="card.icon === 'message'" viewBox="0 0 24 24"><path d="M4 5h16v10H7l-3 4zM8 9h8M8 12h6" /></svg>
-                      <svg v-else-if="card.icon === 'staff'" viewBox="0 0 24 24"><circle cx="9" cy="9" r="3" /><circle cx="16.5" cy="8" r="2.5" /><path d="M4 19a5 5 0 0 1 10 0M13 19a4 4 0 0 1 7 0" /></svg>
-                      <svg v-else viewBox="0 0 24 24"><path d="M8 12a4 4 0 0 1 8 0M5 12a7 7 0 0 1 14 0" /><path d="M7 15v2a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-2" /></svg>
-                    </span>
-                  </div>
+                  <span class="dashboard-metric-card__label">{{ card.label }}</span>
                   <strong>{{ card.value }}</strong>
-                  <p>{{ card.detail }}</p>
                 </article>
               </div>
             </section>
@@ -7475,33 +12991,13 @@ watch(
                 </div>
               </header>
 
-            <div class="dashboard-status-grid">
-              <article v-for="card in dashboardStatusCards" :key="card.id" class="dashboard-status-card" :data-tone="card.tone">
-                <div class="dashboard-metric-card__head">
-                  <span>{{ card.label }}</span>
-                  <span class="dashboard-card-icon" :data-tone="card.tone" aria-hidden="true">
-                    <svg v-if="card.icon === 'platform'" viewBox="0 0 24 24"><path d="M4 6h16v4H4zM4 14h16v4H4zM8 10v4M16 10v4" /></svg>
-                    <svg v-else-if="card.icon === 'request'" viewBox="0 0 24 24"><path d="M4 5h16v10H7l-3 4zM8 9h8M8 12h5" /></svg>
-                    <svg v-else-if="card.icon === 'gateway'" viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M11.5 12a.5.5 0 0 1 1 0" /><circle cx="12" cy="17" r="1.4" /></svg>
-                    <svg v-else-if="card.icon === 'latency'" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></svg>
-                    <svg v-else-if="card.icon === 'tokenToday'" viewBox="0 0 24 24"><path d="M13 3 6 14h5l-1 7 8-12h-5z" /></svg>
-                    <svg v-else-if="card.icon === 'tokenWeek'" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M8 3v4M16 3v4M4 10h16" /></svg>
-                    <svg v-else-if="card.icon === 'tokenTotal'" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v8c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 10c0 1.7 3.1 3 7 3s7-1.3 7-3" /></svg>
-                    <svg v-else-if="card.icon === 'failure'" viewBox="0 0 24 24"><path d="M12 4 3.5 19h17L12 4z" /><path d="M12 9v4M12 16h.01" /></svg>
-                    <svg v-else-if="card.icon === 'runtime'" viewBox="0 0 24 24"><path d="M7 8a8 8 0 1 0 10 0M12 5v7" /></svg>
-                    <svg v-else-if="card.icon === 'channel'" viewBox="0 0 24 24"><path d="M12 4v2M6.3 6.3l1.4 1.4M4 12h2M17.7 7.7l1.4-1.4M18 12h2M8 12a4 4 0 0 1 8 0M6 12a6 6 0 0 1 12 0" /><circle cx="12" cy="16" r="1.4" /></svg>
-                    <svg v-else-if="card.icon === 'model'" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" /><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2" /></svg>
-                    <svg v-else-if="card.icon === 'uptime'" viewBox="0 0 24 24"><path d="M12 6v6l4 2" /><circle cx="12" cy="12" r="8" /></svg>
-                    <svg v-else-if="card.icon === 'memory'" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2" /><path d="M8 11h8M8 14h5M7 4v3M11 4v3M15 4v3M19 4v3M7 17v3M11 17v3M15 17v3M19 17v3" /></svg>
-                    <svg v-else-if="card.icon === 'message'" viewBox="0 0 24 24"><path d="M4 5h16v10H7l-3 4zM8 9h8M8 12h6" /></svg>
-                    <svg v-else-if="card.icon === 'staff'" viewBox="0 0 24 24"><circle cx="9" cy="9" r="3" /><circle cx="16.5" cy="8" r="2.5" /><path d="M4 19a5 5 0 0 1 10 0M13 19a4 4 0 0 1 7 0" /></svg>
-                    <svg v-else viewBox="0 0 24 24"><path d="M8 12a4 4 0 0 1 8 0M5 12a7 7 0 0 1 14 0" /><path d="M7 15v2a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-2" /></svg>
-                  </span>
-                </div>
-                <strong>{{ card.value }}</strong>
-                <p>{{ card.detail }}</p>
-              </article>
-            </div>
+              <div class="dashboard-status-grid">
+                <article v-for="card in dashboardStatusCards" :key="card.id" class="dashboard-status-card" :data-tone="card.tone">
+                  <span class="dashboard-metric-card__label">{{ card.label }}</span>
+                  <strong>{{ card.value }}</strong>
+                  <p>{{ card.detail }}</p>
+                </article>
+              </div>
             </section>
 
             <section class="dashboard-activity-panel">
@@ -7561,42 +13057,71 @@ watch(
 
             <template v-if="activeSection === 'recruitment'">
               <section class="module-surface recruitment-surface">
-                <div class="module-surface__toolbar">
+                <div class="module-surface__toolbar recruitment-surface__toolbar">
+                  <div class="recruitment-surface__switch" role="tablist" aria-label="员工视图">
+                    <button class="recruitment-surface__switch-item active" role="tab" aria-selected="true" type="button">我的员工</button>
+                  </div>
                   <input
                     v-model="recruitmentKeyword"
                     class="module-surface__search"
                     type="search"
                     placeholder="搜索角色 / 分组 / 领域"
                   />
-                  <span class="module-surface__meta">显示 {{ recruitmentVisibleCount }} / {{ recruitmentTotalCount }} 个角色</span>
+                  <span class="module-surface__meta">显示 {{ recruitmentVisibleCount }} / {{ recruitmentTotalInFilter }} 个角色</span>
+                </div>
+                <div class="recruitment-division-filter" role="tablist" aria-label="角色分类筛选">
+                  <button
+                    v-for="option in recruitmentDivisionFilterOptions"
+                    :key="option.id"
+                    class="recruitment-division-filter__item"
+                    :class="{ active: recruitmentDivisionFilter === option.id }"
+                    :title="`${option.visibleCount} / ${option.totalCount} 个角色`"
+                    role="tab"
+                    :aria-selected="recruitmentDivisionFilter === option.id"
+                    type="button"
+                    @click="selectRecruitmentDivisionFilter(option.id)"
+                  >
+                    {{ option.label }}
+                  </button>
                 </div>
                 <div v-if="filteredRecruitmentDivisions.length === 0" class="module-empty">未找到匹配角色，请调整搜索词。</div>
                 <div v-else class="recruitment-division-list">
-                  <section v-for="division in filteredRecruitmentDivisions" :key="division.id" class="recruitment-division">
+                  <section v-for="(division, divisionIndex) in filteredRecruitmentDivisions" :key="division.id" class="recruitment-division">
                     <header class="recruitment-division__header">
                       <strong>{{ division.titleZh }}</strong>
                       <small>{{ division.count }} 个</small>
                     </header>
                     <div class="recruitment-role-grid">
+                      <article v-if="divisionIndex === 0" class="recruitment-agent-card recruitment-agent-card--new">
+                        <button class="recruitment-agent-card__new-button" type="button" @click="openCreateEmployeeModal">
+                          <span class="recruitment-agent-card__new-plus">+</span>
+                          <strong class="recruitment-agent-card__new-title">新增员工</strong>
+                          <p class="recruitment-agent-card__new-hint">创建一个新的员工角色卡片</p>
+                        </button>
+                      </article>
                       <article
-                        v-for="role in division.groups.flatMap((group) => group.roles)"
-                        :key="role.id"
-                        class="recruitment-role-card"
+                        v-for="item in division.groups.flatMap((group) => group.roles.map((role) => ({ role, groupTitleZh: group.titleZh })))"
+                        :key="item.role.id"
+                        class="recruitment-agent-card recruitment-agent-card--clickable"
+                        role="button"
+                        tabindex="0"
+                        @click="handleRecruitmentOpenRoleDetail(item.role)"
+                        @keydown.enter.prevent="handleRecruitmentOpenRoleDetail(item.role)"
+                        @keydown.space.prevent="handleRecruitmentOpenRoleDetail(item.role)"
                       >
-                        <div>
-                          <strong>{{ role.nameZh }}</strong>
-                          <p>{{ role.workflowZh }}</p>
-                          <small>{{ role.sourcePath }}</small>
-                        </div>
-                        <div class="recruitment-role-card__actions">
-                          <button
-                            class="recruitment-role-card__action recruitment-role-card__action--secondary"
-                            type="button"
-                            @click="openRoleWorkflowEditor(role)"
-                          >
-                            查看编辑
+                        <header class="recruitment-agent-card__header">
+                          <div class="recruitment-agent-card__avatar" :style="getRecruitmentRoleAvatarStyle(item.role)">
+                            {{ getRecruitmentRoleAvatarLabel(item.role) }}
+                          </div>
+                          <span class="recruitment-agent-card__division">{{ item.groupTitleZh || division.titleZh }}</span>
+                        </header>
+                        <strong class="recruitment-agent-card__title">{{ item.role.nameZh }}</strong>
+                        <p class="recruitment-agent-card__desc">{{ item.role.workflowZh }}</p>
+                        <div class="recruitment-agent-card__actions">
+                          <button class="recruitment-agent-card__chat" type="button" @click.stop="handleRecruitRole(item.role)">+ 对话</button>
+                          <button class="recruitment-agent-card__link" type="button" @click.stop="handleRecruitmentCreateTeam(item.role)">
+                            创建团队
                           </button>
-                          <button class="recruitment-role-card__action" type="button" @click="handleRecruitRole(role)">招募</button>
                         </div>
                       </article>
                     </div>
@@ -7608,20 +13133,7 @@ watch(
 
             <template v-else-if="activeSection === 'skills'">
               <section class="module-surface skill-market-surface">
-                <div class="skill-market-category-row" role="tablist" aria-label="技能分类">
-                  <button
-                    v-for="category in skillMarketCategories"
-                    :key="`skill-market-${category.id}`"
-                    class="skill-market-category-chip"
-                    :class="{ active: activeSkillMarketCategory === category.id }"
-                    type="button"
-                    @click="handleSkillMarketCategorySwitch(category.id)"
-                  >
-                    <strong>{{ category.label }}</strong>
-                    <small>{{ category.hint }}</small>
-                  </button>
-                </div>
-                <div class="module-surface__toolbar module-surface__toolbar--skills">
+                <div class="module-surface__toolbar module-surface__toolbar--skills-top">
                   <input
                     v-model="skillMarketSearch"
                     class="module-surface__search"
@@ -7629,6 +13141,22 @@ watch(
                     placeholder="搜索技能名称、描述或标签"
                     @keydown.enter.prevent="handleSkillMarketSearchSubmit"
                   />
+                  <span class="module-surface__meta">显示 {{ skillMarketMetaVisible }} / {{ skillMarketMetaTotal }} 个技能</span>
+                </div>
+                <div class="skill-market-category-row" role="tablist" aria-label="技能分类">
+                  <button
+                    v-for="category in skillMarketCategories"
+                    :key="`skill-market-${category.id}`"
+                    class="skill-market-category-chip"
+                    :class="{ active: activeSkillMarketCategory === category.id }"
+                    :title="category.hint"
+                    type="button"
+                    @click="handleSkillMarketCategorySwitch(category.id)"
+                  >
+                    {{ category.label }}
+                  </button>
+                </div>
+                <div class="module-surface__toolbar module-surface__toolbar--skills-actions">
                   <select
                     class="module-surface__select"
                     :value="skillMarketSortBy"
@@ -7734,7 +13262,7 @@ watch(
                   </article>
                 </div>
               </section>
-              <p class="module-board__detail">商城模块提供加油包与月度会员套餐。</p>
+              <p class="module-board__detail">商城模块提供会员套餐与智慧流程。</p>
             </template>
 
             <template v-else-if="activeSection === 'tasks'">
@@ -7859,6 +13387,292 @@ watch(
           </template>
         </main>
       </div>
+    </div>
+
+    <div v-if="isCreateEmployeeModalOpen" class="create-employee-modal-backdrop" @click.self="closeCreateEmployeeModal">
+      <section class="create-employee-modal" role="dialog" aria-modal="true" aria-label="新增员工">
+        <header class="create-employee-modal__header">
+          <div>
+            <strong>新增员工</strong>
+            <p>只需三步，创建一个可立即开始对话的数字员工。</p>
+          </div>
+          <button class="create-employee-modal__close" type="button" aria-label="关闭" @click="closeCreateEmployeeModal">×</button>
+        </header>
+
+        <div class="create-employee-modal__content">
+          <div class="create-employee-modal__flow">
+            <div class="create-employee-stepper">
+              <span class="create-employee-stepper__track" />
+              <span class="create-employee-stepper__track create-employee-stepper__track--active" :style="{ width: `${createEmployeeProgressPercent}%` }" />
+              <div
+                v-for="step in CREATE_EMPLOYEE_STEPS"
+                :key="`create-employee-step-${step.id}`"
+                class="create-employee-stepper__item"
+                :class="{
+                  'is-active': createEmployeeStep === step.id,
+                  'is-completed': createEmployeeStep > step.id
+                }"
+              >
+                <span class="create-employee-stepper__circle">{{ step.id }}</span>
+                <span class="create-employee-stepper__label">{{ step.label }}</span>
+              </div>
+            </div>
+
+            <p v-if="createEmployeeError" class="create-employee-modal__status create-employee-modal__status--error">{{ createEmployeeError }}</p>
+            <p v-else-if="createEmployeeNotice" class="create-employee-modal__status create-employee-modal__status--notice">{{ createEmployeeNotice }}</p>
+
+            <div class="create-employee-modal__summary">
+              <span class="create-employee-modal__summary-avatar">{{ createEmployeeAvatarLabel }}</span>
+              <div class="create-employee-modal__summary-copy">
+                <strong>{{ createEmployeeResolvedName }}</strong>
+                <p>{{ createEmployeeRoleLabel }} · 任务 {{ createEmployeeTasks.length }} 条 · 规则 {{ createEmployeeEnabledRules.length }} 条</p>
+              </div>
+              <span class="create-employee-modal__summary-badge">步骤 {{ createEmployeeStep }} / 3</span>
+            </div>
+
+            <section v-if="createEmployeeStep === 1" class="create-employee-modal__step">
+              <h4>为你的员工赋予身份</h4>
+              <label class="create-employee-modal__field">
+                <span>1. 取个好名字</span>
+                <input ref="createEmployeeNameInputRef" v-model="createEmployeeNameDraft" type="text" maxlength="24" placeholder="例如：财税小专家、灵感火花" />
+              </label>
+              <button class="create-employee-modal__ghost" type="button" @click="handleCreateEmployeePickRandomName">随机起名</button>
+
+              <div class="create-employee-modal__field">
+                <span>2. 选择核心身份（可多选）</span>
+                <div class="create-employee-identity-grid">
+                  <button
+                    v-for="identity in CREATE_EMPLOYEE_IDENTITY_OPTIONS"
+                    :key="identity.id"
+                    class="create-employee-identity-card"
+                    :class="{ 'is-selected': createEmployeeSelectedIdentityIds.includes(identity.id) }"
+                    type="button"
+                    @click="toggleCreateEmployeeIdentity(identity.id)"
+                  >
+                    <span class="create-employee-identity-card__icon">{{ identity.icon }}</span>
+                    <strong>{{ identity.name }}</strong>
+                    <small>{{ identity.desc }}</small>
+                  </button>
+                </div>
+              </div>
+
+              <footer class="create-employee-modal__actions">
+                <span />
+                <button type="button" @click="handleCreateEmployeeNextStep">下一步：设定能力</button>
+              </footer>
+            </section>
+
+            <section v-else-if="createEmployeeStep === 2" class="create-employee-modal__step">
+              <h4>明确它的使命和特长</h4>
+              <label class="create-employee-modal__field">
+                <span>1. 一句话描述它的工作</span>
+                <textarea v-model="createEmployeeMissionDraft" rows="3" placeholder="例如：帮我快速阅读长文章并提取摘要" />
+              </label>
+
+              <div class="create-employee-modal__field">
+                <span>2. 添加具体任务指令</span>
+                <div class="create-employee-task-examples">
+                  <button
+                    v-for="task in CREATE_EMPLOYEE_TASK_EXAMPLES"
+                    :key="`create-employee-example-${task}`"
+                    type="button"
+                    @click="addCreateEmployeeTask(task)"
+                  >
+                    {{ task }}
+                  </button>
+                </div>
+                <div class="create-employee-task-input-row">
+                  <input
+                    ref="createEmployeeTaskInputRef"
+                    v-model="createEmployeeTaskInput"
+                    type="text"
+                    maxlength="80"
+                    placeholder="输入自定义任务..."
+                    @keydown="handleCreateEmployeeTaskInputKeydown"
+                  />
+                  <button type="button" @click="handleCreateEmployeeTaskAdd">添加</button>
+                </div>
+                <div class="create-employee-task-list">
+                  <div v-if="createEmployeeTasks.length === 0" class="create-employee-task-list__empty">尚未添加任务指令。</div>
+                  <div v-for="task in createEmployeeTasks" :key="`create-employee-task-${task}`" class="create-employee-task-chip">
+                    <span>{{ task }}</span>
+                    <button type="button" aria-label="移除任务" @click="removeCreateEmployeeTask(task)">×</button>
+                  </div>
+                </div>
+              </div>
+
+              <label class="create-employee-modal__field">
+                <span>3. 设定知识范围</span>
+                <select v-model="createEmployeeKnowledgeScope">
+                  <option value="general">通用知识与信息</option>
+                  <option value="specific">聚焦特定领域</option>
+                  <option value="document">主要基于您上传的文档/数据</option>
+                </select>
+                <textarea
+                  v-if="createEmployeeKnowledgeScope === 'specific'"
+                  v-model="createEmployeeSpecificDomain"
+                  rows="2"
+                  maxlength="240"
+                  placeholder="请说明具体领域，例如：机器学习与人工智能"
+                />
+              </label>
+
+              <footer class="create-employee-modal__actions">
+                <button type="button" class="is-secondary" @click="handleCreateEmployeePrevStep">上一步</button>
+                <button type="button" @click="handleCreateEmployeeNextStep">下一步：调整性格</button>
+              </footer>
+            </section>
+
+            <section v-else class="create-employee-modal__step">
+              <h4>塑造它的沟通方式和原则</h4>
+              <div class="create-employee-modal__field">
+                <span>1. 沟通风格</span>
+                <div class="create-employee-slider-row">
+                  <label>
+                    <div>
+                      <small>正式</small>
+                      <strong>{{ createEmployeeFormalityLabel }}</strong>
+                      <small>随意</small>
+                    </div>
+                    <input v-model.number="createEmployeeFormality" type="range" min="0" max="100" />
+                  </label>
+                  <label>
+                    <div>
+                      <small>简洁直接</small>
+                      <strong>{{ createEmployeeDetailLabel }}</strong>
+                      <small>详细生动</small>
+                    </div>
+                    <input v-model.number="createEmployeeDetail" type="range" min="0" max="100" />
+                  </label>
+                </div>
+                <p class="create-employee-style-preview">{{ createEmployeeStylePreviewText }}</p>
+              </div>
+
+              <label class="create-employee-modal__field">
+                <span>2. 开场白（可选）</span>
+                <textarea v-model="createEmployeeOpeningLine" rows="3" maxlength="240" placeholder="自定义员工第一句话，不填则使用默认开场白" />
+              </label>
+
+              <div class="create-employee-modal__field">
+                <span>3. 重要规则</span>
+                <div class="create-employee-rule-list">
+                  <label v-for="rule in createEmployeeRules" :key="rule.id">
+                    <input
+                      :checked="rule.enabled"
+                      type="checkbox"
+                      @change="handleCreateEmployeeRuleToggle(rule.id, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span>{{ rule.text }}</span>
+                  </label>
+                </div>
+                <button class="create-employee-modal__ghost" type="button" @click="handleCreateEmployeeAddCustomRule">添加自定义规则</button>
+              </div>
+
+              <footer class="create-employee-modal__actions">
+                <button type="button" class="is-secondary" @click="handleCreateEmployeePrevStep">上一步</button>
+                <button type="button" class="is-primary" @click="handleCreateEmployeeSubmit">创建并开始对话</button>
+              </footer>
+            </section>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="isCreateChatUserGroupModalOpen" class="related-resource-modal-backdrop" @click.self="closeCreateChatUserGroupModal">
+      <section class="chat-user-group-modal" role="dialog" aria-modal="true" aria-label="创建团队">
+        <header class="chat-user-group-modal__header">
+          <div>
+            <strong>创建团队</strong>
+            <p>设置团队名称并添加成员，创建后会自动拉入团队会话。</p>
+          </div>
+          <button class="chat-user-group-modal__close" type="button" aria-label="关闭" @click="closeCreateChatUserGroupModal">×</button>
+        </header>
+        <form class="chat-user-group-modal__body" @submit.prevent="handleCreateChatUserGroupSubmit">
+          <div class="chat-user-group-modal__panes">
+            <section class="chat-user-group-modal__pane">
+              <label class="chat-user-group-modal__search">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M10 2a8 8 0 1 0 5 14.3l4.3 4.3 1.4-1.4-4.3-4.3A8 8 0 0 0 10 2zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6z" />
+                </svg>
+                <input v-model="createChatUserGroupSearch" type="text" placeholder="搜索成员" />
+              </label>
+              <header class="chat-user-group-modal__members-head">
+                <span>所有成员 ({{ createChatUserGroupFilteredAgents.length }})</span>
+                <div>
+                  <button type="button" @click="handleCreateChatUserGroupSelectAllMembers">全选</button>
+                  <button type="button" @click="handleCreateChatUserGroupClearMembers">清空</button>
+                </div>
+              </header>
+              <div v-if="createChatUserGroupFilteredAgents.length === 0" class="chat-user-group-modal__members-empty">当前筛选暂无成员。</div>
+              <button
+                v-for="agent in createChatUserGroupFilteredAgents"
+                :key="`create-group-member-${agent.agentId}`"
+                class="chat-user-group-modal__member-row"
+                :class="{ 'is-selected': isCreateChatUserGroupMemberSelected(agent.agentId) }"
+                type="button"
+                @click="handleCreateChatUserGroupMemberToggle(agent.agentId, !isCreateChatUserGroupMemberSelected(agent.agentId))"
+              >
+                <span class="chat-user-group-modal__member-avatar">
+                  <img v-if="getAgentAvatarUrl(agent)" :src="getAgentAvatarUrl(agent) ?? undefined" :alt="`${stripRoleLabel(agent.displayName)} 头像`" />
+                  <span v-else>{{ getAgentInitial(agent) }}</span>
+                </span>
+                <span class="chat-user-group-modal__member-copy">
+                  <strong>{{ stripRoleLabel(agent.displayName) }}</strong>
+                  <small>{{ agent.roleLabel || agent.channel }}</small>
+                </span>
+                <span class="chat-user-group-modal__member-action">{{ isCreateChatUserGroupMemberSelected(agent.agentId) ? "✓" : "+" }}</span>
+              </button>
+            </section>
+
+            <section class="chat-user-group-modal__pane">
+              <header class="chat-user-group-modal__selected-head">
+                <span>已选成员 ({{ createChatUserGroupSelectedMembers.length }} / {{ CREATE_CHAT_USER_GROUP_MAX_MEMBERS }})</span>
+              </header>
+              <div class="chat-user-group-modal__selected-list">
+                <div v-if="createChatUserGroupSelectedMembers.length === 0" class="chat-user-group-modal__members-empty">请先选择至少 1 位成员。</div>
+                <article
+                  v-for="agent in createChatUserGroupSelectedMembers"
+                  :key="`create-group-selected-${agent.agentId}`"
+                  class="chat-user-group-modal__selected-row"
+                >
+                  <span class="chat-user-group-modal__member-avatar">
+                    <img v-if="getAgentAvatarUrl(agent)" :src="getAgentAvatarUrl(agent) ?? undefined" :alt="`${stripRoleLabel(agent.displayName)} 头像`" />
+                    <span v-else>{{ getAgentInitial(agent) }}</span>
+                  </span>
+                  <div class="chat-user-group-modal__member-copy">
+                    <strong>{{ stripRoleLabel(agent.displayName) }}</strong>
+                    <small>{{ agent.roleLabel || agent.channel }}</small>
+                  </div>
+                  <button
+                    class="chat-user-group-modal__selected-remove"
+                    type="button"
+                    aria-label="移除成员"
+                    @click="handleCreateChatUserGroupMemberToggle(agent.agentId, false)"
+                  >
+                    ×
+                  </button>
+                </article>
+              </div>
+              <label class="chat-user-group-modal__field">
+                <span>团队名称 *</span>
+                <input
+                  ref="createChatUserGroupInputRef"
+                  v-model="createChatUserGroupDraft"
+                  type="text"
+                  maxlength="24"
+                  placeholder="例如 dev-team"
+                />
+              </label>
+            </section>
+          </div>
+
+          <p v-if="createChatUserGroupError" class="chat-user-group-modal__error">{{ createChatUserGroupError }}</p>
+          <div class="chat-user-group-modal__actions">
+            <button type="button" @click="closeCreateChatUserGroupModal">取消</button>
+            <button type="submit">创建团队</button>
+          </div>
+        </form>
+      </section>
     </div>
 
     <div v-if="activeRoleWorkflowBase" class="role-workflow-detail-backdrop" @click.self="closeRoleWorkflowDetail">
@@ -8096,19 +13910,70 @@ watch(
       </section>
     </div>
 
-    <div v-if="isChannelConfigModalOpen && activeChannelConfigMeta" class="related-resource-modal-backdrop" @click.self="closeChannelConfigModal">
-      <section class="related-resource-modal channel-pane-config-modal" role="dialog" aria-modal="true" :aria-label="`配置 ${activeChannelConfigMeta.name}`">
+    <div v-if="isChannelBindingModalOpen && channelBindingModalItem" class="related-resource-modal-backdrop" @click.self="closeChannelBindingModal">
+      <section class="related-resource-modal channel-pane-binding-modal" role="dialog" aria-modal="true" :aria-label="`配置 ${channelBindingModalItem.name} 绑定`">
         <header class="related-resource-modal__header">
           <div>
-            <strong>配置 {{ activeChannelConfigMeta.name }}</strong>
-            <p>{{ activeChannelConfigMeta.description }}</p>
+            <strong>配置频道绑定</strong>
+            <p>{{ channelBindingModalSubtitle }}</p>
+          </div>
+          <div class="related-resource-modal__actions">
+            <button class="related-resource-modal__close" type="button" aria-label="关闭" @click="closeChannelBindingModal">×</button>
+          </div>
+        </header>
+
+        <div class="related-resource-modal__body">
+          <p class="related-resource-modal__detail">选择该频道会话默认使用的数字员工身份。</p>
+          <p v-if="channelBindingError" class="related-resource-modal__error">{{ channelBindingError }}</p>
+
+          <form class="related-model-form channel-pane-binding-form" @submit.prevent="handleSaveChannelBinding">
+            <label class="related-model-form__field">
+              <span>数字员工</span>
+              <select v-model="channelBindingTargetAgentId" class="related-model-form__select" :disabled="channelBindingSaving">
+                <option disabled value="">请选择数字员工</option>
+                <option v-for="agent in channelBindingCandidateAgents" :key="`channel-binding-agent-${agent.agentId}`" :value="agent.agentId">
+                  {{ stripRoleLabel(agent.displayName) }}
+                </option>
+              </select>
+            </label>
+
+            <div class="related-model-form__actions channel-pane-binding-form__actions">
+              <small>保存后，点击频道项会按该身份通信。</small>
+              <div class="channel-pane-binding-form__buttons">
+                <button class="related-resource-modal__refresh" type="button" :disabled="channelBindingSaving" @click="closeChannelBindingModal">
+                  取消
+                </button>
+                <button class="related-resource-modal__refresh channel-pane-binding-form__submit" type="submit" :disabled="channelBindingSaving">
+                  {{ channelBindingSaving ? "保存中..." : "保存绑定" }}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="isChannelConfigModalOpen && activeChannelConfigMeta" class="related-resource-modal-backdrop" @click.self="closeChannelConfigModal">
+      <section class="related-resource-modal channel-pane-config-modal" role="dialog" aria-modal="true" :aria-label="channelConfigModalTitle">
+        <header class="related-resource-modal__header">
+          <div class="channel-pane-config-modal__title-wrap" :class="{ 'is-guided': !activeChannelConfigIsQrMode && isChannelConfigGuidedLayout }">
+            <img
+              v-if="!activeChannelConfigIsQrMode && isChannelConfigGuidedLayout"
+              class="channel-pane-config-modal__icon"
+              :src="activeChannelConfigMeta.icon"
+              :alt="`${activeChannelConfigMeta.name} 图标`"
+            />
+            <div>
+              <strong>{{ channelConfigModalTitle }}</strong>
+              <p>{{ channelConfigModalSubtitle }}</p>
+            </div>
           </div>
           <div class="related-resource-modal__actions">
             <button
-              v-if="activeChannelConfigMeta.docsUrl"
+              v-if="shouldShowChannelConfigHeaderDocsButton"
               class="related-resource-modal__refresh"
               type="button"
-              :disabled="channelConfigSaving"
+              :disabled="channelConfigSaving || channelConfigSyncing"
               @click="handleOpenChannelConfigDocs"
             >
               查看文档
@@ -8118,68 +13983,235 @@ watch(
         </header>
 
         <div class="related-resource-modal__body">
+          <p v-if="channelConfigNotice" class="related-resource-modal__notice">{{ channelConfigNotice }}</p>
           <p v-if="channelConfigError" class="related-resource-modal__error">{{ channelConfigError }}</p>
-          <form class="related-model-form channel-pane-config-form" @submit.prevent="handleSaveChannelConfig">
-            <div v-if="(activeChannelConfigMeta.instructions ?? []).length > 0" class="channel-pane-config-form__steps">
-              <strong>配置步骤</strong>
-              <ol>
-                <li v-for="step in activeChannelConfigMeta.instructions ?? []" :key="`channel-pane-step-${activeChannelConfigMeta.id}-${step}`">
-                  {{ step }}
-                </li>
-              </ol>
-            </div>
+          <template v-if="activeChannelConfigIsQrMode">
+            <section class="channel-qr-bind">
+              <button
+                class="channel-qr-bind__start"
+                :class="{ 'is-loading': channelQrBindingConnecting }"
+                type="button"
+                :disabled="channelQrBindingConnecting"
+                @click="handleStartChannelQrBinding"
+              >
+                <span v-if="channelQrBindingConnecting" class="channel-qr-bind__spinner" aria-hidden="true" />
+                <span>{{ channelQrBindingStartButtonLabel }}</span>
+              </button>
+              <p v-if="channelQrBindingConnecting" class="channel-qr-bind__connecting">正在连接中，请稍候...</p>
 
-            <label class="related-model-form__field">
-              <span>账号 ID</span>
-              <input
-                v-model="channelConfigAccountId"
-                class="related-model-form__input"
-                type="text"
-                placeholder="default"
-                :disabled="!channelConfigAllowEditAccountId || channelConfigSaving"
-              />
-            </label>
-
-            <template v-for="field in activeChannelConfigMeta.fields ?? []" :key="`channel-pane-field-${field.key}`">
-              <label class="related-model-form__field">
-                <span>
-                  {{ field.label }}
-                  <em v-if="field.required" class="channel-pane-config-form__required">*</em>
-                </span>
-                <div class="channel-pane-config-form__input-row" :class="{ 'is-secret': field.secret }">
-                  <input
-                    v-model="channelConfigForm[field.key]"
-                    class="related-model-form__input"
-                    :type="field.secret && !isChannelConfigSecretVisible(field.key) ? 'password' : 'text'"
-                    :placeholder="field.placeholder"
-                    :disabled="channelConfigSaving"
-                  />
-                  <button
-                    v-if="field.secret"
-                    class="channel-pane-config-form__secret-toggle"
-                    type="button"
-                    :disabled="channelConfigSaving"
-                    @click="toggleChannelConfigSecretVisibility(field.key)"
-                  >
-                    {{ isChannelConfigSecretVisible(field.key) ? "隐藏" : "显示" }}
-                  </button>
+              <div v-if="channelQrBindingImageUrl" class="channel-qr-bind__panel">
+                <div class="channel-qr-bind__image-shell">
+                  <img :src="channelQrBindingImageUrl" :alt="`${activeChannelConfigMeta.name} 绑定二维码`" loading="lazy" decoding="async" />
                 </div>
-                <small v-if="field.description" class="channel-pane-config-form__field-hint">{{ field.description }}</small>
-              </label>
-            </template>
-
-            <div v-if="(activeChannelConfigMeta.fields ?? []).length === 0" class="related-resource-modal__empty related-resource-modal__empty--small">
-              当前频道无需手动填写参数，保存后会直接启用该频道。
-            </div>
+              </div>
+            </section>
 
             <div class="related-model-form__actions channel-pane-config-form__actions">
-              <button class="related-resource-modal__refresh" type="button" :disabled="channelConfigSaving" @click="closeChannelConfigModal">
-                取消
-              </button>
-              <button class="related-resource-modal__refresh channel-pane-config-form__submit" type="submit" :disabled="channelConfigSaving">
-                {{ channelConfigSaving ? "保存中..." : "保存配置" }}
-              </button>
+              <button class="related-resource-modal__refresh" type="button" @click="closeChannelConfigModal">关闭</button>
             </div>
+          </template>
+
+          <form
+            v-else
+            class="related-model-form channel-pane-config-form"
+            :class="{ 'channel-pane-config-form--guided': isChannelConfigGuidedLayout }"
+            @submit.prevent="handleSaveChannelConfig"
+          >
+            <template v-if="isChannelConfigGuidedLayout">
+              <section v-if="isDingtalkChannelConfig" class="channel-pane-guide channel-pane-guide--dingtalk">
+                <article class="channel-pane-guide__install-card">
+                  <strong>第 1 步：安装钉钉插件</strong>
+                  <p>点击下方按钮安装或检查插件状态，安装完成后继续填写应用凭据。</p>
+                  <div class="channel-pane-guide__install-actions">
+                    <button
+                      class="channel-pane-guide__install-primary"
+                      type="button"
+                      :disabled="channelConfigSaving || channelConfigSyncing"
+                      @click="handleInstallDingtalkPlugin"
+                    >
+                      安装钉钉插件
+                    </button>
+                    <button
+                      class="channel-pane-guide__install-secondary"
+                      type="button"
+                      :disabled="channelConfigSaving || channelConfigSyncing"
+                      @click="handleRefreshChannelConfigStatus"
+                    >
+                      {{ channelConfigSyncing ? "刷新中..." : "刷新状态" }}
+                    </button>
+                  </div>
+                </article>
+
+                <section class="channel-pane-guide__credential-section">
+                  <strong>第 2 步：填写应用凭据</strong>
+                  <p>保存后系统会自动完成配置并刷新连接状态。</p>
+
+                  <template v-for="field in activeChannelConfigGuidedFields" :key="`channel-pane-guide-field-${field.key}`">
+                    <label class="related-model-form__field">
+                      <span>
+                        {{ field.label }}
+                        <em v-if="field.required" class="channel-pane-config-form__required">*</em>
+                      </span>
+                      <div class="channel-pane-config-form__input-row" :class="{ 'is-secret': field.secret }">
+                        <input
+                          v-model="channelConfigForm[field.key]"
+                          class="related-model-form__input"
+                          :type="field.secret && !isChannelConfigSecretVisible(field.key) ? 'password' : 'text'"
+                          :placeholder="field.placeholder"
+                          :disabled="channelConfigSaving || channelConfigSyncing"
+                        />
+                        <button
+                          v-if="field.secret"
+                          class="channel-pane-config-form__secret-toggle"
+                          type="button"
+                          :disabled="channelConfigSaving || channelConfigSyncing"
+                          @click="toggleChannelConfigSecretVisibility(field.key)"
+                        >
+                          {{ isChannelConfigSecretVisible(field.key) ? "隐藏" : "显示" }}
+                        </button>
+                      </div>
+                      <small v-if="field.description" class="channel-pane-config-form__field-hint">{{ field.description }}</small>
+                    </label>
+                  </template>
+                </section>
+
+                <div class="channel-pane-guide__actions channel-pane-guide__actions--dingtalk">
+                  <button
+                    v-if="activeChannelConfigMeta.docsUrl"
+                    class="channel-pane-config-form__link"
+                    type="button"
+                    :disabled="channelConfigSaving || channelConfigSyncing"
+                    @click="handleOpenChannelConfigDocs"
+                  >
+                    查看详细教程
+                  </button>
+                  <button class="related-resource-modal__refresh channel-pane-config-form__submit" type="submit" :disabled="channelConfigSaving || channelConfigSyncing">
+                    {{ channelConfigSaving ? "保存中..." : "保存" }}
+                  </button>
+                </div>
+              </section>
+
+              <section v-else class="channel-pane-guide">
+                <div v-if="(activeChannelConfigMeta.instructions ?? []).length > 0" class="channel-pane-guide__steps">
+                  <strong>如何连接：</strong>
+                  <ol>
+                    <li v-for="step in activeChannelConfigMeta.instructions ?? []" :key="`channel-pane-step-${activeChannelConfigMeta.id}-${step}`">
+                      {{ step }}
+                    </li>
+                  </ol>
+                </div>
+
+                <template v-for="field in activeChannelConfigGuidedFields" :key="`channel-pane-guide-field-${field.key}`">
+                  <label class="related-model-form__field">
+                    <span>
+                      {{ field.label }}
+                      <em v-if="field.required" class="channel-pane-config-form__required">*</em>
+                    </span>
+                    <div class="channel-pane-config-form__input-row" :class="{ 'is-secret': field.secret }">
+                      <input
+                        v-model="channelConfigForm[field.key]"
+                        class="related-model-form__input"
+                        :type="field.secret && !isChannelConfigSecretVisible(field.key) ? 'password' : 'text'"
+                        :placeholder="field.placeholder"
+                        :disabled="channelConfigSaving || channelConfigSyncing"
+                      />
+                      <button
+                        v-if="field.secret"
+                        class="channel-pane-config-form__secret-toggle"
+                        type="button"
+                        :disabled="channelConfigSaving || channelConfigSyncing"
+                        @click="toggleChannelConfigSecretVisibility(field.key)"
+                      >
+                        {{ isChannelConfigSecretVisible(field.key) ? "隐藏" : "显示" }}
+                      </button>
+                    </div>
+                    <small v-if="field.description" class="channel-pane-config-form__field-hint">{{ field.description }}</small>
+                  </label>
+                </template>
+
+                <button
+                  v-if="isDiscordChannelConfig"
+                  class="channel-pane-guide__authorize"
+                  type="button"
+                  :disabled="channelConfigSaving || channelConfigSyncing"
+                  @click="handleAuthorizeDiscordBot"
+                >
+                  授权机器人
+                </button>
+
+                <div class="related-model-form__actions channel-pane-config-form__actions channel-pane-config-form__actions--split">
+                  <button class="related-resource-modal__refresh" type="button" :disabled="channelConfigSaving || channelConfigSyncing" @click="closeChannelConfigModal">
+                    取消
+                  </button>
+                  <button class="related-resource-modal__refresh channel-pane-config-form__submit" type="submit" :disabled="channelConfigSaving || channelConfigSyncing">
+                    {{ channelConfigSaving ? "连接中..." : channelConfigSubmitButtonLabel }}
+                  </button>
+                </div>
+              </section>
+            </template>
+
+            <template v-else>
+              <div v-if="(activeChannelConfigMeta.instructions ?? []).length > 0" class="channel-pane-config-form__steps">
+                <strong>配置步骤</strong>
+                <ol>
+                  <li v-for="step in activeChannelConfigMeta.instructions ?? []" :key="`channel-pane-step-${activeChannelConfigMeta.id}-${step}`">
+                    {{ step }}
+                  </li>
+                </ol>
+              </div>
+
+              <label class="related-model-form__field">
+                <span>账号 ID</span>
+                <input
+                  v-model="channelConfigAccountId"
+                  class="related-model-form__input"
+                  type="text"
+                  placeholder="default"
+                  :disabled="!channelConfigAllowEditAccountId || channelConfigSaving || channelConfigSyncing"
+                />
+              </label>
+
+              <template v-for="field in activeChannelConfigMeta.fields ?? []" :key="`channel-pane-field-${field.key}`">
+                <label class="related-model-form__field">
+                  <span>
+                    {{ field.label }}
+                    <em v-if="field.required" class="channel-pane-config-form__required">*</em>
+                  </span>
+                  <div class="channel-pane-config-form__input-row" :class="{ 'is-secret': field.secret }">
+                    <input
+                      v-model="channelConfigForm[field.key]"
+                      class="related-model-form__input"
+                      :type="field.secret && !isChannelConfigSecretVisible(field.key) ? 'password' : 'text'"
+                      :placeholder="field.placeholder"
+                      :disabled="channelConfigSaving || channelConfigSyncing"
+                    />
+                    <button
+                      v-if="field.secret"
+                      class="channel-pane-config-form__secret-toggle"
+                      type="button"
+                      :disabled="channelConfigSaving || channelConfigSyncing"
+                      @click="toggleChannelConfigSecretVisibility(field.key)"
+                    >
+                      {{ isChannelConfigSecretVisible(field.key) ? "隐藏" : "显示" }}
+                    </button>
+                  </div>
+                  <small v-if="field.description" class="channel-pane-config-form__field-hint">{{ field.description }}</small>
+                </label>
+              </template>
+
+              <div v-if="(activeChannelConfigMeta.fields ?? []).length === 0" class="related-resource-modal__empty related-resource-modal__empty--small">
+                当前频道无需手动填写参数，保存后会直接启用该频道。
+              </div>
+
+              <div class="related-model-form__actions channel-pane-config-form__actions">
+                <button class="related-resource-modal__refresh" type="button" :disabled="channelConfigSaving || channelConfigSyncing" @click="closeChannelConfigModal">
+                  取消
+                </button>
+                <button class="related-resource-modal__refresh channel-pane-config-form__submit" type="submit" :disabled="channelConfigSaving || channelConfigSyncing">
+                  {{ channelConfigSaving ? "保存中..." : channelConfigSubmitButtonLabel }}
+                </button>
+              </div>
+            </template>
           </form>
         </div>
       </section>
@@ -8530,22 +14562,49 @@ watch(
               Profile：{{ relatedToolsSnapshot?.profileLabel || relatedToolsSnapshot?.profile || "default" }} · 已启用
               {{ relatedToolsEnabledCount }} / {{ relatedToolsSnapshot?.tools?.length ?? 0 }}
             </p>
-            <div v-if="relatedToolsByCategory.length === 0" class="related-resource-modal__empty">暂无工具配置数据。</div>
-            <section v-for="group in relatedToolsByCategory" :key="`tools-${group.category}`" class="related-resource-section">
-              <h4>{{ group.category }}</h4>
-              <label v-for="tool in group.tools" :key="`tool-${tool.id}`" class="related-switch-row">
-                <input
-                  type="checkbox"
-                  :checked="tool.enabled"
-                  :disabled="relatedResourceModalSaving"
-                  @change="handleRelatedToolToggle(tool.id, ($event.target as HTMLInputElement).checked)"
-                />
-                <div>
-                  <strong>{{ tool.name || tool.id }}</strong>
-                  <p>{{ tool.description }}</p>
-                </div>
-              </label>
-            </section>
+            <div v-if="relatedTools.length === 0" class="related-resource-modal__empty">暂无工具配置数据。</div>
+            <template v-else>
+              <div class="related-schedule-filter" role="tablist" aria-label="工具分类筛选">
+                <button
+                  class="related-schedule-filter__button"
+                  :class="{ 'is-active': relatedToolsFilter === RELATED_TOOLS_FILTER_ALL }"
+                  type="button"
+                  @click="relatedToolsFilter = RELATED_TOOLS_FILTER_ALL"
+                >
+                  全部
+                  <em>{{ relatedTools.length }}</em>
+                </button>
+                <button
+                  v-for="category in relatedToolsCategoryCounts"
+                  :key="`related-tools-category-${category.category}`"
+                  class="related-schedule-filter__button"
+                  :class="{ 'is-active': relatedToolsFilter === category.category }"
+                  type="button"
+                  @click="relatedToolsFilter = category.category"
+                >
+                  {{ category.category }}
+                  <em>{{ category.count }}</em>
+                </button>
+              </div>
+              <div v-if="relatedToolsByCategory.length === 0" class="related-resource-modal__empty related-resource-modal__empty--small">
+                当前筛选条件下没有工具。
+              </div>
+              <section v-for="group in relatedToolsByCategory" :key="`tools-${group.category}`" class="related-resource-section">
+                <h4>{{ group.category }}</h4>
+                <label v-for="tool in group.tools" :key="`tool-${tool.id}`" class="related-switch-row">
+                  <input
+                    type="checkbox"
+                    :checked="tool.enabled"
+                    :disabled="relatedResourceModalSaving"
+                    @change="handleRelatedToolToggle(tool.id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <div>
+                    <strong>{{ tool.name || tool.id }}</strong>
+                    <p>{{ tool.description }}</p>
+                  </div>
+                </label>
+              </section>
+            </template>
           </template>
 
           <template v-else-if="relatedResourceModalTarget === 'channel'">
@@ -8723,7 +14782,7 @@ watch(
 
           <template v-else>
             <p class="utility-modal__detail">
-              {{ chatRuntimeLogs?.detail || "展示 OpenClaw 运行日志。" }} · 当前员工
+              {{ chatRuntimeLogs?.detail || "展示 OpenClaw 运行日志。" }} · 当前筛选
               {{ utilityLogTab === "runtime" ? runtimeCategoryLogItems.length : runtimeLogItems.length }} / {{ runtimeLogItems.length }} 条
             </p>
 
@@ -8747,17 +14806,45 @@ watch(
             </div>
 
             <template v-if="utilityLogTab === 'runtime'">
-              <div class="utility-log-categories" role="tablist" aria-label="运行日志分类">
-                <button
-                  v-for="category in utilityRuntimeCategories"
-                  :key="category.id"
-                  type="button"
-                  class="utility-log-category"
-                  :class="{ 'is-active': utilityRuntimeCategory === category.id }"
-                  @click="handleUtilityRuntimeCategoryChange(category.id)"
-                >
-                  {{ category.label }}
-                </button>
+              <div class="utility-log-categories-wrap">
+                <div class="utility-log-categories" role="tablist" aria-label="运行日志分类">
+                  <button
+                    v-for="category in utilityRuntimeCategories"
+                    :key="category.id"
+                    type="button"
+                    class="utility-log-category"
+                    :class="{ 'is-active': utilityRuntimeCategory === category.id }"
+                    @click="handleUtilityRuntimeCategoryChange(category.id)"
+                  >
+                    {{ category.label }}
+                  </button>
+                </div>
+                <div class="utility-log-filters">
+                  <label class="utility-log-filter">
+                    <span>角色</span>
+                    <select
+                      v-model="utilityRuntimeRoleFilter"
+                      class="utility-log-filter__select"
+                      @change="handleUtilityRuntimeRoleFilterChange"
+                    >
+                      <option v-for="option in utilityRuntimeRoleFilterOptions" :key="option.id" :value="option.id">
+                        {{ option.label }}（{{ option.count }}）
+                      </option>
+                    </select>
+                  </label>
+                  <label class="utility-log-filter">
+                    <span>定时任务</span>
+                    <select
+                      v-model="utilityRuntimeScheduleFilter"
+                      class="utility-log-filter__select"
+                      @change="handleUtilityRuntimeScheduleFilterChange"
+                    >
+                      <option v-for="option in utilityRuntimeScheduleFilterOptions" :key="option.id" :value="option.id">
+                        {{ option.label }}（{{ option.count }}）
+                      </option>
+                    </select>
+                  </label>
+                </div>
               </div>
 
               <div v-if="runtimeCategoryLogItems.length === 0" class="utility-modal__empty">当前分类暂无运行日志。</div>
@@ -8786,20 +14873,47 @@ watch(
                 <section v-if="selectedRuntimeLog && activeRuntimeLogDetailSection" class="utility-log-detail">
                   <div class="utility-log-detail__head">
                     <header class="utility-log-detail__header">
-                      <div>
-                        <strong>{{ selectedRuntimeLog.method }} {{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</strong>
-                        <p>{{ selectedRuntimeLog.platformName }} · {{ formatDateTime(selectedRuntimeLog.createdAt) }}</p>
+                      <div class="utility-log-detail__title-wrap">
+                        <div class="utility-log-detail__route">
+                          <span class="utility-log-detail__method">{{ selectedRuntimeLog.method }}</span>
+                          <strong>{{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</strong>
+                        </div>
+                        <p>{{ getLogRequestUrl(selectedRuntimeLog) }}</p>
+                        <div class="utility-log-detail__meta">
+                          <span class="utility-log-detail__meta-item">{{ selectedRuntimeLog.platformName }}</span>
+                          <span class="utility-log-detail__meta-item">{{ formatDateTime(selectedRuntimeLog.createdAt) }}</span>
+                          <span class="utility-log-kind" :data-kind="getRuntimeLogCategory(selectedRuntimeLog)">
+                            {{ getRuntimeLogCategoryLabel(selectedRuntimeLog) }}
+                          </span>
+                        </div>
                       </div>
-                      <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
-                        selectedRuntimeLog.responseStatus
-                      }}</span>
+                      <div class="utility-log-detail__header-side">
+                        <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
+                          selectedRuntimeLog.responseStatus
+                        }}</span>
+                      </div>
                     </header>
                     <div class="utility-log-detail__stats">
-                      <span>耗时 {{ formatDurationLabel(selectedRuntimeLog.duration) }}</span>
-                      <span v-if="typeof selectedRuntimeLog.firstTokenTime === 'number'">
-                        首 Token {{ formatDurationLabel(selectedRuntimeLog.firstTokenTime) }}
+                      <span class="utility-log-detail__stat">
+                        <small>耗时</small>
+                        <strong>{{ formatDurationLabel(selectedRuntimeLog.duration) }}</strong>
                       </span>
-                      <span v-if="typeof selectedRuntimeLog.totalTokens === 'number'">Token {{ selectedRuntimeLog.totalTokens }}</span>
+                      <span v-if="typeof selectedRuntimeLog.firstTokenTime === 'number'" class="utility-log-detail__stat">
+                        <small>首 Token</small>
+                        <strong>{{ formatDurationLabel(selectedRuntimeLog.firstTokenTime) }}</strong>
+                      </span>
+                      <span
+                        v-if="
+                          typeof selectedRuntimeLog.totalTokens === 'number' ||
+                          typeof selectedRuntimeLog.promptTokens === 'number' ||
+                          typeof selectedRuntimeLog.completionTokens === 'number' ||
+                          typeof selectedRuntimeLog.cacheReadInputTokens === 'number'
+                        "
+                        class="utility-log-detail__stat"
+                      >
+                        <small>总 Token</small>
+                        <strong>{{ getEffectiveLogTotalTokens(selectedRuntimeLog) }}</strong>
+                      </span>
                     </div>
                     <div class="utility-log-detail-tabs" role="tablist" aria-label="日志详情分栏">
                       <button
@@ -8831,7 +14945,7 @@ watch(
             </template>
 
             <template v-else>
-              <div v-if="errorAnalysisSummaries.length === 0" class="utility-modal__empty">当前员工暂无错误日志。</div>
+              <div v-if="errorAnalysisSummaries.length === 0" class="utility-modal__empty">当前筛选暂无错误日志。</div>
               <div v-else class="utility-log-layout">
                 <div class="utility-error-list">
                   <button
@@ -8972,7 +15086,7 @@ watch(
               <article class="sidebar-settings-card">
                 <div>
                   <h4>开机自动启动</h4>
-                  <p>{{ sidebarSettingsLaunchOnLoginSupported ? "系统登录后自动启动 ClawPet。" : "当前环境暂不支持自动启动设置。" }}</p>
+                  <p>{{ sidebarSettingsLaunchOnLoginSupported ? "系统登录后自动启动 DragonClaw。" : "当前环境暂不支持自动启动设置。" }}</p>
                 </div>
                 <button
                   class="sidebar-settings-toggle"
@@ -9152,13 +15266,435 @@ watch(
 }
 
 .chat-page {
+  --cp-accent: #5d82ff;
+  --cp-accent-strong: #4c70ef;
+  --cp-accent-dark: #345ec9;
+  --cp-accent-shadow: rgba(76, 112, 239, 0.28);
+  --cp-text-strong: #25395a;
+  --cp-text: #344a6f;
+  --cp-text-muted: #6d82a5;
+  --cp-icon: #8297b7;
+  --cp-border: #d7e3f5;
+  --cp-border-200: #e0e8f7;
+  --cp-border-300: #cad9f2;
+  --cp-border-strong: #9fb9e9;
+  --cp-surface: #fbfdff;
+  --cp-surface-elevated: #ffffff;
+  --cp-sidebar-bg: rgba(244, 249, 255, 0.92);
+  --cp-shell-bg: rgba(251, 253, 255, 0.84);
+  --cp-shell-bg-soft: rgba(246, 250, 255, 0.9);
+  --cp-hover-bg: #eef5ff;
+  --cp-active-bg: rgba(93, 130, 255, 0.14);
+  --cp-active-bg-strong: rgba(93, 130, 255, 0.22);
+  --cp-soft-accent-bg: rgba(110, 140, 216, 0.18);
+  --cp-soft-accent-text: #5f76a3;
+  --cp-soft-accent-bg-strong: rgba(93, 130, 255, 0.22);
+  --cp-soft-accent-text-strong: #4f658f;
+  --cp-soft-accent-surface: #f1f7ff;
+  --cp-soft-accent-surface-hover: #e8f2ff;
+  --cp-panel-bg-top: #f6f9fe;
+  --cp-panel-bg-bottom: #eff4fc;
+  --cp-shadow: rgba(59, 88, 143, 0.15);
+  --cp-focus-ring: 0 0 0 3px rgba(93, 130, 255, 0.17);
   width: 100%;
   height: 100%;
   min-height: 100%;
   padding: 0;
   overflow: hidden;
   background: transparent;
-  color: #293145;
+  color: var(--cp-text-strong);
+}
+
+html[data-app-theme-resolved="dark"] .chat-page {
+  --cp-accent: #93adff;
+  --cp-accent-strong: #7f98ea;
+  --cp-accent-dark: #b5c8ff;
+  --cp-accent-shadow: rgba(129, 152, 234, 0.34);
+  --cp-text-strong: #edf3ff;
+  --cp-text: #d5e0f5;
+  --cp-text-muted: #9db0d2;
+  --cp-icon: #aabbe0;
+  --cp-border: rgba(116, 138, 182, 0.34);
+  --cp-border-200: rgba(123, 145, 189, 0.38);
+  --cp-border-300: rgba(134, 157, 205, 0.46);
+  --cp-border-strong: rgba(150, 175, 229, 0.68);
+  --cp-surface: rgba(21, 28, 41, 0.96);
+  --cp-surface-elevated: rgba(28, 36, 52, 0.96);
+  --cp-sidebar-bg: rgba(18, 25, 38, 0.94);
+  --cp-shell-bg: rgba(16, 22, 34, 0.92);
+  --cp-shell-bg-soft: rgba(19, 26, 39, 0.94);
+  --cp-hover-bg: rgba(122, 145, 191, 0.24);
+  --cp-active-bg: rgba(127, 152, 234, 0.24);
+  --cp-active-bg-strong: rgba(127, 152, 234, 0.34);
+  --cp-soft-accent-bg: rgba(125, 149, 199, 0.22);
+  --cp-soft-accent-text: rgba(220, 232, 253, 0.86);
+  --cp-soft-accent-bg-strong: rgba(139, 164, 218, 0.3);
+  --cp-soft-accent-text-strong: #edf2ff;
+  --cp-soft-accent-surface: rgba(32, 41, 59, 0.96);
+  --cp-soft-accent-surface-hover: rgba(41, 52, 74, 0.98);
+  --cp-panel-bg-top: rgba(29, 37, 54, 0.96);
+  --cp-panel-bg-bottom: rgba(23, 30, 44, 0.96);
+  --cp-shadow: rgba(5, 9, 16, 0.38);
+  --cp-focus-ring: 0 0 0 3px rgba(129, 151, 199, 0.3);
+}
+
+html[data-app-theme-preset="frosted"] .chat-page {
+  --cp-accent: #be5ee9;
+  --cp-accent-strong: #aa55d7;
+  --cp-accent-dark: #8a47b6;
+  --cp-accent-shadow: rgba(183, 106, 224, 0.34);
+  --cp-text-strong: #403a58;
+  --cp-text: #554f72;
+  --cp-text-muted: #8b82ab;
+  --cp-icon: #958ab7;
+  --cp-border: rgba(220, 212, 241, 0.68);
+  --cp-border-200: rgba(230, 223, 247, 0.6);
+  --cp-border-300: rgba(207, 197, 236, 0.66);
+  --cp-border-strong: rgba(189, 169, 229, 0.82);
+  --cp-sidebar-bg: rgba(245, 240, 252, 0.56);
+  --cp-shell-bg: rgba(245, 241, 253, 0.44);
+  --cp-shell-bg-soft: rgba(245, 241, 253, 0.5);
+  --cp-surface: rgba(255, 255, 255, 0.58);
+  --cp-surface-elevated: rgba(255, 255, 255, 0.68);
+  --cp-hover-bg: rgba(255, 255, 255, 0.72);
+  --cp-active-bg: rgba(235, 201, 250, 0.44);
+  --cp-active-bg-strong: rgba(224, 175, 246, 0.56);
+  --cp-soft-accent-bg: rgba(212, 186, 244, 0.32);
+  --cp-soft-accent-text: #725d97;
+  --cp-soft-accent-bg-strong: rgba(205, 164, 239, 0.42);
+  --cp-soft-accent-text-strong: #5f4a88;
+  --cp-soft-accent-surface: rgba(255, 255, 255, 0.62);
+  --cp-soft-accent-surface-hover: rgba(255, 255, 255, 0.74);
+  --cp-panel-bg-top: rgba(255, 255, 255, 0.62);
+  --cp-panel-bg-bottom: rgba(249, 245, 255, 0.56);
+  --cp-shadow: rgba(120, 98, 162, 0.2);
+  --cp-focus-ring: 0 0 0 3px rgba(197, 146, 239, 0.28);
+  background:
+    radial-gradient(circle at 44% 40%, rgba(240, 129, 201, 0.26), transparent 34%),
+    radial-gradient(circle at 56% 86%, rgba(255, 192, 147, 0.2), transparent 30%),
+    linear-gradient(180deg, rgba(236, 232, 248, 0.58), rgba(236, 232, 248, 0.42));
+}
+
+html[data-app-theme-preset="pure-white"] .chat-page {
+  --cp-accent: #31c764;
+  --cp-accent-strong: #24b957;
+  --cp-accent-dark: #169d48;
+  --cp-accent-shadow: rgba(49, 199, 100, 0.24);
+  --cp-text-strong: #1f232a;
+  --cp-text: #343942;
+  --cp-text-muted: #7a818d;
+  --cp-icon: #9aa2ae;
+  --cp-border: #e3e7ec;
+  --cp-border-200: #e9edf1;
+  --cp-border-300: #d6dce5;
+  --cp-border-strong: #b9c2cd;
+  --cp-sidebar-bg: #f4f5f7;
+  --cp-shell-bg: #eff1f3;
+  --cp-shell-bg-soft: #fafbfc;
+  --cp-surface: #ffffff;
+  --cp-surface-elevated: #ffffff;
+  --cp-hover-bg: #f3f5f7;
+  --cp-active-bg: rgba(49, 199, 100, 0.1);
+  --cp-active-bg-strong: rgba(49, 199, 100, 0.18);
+  --cp-soft-accent-bg: rgba(49, 199, 100, 0.12);
+  --cp-soft-accent-text: #198f46;
+  --cp-soft-accent-bg-strong: rgba(49, 199, 100, 0.2);
+  --cp-soft-accent-text-strong: #14783a;
+  --cp-soft-accent-surface: #f5faf7;
+  --cp-soft-accent-surface-hover: #eef7f1;
+  --cp-panel-bg-top: #f7f9fb;
+  --cp-panel-bg-bottom: #f1f4f6;
+  --cp-shadow: rgba(15, 20, 28, 0.08);
+  --cp-focus-ring: 0 0 0 3px rgba(49, 199, 100, 0.18);
+  background: linear-gradient(180deg, #eff1f3 0%, #f2f4f6 100%);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-page {
+  --cp-accent: #d5a7ff;
+  --cp-accent-strong: #c891f2;
+  --cp-accent-dark: #e7cbff;
+  --cp-accent-shadow: rgba(176, 112, 234, 0.42);
+  --cp-text-strong: #f4eeff;
+  --cp-text: #e0d6f7;
+  --cp-text-muted: #b4a8d1;
+  --cp-icon: #b8abda;
+  --cp-border: rgba(130, 122, 168, 0.56);
+  --cp-border-200: rgba(142, 133, 182, 0.48);
+  --cp-border-300: rgba(155, 145, 197, 0.58);
+  --cp-border-strong: rgba(193, 172, 236, 0.78);
+  --cp-sidebar-bg: rgba(25, 23, 39, 0.74);
+  --cp-shell-bg: rgba(20, 18, 33, 0.68);
+  --cp-shell-bg-soft: rgba(25, 22, 40, 0.74);
+  --cp-surface: rgba(33, 29, 50, 0.8);
+  --cp-surface-elevated: rgba(41, 35, 62, 0.84);
+  --cp-hover-bg: rgba(147, 123, 192, 0.26);
+  --cp-active-bg: rgba(178, 134, 232, 0.32);
+  --cp-active-bg-strong: rgba(193, 148, 242, 0.42);
+  --cp-soft-accent-bg: rgba(164, 132, 214, 0.26);
+  --cp-soft-accent-text: rgba(233, 219, 255, 0.9);
+  --cp-soft-accent-bg-strong: rgba(179, 141, 236, 0.34);
+  --cp-soft-accent-text-strong: #f3e9ff;
+  --cp-soft-accent-surface: rgba(54, 45, 79, 0.86);
+  --cp-soft-accent-surface-hover: rgba(62, 51, 92, 0.9);
+  --cp-panel-bg-top: rgba(72, 63, 99, 0.56);
+  --cp-panel-bg-bottom: rgba(47, 39, 69, 0.72);
+  --cp-shadow: rgba(12, 10, 22, 0.46);
+  --cp-focus-ring: 0 0 0 3px rgba(200, 159, 247, 0.28);
+  background:
+    radial-gradient(circle at 40% 36%, rgba(176, 103, 178, 0.32), transparent 38%),
+    radial-gradient(circle at 58% 84%, rgba(178, 124, 78, 0.24), transparent 34%),
+    linear-gradient(180deg, rgba(27, 23, 38, 0.8), rgba(22, 19, 33, 0.74));
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-page {
+  --cp-accent: #39d36b;
+  --cp-accent-strong: #2ec660;
+  --cp-accent-dark: #72e59b;
+  --cp-accent-shadow: rgba(57, 211, 107, 0.24);
+  --cp-text-strong: #f1f3f6;
+  --cp-text: #d2d7df;
+  --cp-text-muted: #98a0ad;
+  --cp-icon: #a2a9b6;
+  --cp-border: rgba(80, 86, 96, 0.72);
+  --cp-border-200: rgba(72, 78, 88, 0.64);
+  --cp-border-300: rgba(92, 99, 111, 0.76);
+  --cp-border-strong: rgba(113, 122, 136, 0.88);
+  --cp-sidebar-bg: #101318;
+  --cp-shell-bg: #0d0f14;
+  --cp-shell-bg-soft: #141920;
+  --cp-surface: #181d24;
+  --cp-surface-elevated: #20262e;
+  --cp-hover-bg: rgba(255, 255, 255, 0.06);
+  --cp-active-bg: rgba(57, 211, 107, 0.16);
+  --cp-active-bg-strong: rgba(57, 211, 107, 0.26);
+  --cp-soft-accent-bg: rgba(57, 211, 107, 0.18);
+  --cp-soft-accent-text: #87e1aa;
+  --cp-soft-accent-bg-strong: rgba(57, 211, 107, 0.28);
+  --cp-soft-accent-text-strong: #b4f0ca;
+  --cp-soft-accent-surface: #252c34;
+  --cp-soft-accent-surface-hover: #2d353f;
+  --cp-panel-bg-top: rgba(53, 59, 69, 0.84);
+  --cp-panel-bg-bottom: rgba(38, 44, 52, 0.92);
+  --cp-shadow: rgba(0, 0, 0, 0.44);
+  --cp-focus-ring: 0 0 0 3px rgba(57, 211, 107, 0.2);
+  background: linear-gradient(180deg, #11151b 0%, #0e1116 100%);
+}
+
+.task-reminder-stack {
+  position: fixed;
+  top: 16px;
+  right: 18px;
+  width: min(368px, calc(100vw - 24px));
+  pointer-events: none;
+  z-index: 1650;
+}
+
+.task-reminder-toast {
+  position: relative;
+  display: grid;
+  gap: 9px;
+  padding: 12px 14px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(118, 152, 255, 0.35);
+  background:
+    linear-gradient(140deg, rgba(246, 252, 255, 0.96), rgba(236, 242, 255, 0.94)),
+    radial-gradient(circle at 8% 12%, rgba(120, 194, 255, 0.24), transparent 40%),
+    radial-gradient(circle at 90% 20%, rgba(146, 142, 255, 0.2), transparent 44%);
+  box-shadow:
+    0 14px 30px rgba(35, 58, 105, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.66);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+  overflow: hidden;
+  isolation: isolate;
+  animation: task-reminder-float 2.8s ease-in-out infinite;
+}
+
+.task-reminder-toast::before {
+  content: "";
+  position: absolute;
+  top: -80%;
+  left: -20%;
+  width: 54%;
+  height: 220%;
+  background: linear-gradient(130deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.36), rgba(255, 255, 255, 0));
+  transform: rotate(20deg);
+  animation: task-reminder-sheen 3.2s ease-in-out infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.task-reminder-toast__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-reminder-toast__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 160, 255, 0.42);
+  background: rgba(255, 255, 255, 0.66);
+  color: #2c4c9b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.task-reminder-toast__close {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #4d5f80;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.task-reminder-toast__close:hover {
+  background: rgba(255, 255, 255, 0.96);
+  color: #24354f;
+}
+
+.task-reminder-toast__title {
+  display: block;
+  color: #263b60;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.task-reminder-toast__meta {
+  margin: 0;
+  color: #49648e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.task-reminder-toast__summary {
+  margin: 0;
+  color: #5c6f8f;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 42px;
+  overflow: hidden;
+}
+
+.task-reminder-toast__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-reminder-toast__action {
+  height: 30px;
+  border: 1px solid rgba(103, 148, 255, 0.44);
+  border-radius: 9px;
+  background: linear-gradient(140deg, #ffffff, #e9f2ff);
+  color: #2d528f;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.task-reminder-toast__action:hover {
+  border-color: rgba(90, 137, 248, 0.68);
+  color: #1e447f;
+}
+
+.task-reminder-toast__queued {
+  color: #627aa1;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.task-reminder-toast__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(99, 132, 219, 0.2);
+}
+
+.task-reminder-toast__progress i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #5e90ff, #6cd0ff);
+  transform-origin: left center;
+  animation: task-reminder-progress var(--task-reminder-duration, 7200ms) linear forwards;
+}
+
+.task-reminder-pop-enter-active,
+.task-reminder-pop-leave-active {
+  transition: opacity 260ms ease, transform 260ms cubic-bezier(0.2, 0.75, 0.26, 1.02), filter 260ms ease;
+}
+
+.task-reminder-pop-enter-from,
+.task-reminder-pop-leave-to {
+  opacity: 0;
+  transform: translateY(-12px) scale(0.92);
+  filter: blur(2px);
+}
+
+@keyframes task-reminder-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes task-reminder-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.5px);
+  }
+}
+
+@keyframes task-reminder-sheen {
+  0% {
+    transform: translateX(-120%) rotate(20deg);
+    opacity: 0;
+  }
+  26% {
+    opacity: 1;
+  }
+  56% {
+    transform: translateX(220%) rotate(20deg);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(220%) rotate(20deg);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-reminder-toast,
+  .task-reminder-toast::before,
+  .task-reminder-toast__progress i {
+    animation: none !important;
+  }
+
+  .task-reminder-pop-enter-active,
+  .task-reminder-pop-leave-active {
+    transition: opacity 120ms linear !important;
+    transform: none !important;
+  }
 }
 
 .window-shell {
@@ -9174,6 +15710,7 @@ watch(
 }
 
 .chat-app {
+  position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -9187,6 +15724,8 @@ watch(
 }
 
 .sidebar-icons {
+  position: relative;
+  z-index: 8;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -9195,6 +15734,10 @@ watch(
   border-right: 1px solid #eceff4;
   background: rgba(244, 249, 255, 0.85);
   cursor: move;
+}
+
+.sidebar-icons.is-profile-popover-open {
+  z-index: 8;
 }
 
 .sidebar-top {
@@ -9216,8 +15759,23 @@ watch(
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.68);
   padding: 8px;
-  cursor: default;
+  cursor: pointer;
   position: relative;
+  transition: box-shadow 180ms ease, transform 180ms ease;
+}
+
+.sidebar-profile:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px rgba(82, 103, 149, 0.12);
+}
+
+.sidebar-profile:focus-visible {
+  outline: none;
+  box-shadow: var(--cp-focus-ring);
+}
+
+.sidebar-profile.is-open {
+  box-shadow: 0 10px 22px rgba(82, 103, 149, 0.17);
 }
 
 .sidebar-profile__avatar {
@@ -9230,6 +15788,21 @@ watch(
   color: #ffffff;
   background: linear-gradient(135deg, #5e7dff, #3f66ea);
   box-shadow: 0 2px 10px rgba(79, 111, 255, 0.26);
+}
+
+.sidebar-profile__avatar.is-group {
+  background: #eaf0fb;
+  box-shadow: inset 0 0 0 1px rgba(141, 165, 211, 0.32);
+  color: #5a6b8a;
+  overflow: hidden;
+}
+
+.sidebar-profile__avatar-image {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  display: block;
 }
 
 .sidebar-profile__status {
@@ -9262,6 +15835,408 @@ watch(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-page.is-sidebar-profile-panel-open .window-shell {
+  pointer-events: none;
+  user-select: none;
+}
+
+.sidebar-profile-panel-layer {
+  --spp-overlay-base: rgba(219, 229, 246, 0.32);
+  --spp-overlay-accent-a: rgba(107, 147, 219, 0.2);
+  --spp-overlay-accent-b: rgba(111, 158, 236, 0.14);
+  --spp-panel-border: rgba(163, 186, 224, 0.56);
+  --spp-panel-bg: linear-gradient(165deg, #f8fbff 0%, #edf3ff 48%, #f6f9ff 100%);
+  --spp-panel-shadow: 0 28px 56px rgba(40, 74, 133, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  --spp-text-strong: #1f3152;
+  --spp-text-muted: #4a638d;
+  --spp-handle-bg: rgba(103, 128, 169, 0.4);
+  --spp-close-bg: rgba(71, 106, 168, 0.12);
+  --spp-close-bg-hover: rgba(71, 106, 168, 0.22);
+  --spp-close-color: #4a628d;
+  --spp-avatar-bg: rgba(96, 138, 206, 0.18);
+  --spp-avatar-color: #1f365f;
+  --spp-avatar-shadow: 0 12px 24px rgba(65, 101, 163, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --spp-lobster-border: rgba(149, 177, 222, 0.72);
+  --spp-lobster-bg: rgba(255, 255, 255, 0.8);
+  --spp-lobster-bg-hover: rgba(255, 255, 255, 0.95);
+  --spp-lobster-color: #3a547f;
+  --spp-tabs-bg: rgba(170, 192, 227, 0.16);
+  --spp-tabs-border: rgba(166, 189, 225, 0.4);
+  --spp-tab-border: rgba(172, 193, 228, 0.68);
+  --spp-tab-bg: rgba(255, 255, 255, 0.78);
+  --spp-tab-color: #47608a;
+  --spp-tab-hover-border: rgba(130, 161, 214, 0.86);
+  --spp-tab-active-border: #719adf;
+  --spp-tab-active-bg: linear-gradient(145deg, #dfeaff, #d1e1ff);
+  --spp-tab-active-color: #254274;
+  --spp-avatar-row-bg: rgba(170, 192, 227, 0.16);
+  --spp-avatar-row-border: rgba(166, 189, 225, 0.4);
+  --spp-avatar-option-border: rgba(168, 193, 232, 0.86);
+  --spp-avatar-option-bg: rgba(255, 255, 255, 0.9);
+  --spp-avatar-option-active-border: #6f99e4;
+  --spp-avatar-option-active-shadow: 0 9px 18px rgba(64, 129, 231, 0.28);
+  --spp-primary-bg: linear-gradient(140deg, #5f88e9, #4a72d4);
+  --spp-primary-text: #ffffff;
+  --spp-secondary-bg: rgba(255, 255, 255, 0.82);
+  --spp-secondary-border: rgba(150, 175, 218, 0.58);
+  --spp-secondary-text: #2f4670;
+  --spp-hint: #536c93;
+  --spp-notice: #1e7c4d;
+  --spp-error: #bb3758;
+  position: fixed;
+  inset: 0;
+  z-index: 5200;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background:
+    radial-gradient(circle at 22% 16%, var(--spp-overlay-accent-a), transparent 42%),
+    radial-gradient(circle at 84% 86%, var(--spp-overlay-accent-b), transparent 42%),
+    var(--spp-overlay-base);
+  pointer-events: auto;
+  isolation: isolate;
+}
+
+.sidebar-profile-panel {
+  position: relative;
+  width: min(420px, calc(100vw - 30px));
+  max-height: min(760px, calc(100vh - 34px));
+  overflow-y: auto;
+  border-radius: 28px;
+  border: 1px solid var(--spp-panel-border);
+  background: var(--spp-panel-bg);
+  box-shadow: var(--spp-panel-shadow);
+  padding: 16px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--spp-text-strong);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(123, 146, 189, 0.68) rgba(136, 158, 194, 0.16);
+}
+
+.sidebar-profile-panel__drag-handle {
+  width: 46px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--spp-handle-bg);
+  margin-top: 1px;
+}
+
+.sidebar-profile-panel__close {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--spp-close-bg);
+  color: var(--spp-close-color);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.sidebar-profile-panel__close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.sidebar-profile-panel__close:hover {
+  background: var(--spp-close-bg-hover);
+  transform: scale(1.04);
+}
+
+.sidebar-profile-panel__title {
+  margin: 6px 0 0;
+  font-size: clamp(20px, 4.5vw, 27px);
+  font-weight: 700;
+  color: var(--spp-text-strong);
+  letter-spacing: 0.01em;
+}
+
+.sidebar-profile-panel__avatar {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--spp-avatar-bg);
+  color: var(--spp-avatar-color);
+  font-size: 28px;
+  font-weight: 700;
+  box-shadow: var(--spp-avatar-shadow);
+}
+
+.sidebar-profile-panel__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.sidebar-profile-panel__name {
+  margin-top: 1px;
+  text-align: center;
+  font-size: clamp(24px, 5.6vw, 32px);
+  line-height: 1.1;
+  color: var(--spp-text-strong);
+  font-weight: 700;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-profile-panel__lobster {
+  border: 1px solid var(--spp-lobster-border);
+  background: var(--spp-lobster-bg);
+  color: var(--spp-lobster-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.sidebar-profile-panel__lobster svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.sidebar-profile-panel__lobster:hover {
+  background: var(--spp-lobster-bg-hover);
+  border-color: var(--spp-lobster-border);
+}
+
+.sidebar-profile-panel__tabs {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--spp-tabs-bg);
+  border: 1px solid var(--spp-tabs-border);
+}
+
+.sidebar-profile-panel__tab {
+  height: 38px;
+  border: 1px solid var(--spp-tab-border);
+  border-radius: 11px;
+  background: var(--spp-tab-bg);
+  color: var(--spp-tab-color);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.sidebar-profile-panel__tab:hover {
+  border-color: var(--spp-tab-hover-border);
+  color: var(--spp-tab-active-color);
+}
+
+.sidebar-profile-panel__tab.is-active {
+  border-color: var(--spp-tab-active-border);
+  background: var(--spp-tab-active-bg);
+  color: var(--spp-tab-active-color);
+}
+
+.sidebar-profile-panel__avatar-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 0;
+  padding: 10px;
+  border-radius: 16px;
+  background: var(--spp-avatar-row-bg);
+  border: 1px solid var(--spp-avatar-row-border);
+}
+
+.sidebar-profile-panel__avatar-option {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 2px solid var(--spp-avatar-option-border);
+  border-radius: 50%;
+  background: var(--spp-avatar-option-bg);
+  overflow: hidden;
+  padding: 0;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+
+.sidebar-profile-panel__avatar-option img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.sidebar-profile-panel__avatar-option.is-active {
+  border-color: var(--spp-avatar-option-active-border);
+  box-shadow: var(--spp-avatar-option-active-shadow);
+  transform: translateY(-1px);
+}
+
+.sidebar-profile-panel__avatar-option.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sidebar-profile-panel__actions {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.sidebar-profile-panel__primary,
+.sidebar-profile-panel__secondary {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 16px;
+  cursor: pointer;
+  transition: transform 140ms ease, filter 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.sidebar-profile-panel__primary {
+  color: var(--spp-primary-text);
+  background: var(--spp-primary-bg);
+}
+
+.sidebar-profile-panel__primary:hover:enabled,
+.sidebar-profile-panel__secondary:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
+}
+
+.sidebar-profile-panel__secondary {
+  color: var(--spp-secondary-text);
+  background: var(--spp-secondary-bg);
+  border-color: var(--spp-secondary-border);
+}
+
+.sidebar-profile-panel__primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sidebar-profile-panel__hint,
+.sidebar-profile-panel__notice,
+.sidebar-profile-panel__error {
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sidebar-profile-panel__hint {
+  color: var(--spp-hint);
+}
+
+.sidebar-profile-panel__notice {
+  color: var(--spp-notice);
+}
+
+.sidebar-profile-panel__error {
+  color: var(--spp-error);
+}
+
+html[data-app-theme-resolved="dark"] .sidebar-profile-panel-layer {
+  --spp-overlay-base: rgba(5, 8, 14, 0.92);
+  --spp-overlay-accent-a: rgba(55, 104, 198, 0.18);
+  --spp-overlay-accent-b: rgba(255, 173, 92, 0.12);
+  --spp-panel-border: rgba(193, 213, 250, 0.3);
+  --spp-panel-bg: linear-gradient(165deg, #131a2d 0%, #1b2540 48%, #141a2e 100%);
+  --spp-panel-shadow: 0 32px 66px rgba(1, 4, 10, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --spp-text-strong: #f7faff;
+  --spp-text-muted: #d7e4ff;
+  --spp-handle-bg: rgba(237, 244, 255, 0.3);
+  --spp-close-bg: rgba(255, 255, 255, 0.12);
+  --spp-close-bg-hover: rgba(255, 255, 255, 0.22);
+  --spp-close-color: rgba(244, 248, 255, 0.94);
+  --spp-avatar-bg: rgba(255, 255, 255, 0.18);
+  --spp-avatar-color: #f7fbff;
+  --spp-avatar-shadow: 0 14px 26px rgba(8, 13, 24, 0.54), inset 0 1px 0 rgba(255, 255, 255, 0.38);
+  --spp-lobster-border: rgba(192, 213, 251, 0.32);
+  --spp-lobster-bg: rgba(255, 255, 255, 0.08);
+  --spp-lobster-bg-hover: rgba(255, 255, 255, 0.14);
+  --spp-lobster-color: rgba(229, 236, 251, 0.9);
+  --spp-tabs-bg: rgba(255, 255, 255, 0.06);
+  --spp-tabs-border: rgba(197, 216, 251, 0.16);
+  --spp-tab-border: rgba(198, 216, 255, 0.24);
+  --spp-tab-bg: rgba(255, 255, 255, 0.08);
+  --spp-tab-color: rgba(230, 238, 255, 0.86);
+  --spp-tab-hover-border: rgba(186, 211, 255, 0.62);
+  --spp-tab-active-border: rgba(140, 187, 255, 0.95);
+  --spp-tab-active-bg: linear-gradient(145deg, rgba(95, 155, 255, 0.32), rgba(69, 126, 236, 0.32));
+  --spp-tab-active-color: #ffffff;
+  --spp-avatar-row-bg: rgba(255, 255, 255, 0.06);
+  --spp-avatar-row-border: rgba(201, 219, 252, 0.16);
+  --spp-avatar-option-border: rgba(255, 255, 255, 0.22);
+  --spp-avatar-option-bg: rgba(255, 255, 255, 0.12);
+  --spp-avatar-option-active-border: #b7d6ff;
+  --spp-avatar-option-active-shadow: 0 10px 20px rgba(64, 129, 231, 0.48);
+  --spp-primary-bg: linear-gradient(140deg, #f8fcff, #deebff);
+  --spp-primary-text: #13223e;
+  --spp-secondary-bg: rgba(255, 255, 255, 0.12);
+  --spp-secondary-border: rgba(215, 228, 255, 0.34);
+  --spp-secondary-text: rgba(233, 241, 255, 0.92);
+  --spp-hint: rgba(226, 234, 252, 0.75);
+  --spp-notice: #b9e8cb;
+  --spp-error: #ffc8d9;
+}
+
+.sidebar-profile-panel__upload-input {
+  display: none;
+}
+
+.sidebar-profile-panel-fade-enter-active,
+.sidebar-profile-panel-fade-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.sidebar-profile-panel-fade-enter-active .sidebar-profile-panel,
+.sidebar-profile-panel-fade-leave-active .sidebar-profile-panel {
+  transition: transform 200ms ease, opacity 200ms ease;
+}
+
+.sidebar-profile-panel-fade-enter-from,
+.sidebar-profile-panel-fade-leave-to {
+  opacity: 0;
+}
+
+.sidebar-profile-panel-fade-enter-from .sidebar-profile-panel,
+.sidebar-profile-panel-fade-leave-to .sidebar-profile-panel {
+  opacity: 0;
+  transform: translateY(8px) scale(0.985);
 }
 
 .sidebar-nav {
@@ -9398,31 +16373,301 @@ watch(
   flex: 1;
 }
 
-.sidebar-bottom-actions {
+.sidebar-quick-actions {
   width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  gap: 7px;
+  align-items: center;
+  padding: 2px 0 4px;
 }
 
-.nav-item--secondary {
+.sidebar-quick-action-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.sidebar-quick-action {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--cp-border-200);
+  border-radius: 10px;
+  background: var(--cp-surface-elevated);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.46);
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.sidebar-quick-action:hover {
+  transform: translateY(-1px);
+  border-color: var(--cp-border-300);
+  background: var(--cp-hover-bg);
+}
+
+.sidebar-quick-action:focus-visible {
+  outline: none;
+  box-shadow: var(--cp-focus-ring);
+}
+
+.sidebar-quick-action__bubble {
+  --quick-icon: #485672;
+  --quick-bg-start: #ecf4ff;
+  --quick-bg-end: #b9cff9;
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--quick-icon);
+  background: linear-gradient(145deg, var(--quick-bg-start), var(--quick-bg-end));
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  box-shadow:
+    0 3px 8px rgba(66, 86, 124, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.66);
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+}
+
+.sidebar-quick-action__bubble svg {
+  position: relative;
+  z-index: 1;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-quick-action__label {
+  min-width: 0;
+  color: var(--cp-soft-accent-text-strong);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-quick-action--web-bar {
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+  padding: 0 10px;
+}
+
+.sidebar-quick-action--web-bar .sidebar-quick-action__label {
+  font-size: 10.5px;
+  letter-spacing: 0;
+}
+
+.sidebar-icon-browser__dot {
+  fill: currentColor;
+  stroke: none;
+}
+
+.sidebar-icon-file__stroke {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.sidebar-icon-file__card {
+  fill: #f8dfbf;
+  stroke: none;
+}
+
+.sidebar-icon-file__line1 {
+  stroke: #f29a12;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.sidebar-icon-file__line2 {
+  stroke: #2f2f2f;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.sidebar-icon-tee__stroke {
+  fill: #ffffff;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+.sidebar-icon-tee__tag {
+  fill: #f4c72e;
+  stroke: none;
+}
+
+.sidebar-quick-action.is-active {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-active-bg);
+  box-shadow:
+    0 7px 14px var(--cp-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.58);
+}
+
+.sidebar-quick-action.is-active .sidebar-quick-action__bubble {
+  transform: translateY(-1px) scale(1.05);
+  box-shadow:
+    0 7px 14px rgba(61, 83, 127, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  filter: saturate(1.08);
+}
+
+.sidebar-quick-action__bubble--theme {
+  --quick-icon: #4a3e75;
+  --quick-bg-start: #f3ebff;
+  --quick-bg-end: #c8b4ff;
+}
+
+.sidebar-quick-action__bubble--proxy {
+  --quick-icon: #2f597e;
+  --quick-bg-start: #e8f6ff;
+  --quick-bg-end: #b6ddff;
+}
+
+.sidebar-quick-action__bubble--logs {
+  --quick-icon: #4f477b;
+  --quick-bg-start: #f0eaff;
+  --quick-bg-end: #d4c7ff;
+}
+
+.sidebar-quick-action__bubble--settings {
+  --quick-icon: #2f6b55;
+  --quick-bg-start: #e8fff3;
+  --quick-bg-end: #b5efd4;
+}
+
+.sidebar-quick-action__bubble--web {
+  --quick-icon: #7a5424;
+  --quick-bg-start: #fff4d9;
+  --quick-bg-end: #ffd08b;
+}
+
+.sidebar-theme-popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 28;
+  width: 184px;
+  border-radius: 14px;
+  border: 1px solid var(--cp-border-200);
+  background: var(--cp-surface-elevated);
+  box-shadow:
+    0 16px 32px var(--cp-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.58);
+}
+
+.sidebar-theme-pop-enter-active,
+.sidebar-theme-pop-leave-active {
+  transition: opacity 180ms ease, transform 220ms cubic-bezier(0.2, 0.72, 0.24, 1);
+}
+
+.sidebar-theme-pop-enter-from,
+.sidebar-theme-pop-leave-to {
+  opacity: 0;
+  transform: translateY(6px) scale(0.96);
+}
+
+.sidebar-theme-switcher {
+  width: 100%;
   margin-bottom: 0;
+  padding: 8px;
+  border-radius: 12px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  display: grid;
+  gap: 8px;
 }
 
-.nav-item--legacy {
-  border: 1px solid #d9e5f7;
-  background: #f4f8ff;
-  color: #476792;
+.sidebar-theme-switcher__mode-row,
+.sidebar-theme-switcher__preset-row {
+  --switch-count: 2;
+  --switch-index: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--switch-count), minmax(0, 1fr));
+  align-items: stretch;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid var(--cp-border-200);
+  background: var(--cp-hover-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  isolation: isolate;
+  overflow: hidden;
 }
 
-.nav-item--legacy .nav-item__icon {
-  color: #476792;
+.sidebar-theme-switcher__preset-row {
+  --switch-count: 3;
 }
 
-.nav-item--legacy:hover {
-  background: #ebf3ff;
-  color: #2f5587;
+.sidebar-theme-switcher__mode-row::before,
+.sidebar-theme-switcher__preset-row::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 0;
+  width: calc((100% - 6px) / var(--switch-count));
+  height: calc(100% - 6px);
+  border-radius: 8px;
+  background: var(--cp-surface-elevated);
+  box-shadow:
+    0 4px 10px var(--cp-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  transform: translateX(calc(var(--switch-index) * 100%));
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+
+.sidebar-theme-switcher__mode,
+.sidebar-theme-switcher__preset {
+  position: relative;
+  z-index: 1;
+  height: 30px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--cp-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 4px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.sidebar-theme-switcher__mode:hover,
+.sidebar-theme-switcher__preset:hover {
+  color: var(--cp-text);
+}
+
+.sidebar-theme-switcher__mode:focus-visible,
+.sidebar-theme-switcher__preset:focus-visible {
+  outline: none;
+  box-shadow: var(--cp-focus-ring);
+}
+
+.sidebar-theme-switcher__mode-row:hover,
+.sidebar-theme-switcher__preset-row:hover {
+  border-color: var(--cp-border-strong);
+}
+
+.sidebar-theme-switcher__mode.is-active,
+.sidebar-theme-switcher__preset.is-active {
+  color: var(--cp-accent-dark);
 }
 
 .chat-list {
@@ -9437,6 +16682,253 @@ watch(
   border-bottom: 1px solid #e8ebf1;
   background: #fdfdfd;
   cursor: move;
+}
+
+html[data-app-theme-preset="frosted"] .window-shell {
+  position: relative;
+  isolation: isolate;
+  border-color: rgba(237, 228, 255, 0.74);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.44), rgba(255, 255, 255, 0.18));
+  box-shadow:
+    0 20px 48px rgba(123, 99, 162, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(28px) saturate(1.24);
+}
+
+html[data-app-theme-preset="frosted"] .window-shell::before {
+  content: "";
+  position: absolute;
+  inset: -18% -12%;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 44% 40%, rgba(240, 130, 201, 0.34), transparent 34%),
+    radial-gradient(circle at 58% 80%, rgba(255, 193, 148, 0.24), transparent 30%),
+    radial-gradient(circle at 18% 22%, rgba(194, 171, 255, 0.24), transparent 36%);
+  filter: blur(32px) saturate(1.1);
+}
+
+html[data-app-theme-preset="frosted"] .window-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.08) 45%, rgba(255, 255, 255, 0.24));
+  mix-blend-mode: screen;
+}
+
+html[data-app-theme-preset="frosted"] .chat-app {
+  position: relative;
+  z-index: 1;
+  background:
+    radial-gradient(circle at 8% 8%, rgba(255, 255, 255, 0.24), transparent 36%),
+    radial-gradient(circle at 92% 12%, rgba(255, 255, 255, 0.18), transparent 34%),
+    rgba(245, 240, 252, 0.44);
+}
+
+html[data-app-theme-preset="frosted"] .sidebar-icons {
+  border-right-color: rgba(223, 210, 246, 0.8);
+  background: rgba(245, 240, 252, 0.52);
+  backdrop-filter: blur(18px) saturate(1.16);
+}
+
+html[data-app-theme-preset="frosted"] .chat-list,
+html[data-app-theme-preset="frosted"] .chat-list__header {
+  background: rgba(255, 255, 255, 0.54);
+}
+
+html[data-app-theme-preset="frosted"] .sidebar-profile,
+html[data-app-theme-preset="frosted"] .sidebar-theme-switcher,
+html[data-app-theme-preset="frosted"] .chat-window__header,
+html[data-app-theme-preset="frosted"] .chat-window__composer,
+html[data-app-theme-preset="frosted"] .module-board,
+html[data-app-theme-preset="frosted"] .search-box,
+html[data-app-theme-preset="frosted"] .search-add,
+html[data-app-theme-preset="frosted"] .agent-pane-tabs,
+html[data-app-theme-preset="frosted"] .composer-panel {
+  backdrop-filter: blur(16px) saturate(1.16);
+  -webkit-backdrop-filter: blur(16px) saturate(1.16);
+}
+
+html[data-app-theme-preset="pure-white"] .window-shell {
+  border-color: #dce2e8;
+  background: #f1f3f5;
+  box-shadow:
+    0 16px 34px rgba(18, 24, 32, 0.11),
+    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  backdrop-filter: none;
+}
+
+html[data-app-theme-preset="pure-white"] .chat-app {
+  background: #fcfcfd;
+}
+
+html[data-app-theme-preset="pure-white"] .sidebar-icons {
+  border-right-color: #e5e9ee;
+  background: #f4f5f7;
+}
+
+html[data-app-theme-preset="pure-white"] .chat-list,
+html[data-app-theme-preset="pure-white"] .chat-list__header {
+  background: #f8fafc;
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .window-shell {
+  border-color: rgba(115, 105, 152, 0.72);
+  background: linear-gradient(145deg, rgba(46, 40, 65, 0.58), rgba(28, 24, 43, 0.48));
+  box-shadow:
+    0 20px 48px rgba(8, 7, 15, 0.34),
+    inset 0 1px 0 rgba(188, 163, 236, 0.14);
+  backdrop-filter: blur(28px) saturate(1.18);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .window-shell::before {
+  background:
+    radial-gradient(circle at 42% 38%, rgba(170, 99, 169, 0.34), transparent 36%),
+    radial-gradient(circle at 58% 82%, rgba(166, 116, 70, 0.28), transparent 30%),
+    radial-gradient(circle at 16% 18%, rgba(129, 110, 184, 0.3), transparent 34%);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .window-shell::after {
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02) 45%, rgba(255, 255, 255, 0.08));
+  mix-blend-mode: lighten;
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-app {
+  background:
+    radial-gradient(circle at 14% 10%, rgba(108, 93, 161, 0.26), transparent 40%),
+    radial-gradient(circle at 84% 8%, rgba(103, 88, 152, 0.22), transparent 42%),
+    rgba(27, 23, 40, 0.66);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .sidebar-icons {
+  border-right-color: rgba(123, 112, 164, 0.72);
+  background: rgba(30, 25, 45, 0.72);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-list,
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-list__header {
+  background: rgba(37, 31, 55, 0.74);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-window__header {
+  background: linear-gradient(180deg, rgba(46, 39, 67, 0.82), rgba(36, 31, 54, 0.78));
+  border-bottom-color: rgba(155, 141, 196, 0.4);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-agent-header__avatar {
+  color: #f4ecff;
+  background: linear-gradient(135deg, rgba(227, 171, 255, 0.78), rgba(183, 132, 232, 0.66));
+  box-shadow:
+    0 8px 18px rgba(168, 106, 224, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-window__composer {
+  background: linear-gradient(180deg, rgba(42, 35, 60, 0.82), rgba(34, 29, 52, 0.86));
+  border-top-color: rgba(154, 139, 196, 0.42);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .composer-panel {
+  border-color: rgba(166, 146, 206, 0.44);
+  background: linear-gradient(180deg, rgba(77, 66, 104, 0.62), rgba(49, 41, 73, 0.74));
+  box-shadow:
+    0 10px 22px rgba(11, 9, 20, 0.38),
+    inset 0 1px 0 rgba(241, 226, 255, 0.14);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .composer-panel:focus-within {
+  border-color: rgba(197, 168, 239, 0.62);
+  background: linear-gradient(180deg, rgba(89, 76, 118, 0.68), rgba(56, 47, 82, 0.8));
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .window-shell {
+  border-color: rgba(51, 56, 64, 0.94);
+  background: #0e1116;
+  box-shadow:
+    0 22px 46px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-app {
+  background: #141920;
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .sidebar-icons {
+  border-right-color: rgba(63, 69, 79, 0.9);
+  background: #101317;
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-list,
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-list__header {
+  background: #1a1f27;
+}
+
+html[data-app-theme-preset="pure-white"] .chat-window__header {
+  background: #fdfefe;
+  border-bottom-color: #e5e9ee;
+}
+
+html[data-app-theme-preset="pure-white"] .chat-window__composer {
+  background: #f8fafb;
+  border-top-color: #e5e9ee;
+}
+
+html[data-app-theme-preset="pure-white"] .composer-panel {
+  border-color: #d7dde5;
+  background: linear-gradient(180deg, #f7f9fb, #f1f4f6);
+}
+
+html[data-app-theme-preset="pure-white"] .composer-panel:focus-within {
+  border-color: #b7c0cb;
+  background: linear-gradient(180deg, #fbfcfd, #f4f7fa);
+}
+
+html[data-app-theme-preset="pure-white"] .chat-window__composer textarea::placeholder {
+  color: #929aa8;
+}
+
+html[data-app-theme-preset="pure-white"] .chat-agent-header__avatar {
+  color: #188e48;
+  background: linear-gradient(135deg, #e7f8ee, #ceeedc);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-window__header {
+  background: linear-gradient(180deg, #1d2229, #181d24);
+  border-bottom-color: rgba(74, 81, 92, 0.68);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-window__composer {
+  background: linear-gradient(180deg, #191e25, #151a21);
+  border-top-color: rgba(76, 83, 95, 0.72);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .composer-panel {
+  border-color: rgba(87, 95, 108, 0.76);
+  background: linear-gradient(180deg, rgba(58, 65, 76, 0.86), rgba(41, 48, 58, 0.92));
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .composer-panel:focus-within {
+  border-color: rgba(112, 123, 139, 0.84);
+  background: linear-gradient(180deg, rgba(65, 73, 86, 0.9), rgba(46, 54, 66, 0.96));
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-window__composer textarea {
+  color: #e6ebf2;
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-window__composer textarea:focus {
+  color: #f4f7fc;
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-window__composer textarea::placeholder {
+  color: rgba(163, 171, 183, 0.74);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-agent-header__avatar {
+  color: #d6f9e5;
+  background: linear-gradient(135deg, rgba(72, 146, 103, 0.72), rgba(50, 104, 77, 0.72));
 }
 
 .search-row {
@@ -9462,7 +16954,6 @@ watch(
 .search-add svg,
 .header-btn svg,
 .composer-input-action svg,
-.composer-btn svg,
 .composer-send svg {
   width: 16px;
   height: 16px;
@@ -9488,6 +16979,8 @@ watch(
 }
 
 .search-add {
+  width: 38px;
+  height: 38px;
   border: 1px solid #d9dee7;
   border-radius: 8px;
   background: #ffffff;
@@ -9497,10 +16990,55 @@ watch(
   cursor: pointer;
 }
 
+.search-add svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.2;
+}
+
 .search-add:hover {
   color: #3f6fd6;
   border-color: #bdcfee;
   background: #edf3ff;
+}
+
+.search-create-menu {
+  position: relative;
+}
+
+.search-create-menu__popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 24;
+  min-width: 132px;
+  border: 1px solid #d9dee7;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 12px 26px rgba(42, 62, 96, 0.16);
+  overflow: hidden;
+}
+
+.search-create-menu__item {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid #edf1f7;
+  background: transparent;
+  color: #4b5973;
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: left;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.search-create-menu__item:first-child {
+  border-top: 0;
+}
+
+.search-create-menu__item:hover {
+  background: #eef4ff;
+  color: #2f5fd2;
 }
 
 .agent-pane-tabs {
@@ -9539,6 +17077,213 @@ watch(
   background: transparent;
 }
 
+.agent-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0 4px;
+}
+
+.agent-group-list--flat {
+  gap: 6px;
+}
+
+.agent-flat-head {
+  min-height: 24px;
+  padding: 0 4px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #7f8ea8;
+}
+
+.agent-flat-head small {
+  font-size: 11px;
+  color: #95a4be;
+}
+
+.agent-group-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-group-section--flat {
+  gap: 0;
+}
+
+.agent-group-head {
+  min-height: 24px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #7987a1;
+}
+
+.agent-group-head strong {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.agent-group-head__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-group-head__actions small {
+  font-size: 11px;
+  color: #95a4be;
+}
+
+.agent-group-collapse {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d7deea;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #8594ad;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.agent-group-collapse svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 160ms ease;
+}
+
+.agent-group-collapse:hover {
+  color: #3f6fd6;
+  border-color: #bdcfee;
+  background: #edf3ff;
+}
+
+.agent-group-collapse.is-collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.agent-group-delete {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d7deea;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #8594ad;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.agent-group-delete svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-group-delete:hover {
+  color: #bd3a3a;
+  border-color: #e8b8b8;
+  background: #fff0f0;
+}
+
+.agent-group-add {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d7deea;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #8594ad;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.agent-group-add svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-group-add:hover {
+  color: #3f6fd6;
+  border-color: #bdcfee;
+  background: #edf3ff;
+}
+
+.agent-context-menu {
+  position: fixed;
+  z-index: 140;
+  min-width: 152px;
+  border: 1px solid #d8e3f1;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 14px 28px rgba(47, 74, 118, 0.2);
+  overflow: hidden;
+  padding: 4px 0;
+}
+
+.agent-context-menu__item {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid #ebf0f7;
+  background: transparent;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #324866;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.agent-context-menu__item:first-child {
+  border-top: 0;
+}
+
+.agent-context-menu__item:hover {
+  background: #f3f7ff;
+  color: #2f62b4;
+}
+
+.agent-context-menu__item:focus-visible {
+  outline: 2px solid #89b1f3;
+  outline-offset: -2px;
+}
+
+.agent-context-menu__item--danger {
+  color: #c04747;
+}
+
+.agent-context-menu__item--danger:hover {
+  background: #fff1f1;
+  color: #ad3232;
+}
+
 .agent-item {
   width: 100%;
   border: 1px solid transparent;
@@ -9547,11 +17292,15 @@ watch(
   text-align: left;
   padding: 8px;
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr) auto;
+  grid-template-columns: 46px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   cursor: pointer;
   transition: background 180ms ease, border-color 180ms ease;
+}
+
+.agent-item[draggable="true"] {
+  cursor: grab;
 }
 
 .agent-item + .agent-item {
@@ -9569,6 +17318,16 @@ watch(
   color: #2f446f;
 }
 
+.agent-item--dragging {
+  opacity: 0.58;
+  cursor: grabbing;
+}
+
+.agent-item--drag-over {
+  border-color: #95b3eb;
+  background: #eef4ff;
+}
+
 .agent-avatar {
   position: relative;
   width: 42px;
@@ -9581,6 +17340,68 @@ watch(
   background: #eaf0fb;
 }
 
+.group-avatar-stack {
+  --group-avatar-size: 22px;
+  --group-avatar-overlap: 7px;
+  --group-avatar-border-width: 1.5px;
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  height: var(--group-avatar-size);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.group-avatar-stack__item {
+  width: var(--group-avatar-size);
+  height: var(--group-avatar-size);
+  border-radius: 50%;
+  border: var(--group-avatar-border-width) solid #ffffff;
+  background: #dfe7f6;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  line-height: 1;
+  color: #4b5f85;
+  box-shadow: 0 1px 4px rgba(52, 71, 104, 0.16);
+}
+
+.group-avatar-stack__item + .group-avatar-stack__item {
+  margin-left: calc(var(--group-avatar-overlap) * -1);
+}
+
+.group-avatar-stack--md {
+  --group-avatar-size: 15px;
+  --group-avatar-overlap: 3px;
+  --group-avatar-border-width: 1.2px;
+}
+
+.group-avatar-stack__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.group-avatar-stack--lg {
+  --group-avatar-size: 16px;
+  --group-avatar-overlap: 3px;
+  --group-avatar-border-width: 1.25px;
+}
+
+.group-avatar-stack--xs {
+  --group-avatar-size: 14px;
+  --group-avatar-overlap: 4px;
+  --group-avatar-border-width: 1px;
+}
+
+.group-avatar-stack--xs .group-avatar-stack__item {
+  font-size: 9px;
+}
+
 .agent-avatar__image {
   width: 100%;
   height: 100%;
@@ -9590,7 +17411,8 @@ watch(
 }
 
 .agent-avatar--group {
-  border-radius: 8px;
+  border-radius: 50%;
+  overflow: hidden;
 }
 
 .status-dot {
@@ -9674,8 +17496,35 @@ watch(
   font-size: 11px;
 }
 
+.agent-group-chip {
+  max-width: 98px;
+  border: 1px solid #dae4f4;
+  border-radius: 999px;
+  background: #f5f8ff;
+  color: #62779b;
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 2px 7px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.agent-group-chip:hover {
+  border-color: #b8c9ea;
+  background: #eaf1ff;
+  color: #3f5f96;
+}
+
 .agent-item.active .agent-meta {
   color: #7388b3;
+}
+
+.agent-item.active .agent-group-chip {
+  border-color: #9fb7ea;
+  background: #dce8ff;
+  color: #4a618d;
 }
 
 .agent-unread {
@@ -9712,7 +17561,182 @@ watch(
 .chat-channel-pane {
   display: flex;
   flex-direction: column;
+  min-height: 100%;
+}
+
+.chat-channel-pane__bottom {
+  margin-top: auto;
+}
+
+.chat-channel-pane__chat-list {
+  margin: 12px 0;
+  flex: 1;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-channel-pane__chat-item {
+  width: 100%;
+  border: 1px solid #dce6f5;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 9px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.chat-channel-pane__chat-item:focus-visible {
+  outline: 2px solid rgba(232, 129, 74, 0.46);
+  outline-offset: 2px;
+}
+
+.chat-channel-pane__chat-item:hover {
+  border-color: #f7b28b;
+  background: #fff8f2;
+  box-shadow: 0 8px 18px rgba(232, 108, 32, 0.12);
+  transform: translateY(-1px);
+}
+
+.chat-channel-pane__chat-item.is-active {
+  border-color: #e9814a;
+  background: #fff3ea;
+  box-shadow: 0 10px 22px rgba(232, 108, 32, 0.14);
+}
+
+.chat-channel-pane__chat-item-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-channel-pane__chat-item-copy {
+  min-width: 0;
+}
+
+.chat-channel-pane__chat-item-copy strong {
+  display: block;
+  color: #2f3f5b;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-channel-pane__chat-item-copy small {
+  display: block;
+  margin-top: 2px;
+  color: #7286a7;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-channel-pane__chat-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-channel-pane__chat-item-config {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: 1px solid #d8e2f1;
+  border-radius: 7px;
+  background: #f7faff;
+  color: #6880a2;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease,
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.chat-channel-pane__chat-item-config svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.chat-channel-pane__chat-item-config:hover {
+  border-color: #f2b18c;
+  background: #fff3ea;
+  color: #d66c35;
+}
+
+.chat-channel-pane__chat-item:hover .chat-channel-pane__chat-item-config,
+.chat-channel-pane__chat-item:focus-within .chat-channel-pane__chat-item-config,
+.chat-channel-pane__chat-item.is-active .chat-channel-pane__chat-item-config {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.chat-channel-pane__chat-item-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #b8c6db;
+}
+
+.chat-channel-pane__chat-item-dot[data-tone="online"] {
+  background: #2f9e67;
+}
+
+.chat-channel-pane__chat-item-dot[data-tone="busy"] {
+  background: #f2a93b;
+}
+
+.chat-channel-pane__placeholder {
+  margin: 12px 0;
+  flex: 1;
+  min-height: 180px;
+  border: 1px dashed #d7e2f2;
+  border-radius: 12px;
+  background: rgba(244, 248, 255, 0.75);
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  text-align: center;
+  padding: 16px;
+}
+
+.chat-channel-pane__placeholder p {
+  margin: 0;
+  color: #3f5577;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.chat-channel-pane__placeholder small {
+  margin: 0;
+  color: #7287a7;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .chat-channel-pane__section {
@@ -9741,22 +17765,13 @@ watch(
   font-size: 11px;
 }
 
-.chat-channel-pane__hint {
-  margin: 0 0 8px;
-  color: #7a8ea9;
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.chat-channel-pane__configured-list,
 .chat-channel-pane__catalog-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
-.chat-channel-pane__configured-card,
-.chat-channel-pane__catalog-card {
+.chat-channel-pane__catalog-card--interactive {
   border: 1px solid #dce6f5;
   border-radius: 10px;
   background: #ffffff;
@@ -9765,9 +17780,6 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-}
-
-.chat-channel-pane__catalog-card--interactive {
   cursor: pointer;
   transition:
     border-color 160ms ease,
@@ -9815,40 +17827,21 @@ watch(
   color: #2f3f5b;
   font-size: 13px;
   line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.chat-channel-pane__identity p {
-  margin: 2px 0 0;
-  color: #7689a9;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.chat-channel-pane__configured-card small {
+.chat-channel-pane__status-dot {
   flex-shrink: 0;
-  color: #6f83a3;
-  font-size: 11px;
-  text-align: right;
-}
-
-.chat-channel-pane__tag {
-  flex-shrink: 0;
-  height: 22px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
-  border: 1px solid #d2dff1;
-  background: #f3f7ff;
-  color: #6d82a3;
-  padding: 0 8px;
-  display: grid;
-  place-items: center;
-  font-size: 11px;
-  font-weight: 700;
+  background: #b8c6db;
 }
 
-.chat-channel-pane__tag.is-configured {
-  border-color: #9fc2ff;
-  background: #e9f2ff;
-  color: #2d5fb3;
+.chat-channel-pane__status-dot.is-configured {
+  background: #2f9e67;
 }
 
 .chat-window {
@@ -9887,6 +17880,36 @@ watch(
   background: linear-gradient(135deg, #d8ecff, #b5d6ff);
 }
 
+.chat-agent-header__avatar.is-group {
+  color: #5a6b8a;
+  background: #eaf0fb;
+  box-shadow: inset 0 0 0 1px rgba(141, 165, 211, 0.34);
+  overflow: hidden;
+}
+
+.chat-agent-header__avatar.is-clickable {
+  cursor: pointer;
+  transition: box-shadow 150ms ease, transform 150ms ease;
+}
+
+.chat-agent-header__avatar.is-clickable:hover {
+  box-shadow: inset 0 0 0 1px rgba(74, 119, 196, 0.45);
+  transform: translateY(-1px);
+}
+
+.chat-agent-header__avatar.is-clickable:focus-visible {
+  outline: 2px solid #89b1f3;
+  outline-offset: 2px;
+}
+
+.chat-agent-header__avatar-image {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  display: block;
+}
+
 .chat-agent-header strong {
   display: block;
   font-size: 18px;
@@ -9902,9 +17925,56 @@ watch(
   font-size: 12px;
 }
 
+.chat-window__header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.chat-window__group-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+}
+
+.chat-window__group-summary--trigger {
+  border: 0;
+  background: transparent;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.chat-window__group-summary--trigger:hover,
+.chat-window__group-summary--trigger.is-active {
+  background: #edf4ff;
+}
+
+.chat-window__group-summary--trigger:focus-visible {
+  outline: 2px solid #89b1f3;
+  outline-offset: 1px;
+}
+
+.chat-window__group-summary-text {
+  color: #7b8da9;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-window__actions {
   display: flex;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .header-btn {
@@ -9996,6 +18066,177 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.chat-settings-sidebar__body--group {
+  padding-top: 4px;
+}
+
+.chat-settings-sidebar__body--logs {
+  padding: 8px 12px 12px;
+  gap: 8px;
+  min-height: 0;
+}
+
+.chat-settings-logs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-settings-logs-head strong {
+  color: #253450;
+  font-size: 16px;
+}
+
+.chat-settings-sidebar__body--logs .utility-modal__detail {
+  margin-bottom: 8px;
+}
+
+.chat-settings-sidebar__body--logs .utility-log-categories-wrap {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.chat-settings-sidebar__body--logs .utility-log-categories {
+  margin-bottom: 0;
+}
+
+.chat-settings-sidebar__body--logs .utility-log-filters {
+  margin-left: 0;
+}
+
+.chat-settings-sidebar__body--logs .utility-log-filter {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.chat-settings-sidebar__body--logs .utility-log-filter__select {
+  min-width: 0;
+  width: 100%;
+}
+
+.chat-settings-sidebar__body--logs .utility-log-layout {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.chat-settings-sidebar__body--logs .utility-log-list,
+.chat-settings-sidebar__body--logs .utility-error-list {
+  max-height: 240px;
+  height: auto;
+}
+
+.chat-group-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-group-info-card__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-group-info-card__header strong {
+  font-size: 20px;
+  line-height: 1.15;
+  color: #243954;
+  word-break: break-word;
+}
+
+.chat-group-info-card__header small {
+  font-size: 12px;
+  color: #7b8ea9;
+  white-space: nowrap;
+}
+
+.chat-group-info-card__section {
+  border-top: 1px solid #e7eef9;
+  padding-top: 10px;
+}
+
+.chat-group-info-card__section h5 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7a8ca8;
+}
+
+.chat-group-info-card__name {
+  min-height: 44px;
+  border: 1px solid #d3e0f4;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #ffffff;
+  color: #2b3f5c;
+  font-size: 14px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.chat-group-info-member-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 8px;
+}
+
+.chat-group-info-member {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chat-group-info-member__avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #e9f1ff;
+  color: #3b5d95;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.chat-group-info-member__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.chat-group-info-member strong {
+  width: 100%;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.2;
+  color: #2a3e5a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-group-info-member small {
+  font-size: 11px;
+  color: #7d90ad;
+  white-space: nowrap;
+}
+
+.chat-group-info-card__empty {
+  margin: 0;
+  border: 1px dashed #d5deec;
+  border-radius: 10px;
+  padding: 12px;
+  color: #7d8fa8;
+  font-size: 13px;
 }
 
 .chat-settings-agent-card {
@@ -10146,6 +18387,52 @@ watch(
   color: #2f6fd6;
 }
 
+.chat-settings-copy-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-settings-copy-field__value {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-settings-copy-field__button {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  background: transparent;
+  color: #6f86a9;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.chat-settings-copy-field__button svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.chat-settings-copy-field__button:hover {
+  color: #2f6fd6;
+  background: #eaf2ff;
+}
+
+.chat-settings-copy-field__button:focus-visible {
+  outline: 2px solid #86b5f3;
+  outline-offset: 1px;
+}
+
 .chat-settings-resource-quick {
   margin-top: 2px;
 }
@@ -10293,10 +18580,40 @@ watch(
   word-break: break-word;
 }
 
+.message-bubble__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.message-bubble__attachment {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border-radius: 999px;
+  border: 1px solid #d5e3f6;
+  background: #f2f7ff;
+  color: #47648f;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .message-row--user .message-bubble {
   color: #fff;
   border-color: transparent;
   background: linear-gradient(135deg, #5a9dff, #2f78e4);
+}
+
+.message-row--user .message-bubble__attachment {
+  border-color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.95);
 }
 
 .message-row--pending .message-bubble {
@@ -10409,6 +18726,13 @@ watch(
   stroke-linejoin: round;
 }
 
+.chat-empty-state__logo img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  display: block;
+}
+
 .chat-empty-state h3 {
   margin: 6px 0 0;
   font-size: 40px;
@@ -10427,7 +18751,7 @@ watch(
   margin-top: 8px;
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 10px;
 }
 
@@ -10521,108 +18845,207 @@ watch(
 }
 
 .composer-panel {
-  border: 1px solid #d6e1f1;
-  border-radius: 18px;
-  background: #ffffff;
-  padding: 10px;
+  position: relative;
+  border: 1px solid #d2d4d8;
+  border-radius: 20px;
+  background: linear-gradient(180deg, #f0f1f3, #eceef0);
+  padding: 10px 12px 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  box-shadow: 0 8px 18px rgba(64, 89, 128, 0.08);
+  gap: 6px;
+  transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.composer-panel:focus-within {
+  border-color: #bdc3cb;
+  background: linear-gradient(180deg, #f4f5f7, #eff1f4);
+  box-shadow: 0 5px 14px rgba(87, 103, 126, 0.12);
 }
 
 .composer-input-shell {
-  position: relative;
   min-width: 0;
 }
 
-.chat-window__composer input {
-  height: 44px;
+.chat-window__composer textarea {
+  display: block;
+  min-height: calc(1.55em * 3 + 2px);
+  max-height: calc(1.55em * 8 + 2px);
   border: 0;
-  border-radius: 12px;
+  border-radius: 10px;
   outline: 0;
-  background: #f6f9ff;
-  color: #22314d;
-  padding: 0 48px 0 40px;
+  background: transparent;
+  color: #2d2d2d;
+  padding: 2px 0 4px;
   font-size: 14px;
+  line-height: 1.55;
   width: 100%;
-  transition: box-shadow 120ms ease, background 120ms ease;
+  resize: none;
+  overflow-y: hidden;
+  transition: color 120ms ease;
 }
 
-.chat-window__composer input:focus {
-  background: #ffffff;
-  box-shadow: inset 0 0 0 1px #9ec1f7;
+.chat-window__composer textarea:focus {
+  color: #1f1f1f;
 }
 
-.chat-window__composer input:disabled {
-  background: #eef3fb;
-  color: #90a1bb;
+.chat-window__composer textarea:disabled {
+  color: #9a9a9a;
+}
+
+.chat-window__composer textarea::placeholder {
+  color: #9c9c9c;
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.composer-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid #c8d3e2;
+  background: #f6f9ff;
+  color: #4d6489;
+  padding: 0 8px;
+}
+
+.composer-attachment-chip__name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.composer-attachment-chip small {
+  color: #6d84a7;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.composer-attachment-chip button {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #6f86a8;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.composer-attachment-chip button:hover {
+  background: #e4edf9;
+  color: #4c6385;
+}
+
+.composer-error {
+  margin: 0;
+  color: #c43f2f;
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .composer-input-action {
-  position: absolute;
-  left: 6px;
-  top: 50%;
+  position: static;
   width: 28px;
   height: 28px;
-  transform: translateY(-50%);
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #7d93b3;
+  color: #6f8bb4;
   display: grid;
   place-items: center;
   cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 140ms ease, color 140ms ease;
 }
 
 .composer-input-action:hover {
-  color: #2e6fde;
-  background: #edf4ff;
+  color: #4f6f9f;
+  background: #dfe6f0;
+}
+
+.composer-input-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .composer-send {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border: 0;
   border-radius: 999px;
   display: grid;
   place-items: center;
   cursor: pointer;
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
+  position: static;
   color: #fff;
-  background: linear-gradient(135deg, #5a9dff, #2f78e4);
+  background: #8d9299;
+  flex-shrink: 0;
+  transition: background-color 140ms ease, opacity 140ms ease;
+}
+
+.composer-send:hover:not(:disabled) {
+  background: #747b84;
 }
 
 .composer-send:disabled {
   cursor: not-allowed;
-  background: #c8d6eb;
-  color: #eef4ff;
-  opacity: 0.55;
+  background: #c8c8c8;
+  color: #f4f4f4;
+  opacity: 0.8;
 }
 
 .composer-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 0 2px;
+  gap: 8px;
+  min-height: 30px;
+}
+
+.composer-meta__left,
+.composer-meta__right {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.composer-meta__right {
+  flex-shrink: 0;
 }
 
 .composer-model-chip {
-  height: 24px;
-  border-radius: 999px;
-  border: 1px solid #d5e1f4;
-  background: #f7f9fe;
-  color: #607796;
-  padding: 0 9px;
+  height: 28px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: #656565;
+  padding: 0 7px;
   display: inline-flex;
   align-items: center;
-  font-size: 11px;
-  font-weight: 600;
-  max-width: 65%;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  max-width: 220px;
+  overflow: hidden;
+}
+
+.composer-model-chip__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10631,13 +19054,12 @@ watch(
 .composer-model-chip--trigger {
   cursor: pointer;
   appearance: none;
-  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+  transition: background-color 140ms ease, color 140ms ease;
 }
 
 .composer-model-chip--trigger:hover:not(:disabled) {
-  border-color: #96bbe9;
-  background: #eaf2ff;
-  color: #2f5f98;
+  background: #dfe2e7;
+  color: #3d3d3d;
 }
 
 .composer-model-chip--trigger:disabled {
@@ -10645,28 +19067,44 @@ watch(
   opacity: 0.55;
 }
 
-.composer-btn {
-  height: 24px;
-  border: 1px solid #d5e1f4;
-  border-radius: 999px;
-  background: #f3f7ff;
-  color: #607796;
-  padding: 0 10px;
-  font-size: 11px;
+.composer-archive-chip {
+  height: 28px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: #676767;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+  transition: background-color 140ms ease, color 140ms ease, opacity 140ms ease;
 }
 
-.composer-btn:hover {
-  border-color: #96bbe9;
-  background: #eaf2ff;
-  color: #2f5f98;
+.composer-model-chip svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
-.composer-btn:disabled {
+.composer-archive-chip:hover:not(:disabled) {
+  background: #dfe2e7;
+  color: #424242;
+}
+
+.composer-archive-chip:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.52;
+}
+
+.composer-file-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .module-board {
@@ -10938,39 +19376,25 @@ watch(
 }
 
 .dashboard-stats-grid {
-  grid-template-columns: repeat(auto-fit, minmax(184px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .dashboard-status-grid {
-  grid-template-columns: repeat(auto-fit, minmax(236px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .dashboard-metric-card,
 .dashboard-status-card {
-  position: relative;
   border: 1px solid #d3e0f3;
   border-radius: 15px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
   padding: 13px 14px;
-  min-height: 108px;
+  min-height: 102px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  overflow: hidden;
+  justify-content: center;
+  gap: 7px;
   transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
-}
-
-.dashboard-metric-card::before,
-.dashboard-status-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 14px;
-  right: 14px;
-  height: 3px;
-  border-radius: 0 0 8px 8px;
-  background: linear-gradient(90deg, #8eb0de 0%, #6090cd 100%);
-  opacity: 0.44;
 }
 
 .dashboard-metric-card:hover,
@@ -10981,18 +19405,10 @@ watch(
 }
 
 .dashboard-metric-card--compact {
-  min-height: 96px;
+  min-height: 84px;
 }
 
-.dashboard-metric-card__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.dashboard-metric-card__head > span:first-child,
-.dashboard-status-card .dashboard-metric-card__head > span:first-child {
+.dashboard-metric-card__label {
   color: #6f89ad;
   font-size: 12px;
   font-weight: 600;
@@ -11010,109 +19426,25 @@ watch(
 }
 
 .dashboard-metric-card--compact strong {
-  font-size: 19px;
+  font-size: 21px;
 }
 
-.dashboard-metric-card p,
-.dashboard-status-card p {
-  margin: 0;
-  color: #5d7ca3;
-  font-size: 12px;
-  line-height: 1.42;
-  overflow-wrap: anywhere;
-}
-
-.dashboard-metric-card p {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-}
-
-.dashboard-card-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #c8daf3;
-  background: linear-gradient(160deg, #edf5ff, #e5f0ff);
-  color: #476b9b;
-  flex: 0 0 auto;
-}
-
-.dashboard-card-icon svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.dashboard-metric-card[data-tone="online"] {
+.dashboard-metric-card[data-tone="online"],
+.dashboard-status-card[data-tone="online"] {
   border-color: #bce7cd;
   background: linear-gradient(162deg, #f2fcf7, #f8fefb);
 }
 
-.dashboard-metric-card[data-tone="warn"] {
-  border-color: #f2dcad;
-  background: linear-gradient(162deg, #fff9ee, #fffdf6);
-}
-
-.dashboard-metric-card[data-tone="offline"] {
-  border-color: #efc7c7;
-  background: linear-gradient(162deg, #fff6f6, #fffafa);
-}
-
-.dashboard-status-card[data-tone="online"] {
-  border-color: #bce7cd;
-  background: linear-gradient(162deg, #f2fcf7, #f7fef9);
-}
-
+.dashboard-metric-card[data-tone="warn"],
 .dashboard-status-card[data-tone="warn"] {
   border-color: #f2dcad;
   background: linear-gradient(162deg, #fff9ee, #fffdf6);
 }
 
+.dashboard-metric-card[data-tone="offline"],
 .dashboard-status-card[data-tone="offline"] {
   border-color: #efc7c7;
   background: linear-gradient(162deg, #fff6f6, #fffafa);
-}
-
-.dashboard-metric-card[data-tone="online"]::before,
-.dashboard-status-card[data-tone="online"]::before {
-  background: linear-gradient(90deg, #5bc48f 0%, #2da472 100%);
-}
-
-.dashboard-metric-card[data-tone="warn"]::before,
-.dashboard-status-card[data-tone="warn"]::before {
-  background: linear-gradient(90deg, #f0b44d 0%, #dc8e1b 100%);
-}
-
-.dashboard-metric-card[data-tone="offline"]::before,
-.dashboard-status-card[data-tone="offline"]::before {
-  background: linear-gradient(90deg, #dd7e7e 0%, #cb5f5f 100%);
-}
-
-.dashboard-card-icon[data-tone="online"] {
-  border-color: #bfe7cf;
-  color: #2d8a61;
-  background: linear-gradient(160deg, #e9f9f0, #e3f7ec);
-}
-
-.dashboard-card-icon[data-tone="warn"] {
-  border-color: #f5deaf;
-  color: #9b6b17;
-  background: linear-gradient(160deg, #fff6e6, #fff3dd);
-}
-
-.dashboard-card-icon[data-tone="offline"] {
-  border-color: #f1cccc;
-  color: #a94a4a;
-  background: linear-gradient(160deg, #fff1f1, #ffeded);
 }
 
 .dashboard-status-card {
@@ -11129,6 +19461,11 @@ watch(
 }
 
 .dashboard-status-card p {
+  margin: 0;
+  color: #5d7ca3;
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
@@ -11249,9 +19586,73 @@ watch(
 }
 
 .recruitment-surface {
+  border-color: #e1e4ea;
   background:
-    radial-gradient(120% 68% at 0% 0%, rgba(66, 135, 229, 0.13) 0%, rgba(66, 135, 229, 0) 62%),
-    linear-gradient(162deg, rgba(252, 254, 255, 0.98), rgba(243, 249, 255, 0.95));
+    radial-gradient(120% 120% at 100% 0%, rgba(255, 255, 255, 0.76) 0%, rgba(255, 255, 255, 0) 58%),
+    linear-gradient(180deg, #f5f6f8, #eceef3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86), 0 16px 30px rgba(39, 44, 56, 0.08);
+}
+
+.recruitment-surface__toolbar {
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.recruitment-surface__toolbar .module-surface__search {
+  flex: 0 1 240px;
+  border-color: #d7dbe4;
+  background: #ffffff;
+  color: #2e3137;
+}
+
+.recruitment-surface__toolbar .module-surface__search:focus {
+  border-color: #b9c0ce;
+  box-shadow: 0 0 0 3px rgba(116, 126, 148, 0.18);
+}
+
+.recruitment-surface__toolbar .module-surface__meta {
+  border-color: #dbdfe7;
+  background: #ffffff;
+  color: #6a6f79;
+}
+
+.recruitment-surface__switch {
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid #d9dce4;
+  border-radius: 999px;
+  background: #f1f2f6;
+  padding: 3px;
+}
+
+.recruitment-surface__switch-item {
+  border: 0;
+  min-height: 30px;
+  border-radius: 999px;
+  background: transparent;
+  color: #868c98;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 12px;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.recruitment-surface__switch-item.active {
+  background: #ffffff;
+  color: #3a404b;
+  box-shadow: 0 5px 12px rgba(58, 64, 75, 0.15);
+}
+
+.recruitment-surface__switch-item:not(.active):hover {
+  color: #5d6370;
+}
+
+.recruitment-surface__switch-item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(129, 138, 157, 0.24);
 }
 
 .skill-market-surface {
@@ -11263,8 +19664,8 @@ watch(
 .marketplace-surface {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 18px 16px 20px;
+  gap: 14px;
+  padding: 14px;
   border-color: #e5e6e9;
   background: #f4f4f5;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76);
@@ -11273,23 +19674,24 @@ watch(
 .marketplace-toggle {
   width: fit-content;
   margin: 0 auto;
-  border-radius: 14px;
+  border-radius: 12px;
   border: 1px solid #dddddf;
   background: #ebebed;
-  padding: 3px;
+  padding: 2px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
 .marketplace-toggle__button {
-  height: 36px;
-  min-width: 124px;
+  height: 34px;
+  min-width: 112px;
   border: 0;
-  border-radius: 11px;
+  border-radius: 10px;
   background: transparent;
   color: #9a9ba0;
-  font-size: 18px;
+  font-size: 15px;
+  font-weight: 600;
   cursor: pointer;
   transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
@@ -11301,48 +19703,49 @@ watch(
 }
 
 .marketplan-grid {
-  margin-top: 4px;
+  margin-top: 2px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 12px;
 }
 
 .marketplan-card {
   border: 1px solid #ececee;
-  border-radius: 20px;
+  border-radius: 16px;
   background: #ffffff;
   color: #1f2228;
-  min-height: 340px;
-  padding: 20px 22px 22px;
+  min-height: 280px;
+  padding: 15px 16px 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   box-shadow: 0 8px 24px rgba(41, 42, 46, 0.05);
 }
 
 .marketplan-card__title {
   color: #2c2e33;
-  font-size: 37px;
-  font-weight: 500;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
 .marketplan-card__price {
   margin: 0;
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 8px;
 }
 
 .marketplan-card__price-currency {
   color: #1f2228;
-  font-size: 48px;
+  font-size: 30px;
   line-height: 1;
   font-weight: 600;
 }
 
 .marketplan-card__price-value {
   color: #1f2228;
-  font-size: 72px;
+  font-size: 48px;
   line-height: 1;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -11351,29 +19754,29 @@ watch(
 .marketplan-card__description {
   margin: 0;
   color: #8f9094;
-  font-size: 26px;
-  line-height: 1.52;
-  min-height: 122px;
+  font-size: 16px;
+  line-height: 1.5;
+  min-height: 96px;
 }
 
 .marketplan-card__points {
   margin: 0;
   color: #2f3034;
-  font-size: 35px;
-  font-weight: 500;
+  font-size: 19px;
+  font-weight: 600;
   letter-spacing: 0.01em;
 }
 
 .marketplan-card__action {
   margin-top: auto;
   width: 100%;
-  height: 68px;
+  height: 46px;
   border: 0;
-  border-radius: 20px;
+  border-radius: 12px;
   background: linear-gradient(135deg, #2e3036, #202228);
   color: #f7f7f8;
-  font-size: 33px;
-  font-weight: 500;
+  font-size: 18px;
+  font-weight: 600;
   cursor: pointer;
   transition: filter 160ms ease, transform 160ms ease;
 }
@@ -11390,8 +19793,13 @@ watch(
   flex-wrap: wrap;
 }
 
-.module-surface__toolbar--skills {
-  margin-top: 12px;
+.module-surface__toolbar--skills-top {
+  margin-top: 0;
+}
+
+.module-surface__toolbar--skills-actions {
+  margin-top: 10px;
+  justify-content: flex-end;
 }
 
 .module-surface__search {
@@ -11516,136 +19924,236 @@ watch(
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(245, 250, 255, 0.92));
 }
 
-.recruitment-division-list {
+.recruitment-division-filter {
   margin-top: 12px;
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recruitment-division-filter__item {
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid #d5d9e2;
+  border-radius: 999px;
+  background: #f2f4f8;
+  color: #6f7581;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.recruitment-division-filter__item:hover {
+  background: #eceff5;
+  color: #575d68;
+  border-color: #ced3de;
+}
+
+.recruitment-division-filter__item.active {
+  border-color: #cfd5e0;
+  background: #ffffff;
+  color: #3f4651;
+  box-shadow: 0 5px 12px rgba(56, 60, 70, 0.12);
+}
+
+.recruitment-division-filter__item:focus-visible {
+  outline: none;
+  border-color: #b8beca;
+  box-shadow: 0 0 0 3px rgba(124, 131, 146, 0.22);
+}
+
+.recruitment-division-list {
+  margin-top: 14px;
+  display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .recruitment-division {
-  border: 1px solid #d6e5f8;
-  border-radius: 14px;
-  background: linear-gradient(165deg, #ffffff, #f7fbff);
-  box-shadow: 0 12px 24px rgba(54, 82, 125, 0.08);
+  border: 1px solid #dde2ea;
+  border-radius: 16px;
   padding: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(252, 252, 253, 0.52));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 .recruitment-division__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #e3edf9;
+  gap: 10px;
 }
 
 .recruitment-division__header strong {
-  color: #284262;
-  font-size: 15px;
+  font-size: 14px;
+  color: #424955;
   letter-spacing: 0.01em;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.recruitment-division__header strong::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #4f88de, #2f66bf);
-  box-shadow: 0 0 0 4px rgba(79, 136, 222, 0.18);
 }
 
 .recruitment-division__header small {
   border-radius: 999px;
-  border: 1px solid #d4e2f6;
-  background: #f2f7ff;
-  color: #5f7da3;
+  border: 1px solid #dadfe7;
+  background: #f4f5f8;
+  color: #727985;
   font-size: 11px;
   font-weight: 700;
-  padding: 3px 10px;
+  padding: 2px 8px;
 }
 
 .recruitment-role-grid {
   margin-top: 10px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(188px, 1fr));
+  gap: 12px;
 }
 
-.recruitment-role-card {
-  border: 1px solid #d6e4f6;
-  border-radius: 12px;
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.98), rgba(246, 251, 255, 0.95));
-  padding: 11px;
+.recruitment-agent-card {
+  border: 1px solid #dfe3ea;
+  border-radius: 18px;
+  background: #f8f9fc;
+  box-shadow: 0 10px 18px rgba(32, 37, 47, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  padding: 14px;
+  min-height: 214px;
   display: flex;
   flex-direction: column;
   gap: 9px;
-  position: relative;
-  overflow: hidden;
   transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
 }
 
-.recruitment-role-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 14px;
-  right: 14px;
-  height: 3px;
-  border-radius: 0 0 8px 8px;
-  background: linear-gradient(90deg, #8ab2f2, #4d86dd);
-  opacity: 0.5;
+.recruitment-agent-card--clickable {
+  cursor: pointer;
 }
 
-.recruitment-role-card:hover {
+.recruitment-agent-card:hover {
+  border-color: #d2d7e0;
+  box-shadow: 0 14px 24px rgba(32, 37, 47, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   transform: translateY(-1px);
-  border-color: #c3d8f2;
-  box-shadow: 0 12px 22px rgba(58, 91, 140, 0.14);
 }
 
-.recruitment-role-card strong {
-  color: #233d5f;
-  font-size: 14px;
-  letter-spacing: 0.005em;
+.recruitment-agent-card--new {
+  background: #f1f3f7;
+  border-style: dashed;
+  border-color: #d3d7df;
 }
 
-.recruitment-role-card p {
-  margin: 4px 0 0;
-  color: #5f7ca1;
+.recruitment-agent-card__new-button {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  flex-direction: column;
+  gap: 8px;
+  color: #7a818f;
+}
+
+.recruitment-agent-card__new-plus {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid #d6dae3;
+  background: #ffffff;
+  color: #9ca2af;
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.recruitment-agent-card__new-title {
+  color: #5f6672;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+.recruitment-agent-card__new-hint {
+  margin: 0;
+  color: #89909b;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.4;
+}
+
+.recruitment-agent-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recruitment-agent-card__avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.66);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 8px 14px rgba(61, 70, 90, 0.14);
+}
+
+.recruitment-agent-card__division {
+  max-width: 94px;
+  min-height: 22px;
+  border-radius: 999px;
+  border: 1px solid #dce0e8;
+  background: rgba(255, 255, 255, 0.8);
+  color: #707683;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recruitment-agent-card__title {
+  color: #2e333d;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+
+.recruitment-agent-card__desc {
+  margin: 0;
+  color: #747a87;
+  font-size: 12px;
+  line-height: 1.42;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
 }
 
-.recruitment-role-card small {
-  display: inline-flex;
-  margin-top: 5px;
-  width: fit-content;
-  max-width: 100%;
-  border-radius: 999px;
-  border: 1px solid #d7e4f6;
-  background: #f7fbff;
-  color: #6782a5;
-  font-size: 11px;
-  padding: 3px 8px;
-  font-family: "SFMono-Regular", "Consolas", "Menlo", monospace;
-  word-break: break-word;
+.recruitment-agent-card__actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
 }
 
-.recruitment-role-card__action {
-  align-self: flex-start;
-  height: 32px;
-  border: 1px solid #84ace8;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #4f88de, #376fc8);
-  color: #ffffff;
-  padding: 0 12px;
+.recruitment-agent-card__chat {
+  width: 100%;
+  height: 34px;
+  border: 1px solid #bfe8d5;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #f3fff9, #e4f8ee);
+  color: #149066;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -11653,46 +20161,603 @@ watch(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  box-shadow: 0 8px 14px rgba(57, 95, 157, 0.24);
-  transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+  transition: filter 140ms ease, transform 140ms ease, box-shadow 140ms ease;
 }
 
-.recruitment-role-card__actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 9px;
-  border-top: 1px solid #e5edf8;
-}
-
-.recruitment-role-card__action--secondary {
-  border-color: #d0ddee;
-  background: #ffffff;
-  color: #4f668a;
-  box-shadow: none;
-}
-
-.recruitment-role-card__action:hover:not(:disabled) {
+.recruitment-agent-card__chat:hover {
+  filter: brightness(1.02);
   transform: translateY(-1px);
-  box-shadow: 0 10px 16px rgba(57, 95, 157, 0.28);
-  filter: brightness(1.03);
+  box-shadow: 0 8px 14px rgba(56, 143, 110, 0.2);
 }
 
-.recruitment-role-card__action--secondary:hover:not(:disabled) {
-  box-shadow: 0 8px 14px rgba(64, 93, 136, 0.12);
-}
-
-.recruitment-role-card__action:active:not(:disabled) {
+.recruitment-agent-card__chat:active {
   transform: translateY(0);
 }
 
-.recruitment-role-card__action:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-  box-shadow: none;
+.recruitment-agent-card__link {
+  width: fit-content;
+  min-height: 24px;
+  border: 0;
+  background: transparent;
+  color: #838b98;
+  font-size: 13px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.recruitment-agent-card__link::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  margin-right: 5px;
+  background: currentColor;
+  opacity: 0.82;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M8.5 11A3.5 3.5 0 1 1 12 7.5 3.5 3.5 0 0 1 8.5 11Zm0 2C5.47 13 3 15.47 3 18.5V20h11v-1.5C14 15.47 11.53 13 8.5 13Zm11-2V9h-2V7h-2v2h-2v2h2v2h2v-2Z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M8.5 11A3.5 3.5 0 1 1 12 7.5 3.5 3.5 0 0 1 8.5 11Zm0 2C5.47 13 3 15.47 3 18.5V20h11v-1.5C14 15.47 11.53 13 8.5 13Zm11-2V9h-2V7h-2v2h-2v2h2v2h2v-2Z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.recruitment-agent-card__link:hover {
+  color: #5d6573;
+}
+
+.create-employee-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 39, 0.52);
+  display: grid;
+  place-items: center;
+  z-index: 1210;
+}
+
+.create-employee-modal {
+  width: min(1080px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  border: 1px solid #d8e2f2;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 28px 64px rgba(20, 30, 52, 0.3);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.create-employee-modal__header {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid #e7edf8;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.create-employee-modal__header strong {
+  display: block;
+  color: #26344f;
+  font-size: 19px;
+}
+
+.create-employee-modal__header p {
+  margin: 6px 0 0;
+  color: #7a8ca6;
+  font-size: 12px;
+}
+
+.create-employee-modal__close {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #d2ddf0;
+  border-radius: 9px;
+  background: #f4f8ff;
+  color: #4f6486;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.create-employee-modal__content {
+  min-height: 0;
+  overflow: auto;
+  background: linear-gradient(180deg, #f9fbff 0%, #f2f6fc 100%);
+}
+
+.create-employee-modal__flow {
+  width: min(920px, 100%);
+  margin: 0 auto;
+  padding: 16px 18px 18px;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.create-employee-stepper {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.create-employee-stepper__track {
+  position: absolute;
+  top: 18px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 999px;
+  background: #d9e1ef;
+}
+
+.create-employee-stepper__track--active {
+  right: auto;
+  background: linear-gradient(90deg, #557fc9, #3f69b1);
+  transition: width 180ms ease;
+}
+
+.create-employee-stepper__item {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  flex: 1 1 0;
+}
+
+.create-employee-stepper__circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 2px solid #d4dde9;
+  background: #f3f6fb;
+  color: #7588a5;
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.create-employee-stepper__label {
+  color: #7b8ca4;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.create-employee-stepper__item.is-active .create-employee-stepper__circle {
+  border-color: #4b73bc;
+  background: #4b73bc;
+  color: #ffffff;
+}
+
+.create-employee-stepper__item.is-active .create-employee-stepper__label {
+  color: #3d64a8;
+}
+
+.create-employee-stepper__item.is-completed .create-employee-stepper__circle {
+  border-color: #319266;
+  background: #319266;
+  color: #ffffff;
+}
+
+.create-employee-modal__status {
+  margin: 0;
+  border-radius: 9px;
+  border: 1px solid #dbe7f6;
+  background: #f7fbff;
+  color: #4f678a;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.create-employee-modal__status--error {
+  border-color: #f2cbcb;
+  background: #fff3f3;
+  color: #a53a3a;
+}
+
+.create-employee-modal__status--notice {
+  border-color: #d2e4ff;
+  background: #eff5ff;
+  color: #3f5f96;
+}
+
+.create-employee-modal__summary {
+  border: 1px solid #d8e3f3;
+  border-radius: 12px;
+  background: linear-gradient(160deg, #ffffff 0%, #f4f8ff 100%);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.create-employee-modal__summary-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  background: linear-gradient(145deg, #4f89de, #376fc9);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.create-employee-modal__summary-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.create-employee-modal__summary-copy strong {
+  display: block;
+  color: #2c4263;
+  font-size: 14px;
+}
+
+.create-employee-modal__summary-copy p {
+  margin: 2px 0 0;
+  color: #7288a8;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.create-employee-modal__summary-badge {
+  height: 24px;
+  border: 1px solid #d2ddf0;
+  border-radius: 999px;
+  background: #f7fbff;
+  color: #587296;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.create-employee-modal__step {
+  border: 1px solid #dbe5f4;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(56, 87, 135, 0.08);
+  padding: 14px;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.create-employee-modal__step h4 {
+  margin: 0;
+  color: #293958;
+  font-size: 18px;
+}
+
+.create-employee-modal__field {
+  display: grid;
+  gap: 7px;
+}
+
+.create-employee-modal__field > span {
+  color: #607491;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.create-employee-modal__field input,
+.create-employee-modal__field textarea,
+.create-employee-modal__field select,
+.create-employee-task-input-row input {
+  width: 100%;
+  border: 1px solid #cedbf0;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #304766;
+  font-size: 13px;
+  padding: 0 10px;
+  outline: none;
+}
+
+.create-employee-modal__field input,
+.create-employee-modal__field select {
+  height: 36px;
+}
+
+.create-employee-modal__field textarea {
+  min-height: 76px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.create-employee-modal__field input:focus,
+.create-employee-modal__field textarea:focus,
+.create-employee-modal__field select:focus,
+.create-employee-task-input-row input:focus {
+  border-color: #8baee6;
+  box-shadow: 0 0 0 3px rgba(94, 134, 201, 0.17);
+}
+
+.create-employee-modal__ghost {
+  height: 32px;
+  width: fit-content;
+  border: 1px solid #d5deed;
+  border-radius: 9px;
+  background: #f7faff;
+  color: #587095;
+  font-size: 12px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.create-employee-identity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(154px, 1fr));
+  gap: 8px;
+}
+
+.create-employee-identity-card {
+  border: 1px solid #d9e3f2;
+  border-radius: 12px;
+  background: #f9fbff;
+  text-align: left;
+  padding: 10px;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+}
+
+.create-employee-identity-card strong {
+  color: #2f4568;
+  font-size: 13px;
+}
+
+.create-employee-identity-card small {
+  color: #7a8ea9;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.create-employee-identity-card__icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.create-employee-identity-card.is-selected {
+  border-color: #83a7e3;
+  background: #edf4ff;
+  box-shadow: inset 0 0 0 1px rgba(93, 130, 194, 0.26);
+}
+
+.create-employee-task-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.create-employee-task-examples button {
+  min-height: 28px;
+  border: 1px solid #d3dfef;
+  border-radius: 999px;
+  background: #f7fbff;
+  color: #5f789b;
+  font-size: 12px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.create-employee-task-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.create-employee-task-input-row button {
+  min-width: 70px;
+  height: 36px;
+  border: 1px solid #88ade8;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #4e89df, #376fc9);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.create-employee-task-list {
+  border: 1px solid #e2e8f2;
+  border-radius: 10px;
+  background: #fbfcff;
+  padding: 9px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 42px;
+}
+
+.create-employee-task-list__empty {
+  color: #8b98aa;
+  font-size: 12px;
+}
+
+.create-employee-task-chip {
+  border: 1px solid #ccdaee;
+  border-radius: 999px;
+  background: #eff5ff;
+  color: #42648f;
+  font-size: 12px;
+  padding: 4px 8px 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.create-employee-task-chip button {
+  width: 17px;
+  height: 17px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(67, 101, 146, 0.14);
+  color: #41618e;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.create-employee-slider-row {
+  border: 1px solid #dfe8f5;
+  border-radius: 11px;
+  background: #f9fbff;
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.create-employee-slider-row label {
+  display: grid;
+  gap: 5px;
+}
+
+.create-employee-slider-row label > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.create-employee-slider-row small {
+  color: #7990b0;
+  font-size: 11px;
+}
+
+.create-employee-slider-row strong {
+  color: #3d629e;
+  font-size: 12px;
+}
+
+.create-employee-slider-row input[type="range"] {
+  width: 100%;
+}
+
+.create-employee-style-preview {
+  margin: 0;
+  border: 1px solid #dde7f6;
+  border-radius: 10px;
+  background: #f7fbff;
+  color: #667d9f;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.create-employee-rule-list {
+  border: 1px solid #e0e7f3;
+  border-radius: 10px;
+  background: #fbfcff;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.create-employee-rule-list label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.create-employee-rule-list input {
+  margin-top: 2px;
+}
+
+.create-employee-rule-list span {
+  color: #5e7698;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.create-employee-modal__actions {
+  border-top: 1px solid #e8eff9;
+  padding-top: 12px;
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.create-employee-modal__actions button {
+  min-width: 120px;
+  height: 34px;
+  border: 1px solid #8cb1ea;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #4f89de, #376fc9);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.create-employee-modal__actions button.is-secondary {
+  border-color: #d2dfef;
+  background: #f8fbff;
+  color: #55729d;
+}
+
+.create-employee-modal__actions button.is-primary {
+  border-color: #309369;
+  background: linear-gradient(180deg, #2ca674, #20845c);
+}
+
+@media (max-width: 1080px) {
+  .create-employee-modal {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+  }
+}
+
+@media (max-width: 760px) {
+  .create-employee-modal__header {
+    padding: 12px 12px 10px;
+  }
+
+  .create-employee-modal__flow {
+    padding: 10px;
+  }
+
+  .create-employee-stepper__label {
+    font-size: 11px;
+  }
+
+  .create-employee-identity-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .create-employee-modal__summary {
+    flex-wrap: wrap;
+  }
+
+  .create-employee-modal__summary-badge {
+    margin-left: 48px;
+  }
+
+  .create-employee-modal__actions button {
+    min-width: 0;
+    flex: 1 1 0;
+  }
 }
 
 .role-workflow-detail-backdrop {
@@ -11922,68 +20987,41 @@ watch(
 }
 
 .skill-market-category-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(146px, 1fr));
-  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #c8d9ef;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #e8f0fb, #dde8f8);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .skill-market-category-chip {
-  border: 1px solid #d4e4f6;
-  border-radius: 12px;
-  background: linear-gradient(160deg, #ffffff, #f5faff);
-  padding: 9px 10px;
-  text-align: left;
+  min-height: 32px;
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: #4c6894;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
   cursor: pointer;
-  position: relative;
-  overflow: hidden;
-  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
-}
-
-.skill-market-category-chip::after {
-  content: "";
-  position: absolute;
-  top: -32px;
-  right: -32px;
-  width: 74px;
-  height: 74px;
-  border-radius: 50%;
-  background: radial-gradient(circle at center, rgba(79, 136, 222, 0.16), rgba(79, 136, 222, 0));
-  pointer-events: none;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
 }
 
 .skill-market-category-chip:hover {
-  transform: translateY(-1px);
-  border-color: #c0d8f5;
-  box-shadow: 0 10px 18px rgba(60, 95, 144, 0.12);
-}
-
-.skill-market-category-chip strong {
-  display: block;
-  color: #2b4568;
-  font-size: 13px;
-  letter-spacing: 0.01em;
-}
-
-.skill-market-category-chip small {
-  display: block;
-  margin-top: 3px;
-  color: #7089a9;
-  font-size: 11px;
-  line-height: 1.45;
+  background: rgba(255, 255, 255, 0.62);
+  color: #36537f;
 }
 
 .skill-market-category-chip.active {
-  border-color: #8ab2ed;
-  background: linear-gradient(160deg, #f5faff, #eaf3ff);
-  box-shadow: 0 12px 20px rgba(62, 99, 151, 0.18);
-}
-
-.skill-market-category-chip.active strong {
-  color: #234a7f;
-}
-
-.skill-market-category-chip.active small {
-  color: #5578a4;
+  border-color: #bfd3ef;
+  background: rgba(255, 255, 255, 0.98);
+  color: #2f4a73;
+  box-shadow: 0 6px 14px rgba(84, 118, 176, 0.2);
 }
 
 .skill-market-grid {
@@ -12004,18 +21042,6 @@ watch(
   position: relative;
   overflow: hidden;
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
-}
-
-.skill-market-card-v2::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 14px;
-  right: 14px;
-  height: 3px;
-  border-radius: 0 0 8px 8px;
-  background: linear-gradient(90deg, #62ae8d 0%, #3c8f6e 100%);
-  opacity: 0.5;
 }
 
 .skill-market-card-v2:hover {
@@ -12363,7 +21389,8 @@ watch(
 }
 
 .module-surface__button:focus-visible,
-.recruitment-role-card__action:focus-visible,
+.recruitment-agent-card--clickable:focus-visible,
+.recruitment-agent-card__chat:focus-visible,
 .skill-market-card-v2__action:focus-visible,
 .skill-market-pagination__button:focus-visible,
 .skill-market-pagination__page:focus-visible,
@@ -12689,6 +21716,393 @@ watch(
 .task-board-card__actions button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.chat-user-group-modal {
+  width: min(980px, calc(100vw - 40px));
+  max-height: calc(100vh - 42px);
+  border-radius: 18px;
+  border: 1px solid #2e3442;
+  background: #141923;
+  box-shadow: 0 30px 66px rgba(5, 8, 14, 0.58);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.chat-user-group-modal__header {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #242b39;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chat-user-group-modal__header strong {
+  display: block;
+  color: #f1f5ff;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.chat-user-group-modal__header p {
+  margin: 8px 0 0;
+  color: #8692ab;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.chat-user-group-modal__close {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #343d4f;
+  border-radius: 8px;
+  background: #1c2331;
+  color: #95a2bb;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.chat-user-group-modal__close:hover {
+  border-color: #46526a;
+  background: #242c3c;
+  color: #c1ccde;
+}
+
+.chat-user-group-modal__body {
+  min-height: 0;
+  padding: 14px 16px 16px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: 12px;
+}
+
+.chat-user-group-modal__panes {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.chat-user-group-modal__pane {
+  min-height: 0;
+  border: 1px solid #252d3b;
+  border-radius: 14px;
+  background: #181f2d;
+  padding: 12px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.chat-user-group-modal__search {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  height: 38px;
+  border: 1px solid #343d4c;
+  border-radius: 11px;
+  background: #1a2231;
+  padding: 0 10px;
+}
+
+.chat-user-group-modal__search svg {
+  width: 15px;
+  height: 15px;
+  fill: #6f7d95;
+}
+
+.chat-user-group-modal__search input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #dde5f5;
+  font-size: 13px;
+  outline: none;
+}
+
+.chat-user-group-modal__search input::placeholder {
+  color: #6f7d95;
+}
+
+.chat-user-group-modal__field span {
+  color: #a6b4cc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-user-group-modal__field input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid #353f4e;
+  border-radius: 10px;
+  background: #1a2231;
+  color: #e5ecfb;
+  font-size: 13px;
+  padding: 0 12px;
+  outline: 0;
+}
+
+.chat-user-group-modal__field input:focus {
+  border-color: #4b5c79;
+  box-shadow: 0 0 0 3px rgba(77, 118, 190, 0.2);
+}
+
+.chat-user-group-modal__members-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-user-group-modal__members-head > span {
+  color: #9aa8c0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-user-group-modal__members-head > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-user-group-modal__members-head button {
+  height: 25px;
+  border: 1px solid #354050;
+  border-radius: 7px;
+  background: #202939;
+  color: #97a5bd;
+  font-size: 11px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.chat-user-group-modal__members-empty {
+  border: 1px dashed #3a4558;
+  border-radius: 8px;
+  background: #151d2a;
+  color: #7987a0;
+  font-size: 12px;
+  text-align: center;
+  padding: 13px 10px;
+}
+
+.chat-user-group-modal__selected-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-user-group-modal__selected-head span {
+  color: #9aa8c0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-user-group-modal__selected-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: flex-start;
+  gap: 8px;
+}
+
+.chat-user-group-modal__member-row {
+  width: 100%;
+  border: 1px solid #30394a;
+  border-radius: 10px;
+  background: #1a2231;
+  padding: 9px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.chat-user-group-modal__member-row:hover {
+  border-color: #41506a;
+  background: #20293a;
+}
+
+.chat-user-group-modal__member-row.is-selected {
+  border-color: #2f8e69;
+  background: rgba(31, 59, 49, 0.68);
+  box-shadow: inset 0 0 0 1px rgba(70, 176, 132, 0.22);
+}
+
+.chat-user-group-modal__member-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid #3b4659;
+  background: #233046;
+  color: #d5deef;
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.chat-user-group-modal__member-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.chat-user-group-modal__member-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.chat-user-group-modal__member-row strong {
+  display: block;
+  color: #e5ecfb;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-user-group-modal__member-row small {
+  display: block;
+  color: #7f8da5;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-user-group-modal__member-action {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid #3f4b61;
+  color: #9aa8c2;
+  font-size: 15px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-user-group-modal__member-row.is-selected .chat-user-group-modal__member-action {
+  border-color: #2f8e69;
+  background: #1b6d4e;
+  color: #dcfff0;
+}
+
+.chat-user-group-modal__selected-row {
+  border: 1px solid #30394a;
+  border-radius: 10px;
+  background: #1a2231;
+  padding: 9px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.chat-user-group-modal__selected-remove {
+  width: 23px;
+  height: 23px;
+  border: 1px solid #3d475a;
+  border-radius: 50%;
+  background: #202939;
+  color: #8d9ab1;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat-user-group-modal__selected-remove:hover {
+  border-color: #4f5d75;
+  color: #c0cade;
+}
+
+.chat-user-group-modal__error {
+  margin: 0;
+  border-radius: 10px;
+  border: 1px solid #6b3e4d;
+  background: rgba(117, 54, 74, 0.24);
+  color: #f4b7c9;
+  font-size: 12px;
+  padding: 9px 10px;
+}
+
+.chat-user-group-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.chat-user-group-modal__actions button {
+  min-width: 90px;
+  height: 34px;
+  border: 1px solid #3a4457;
+  border-radius: 9px;
+  background: #212a3a;
+  color: #9aa7bf;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat-user-group-modal__actions button:last-child {
+  border-color: #2f8e69;
+  background: linear-gradient(180deg, #2da977, #21855d);
+  color: #ebfff6;
+}
+
+@media (max-width: 980px) {
+  .chat-user-group-modal {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .chat-user-group-modal__header {
+    padding: 14px 14px 10px;
+  }
+
+  .chat-user-group-modal__header strong {
+    font-size: 22px;
+  }
+
+  .chat-user-group-modal__header p {
+    font-size: 12px;
+  }
+
+  .chat-user-group-modal__body {
+    padding: 10px;
+    grid-template-rows: minmax(0, 1fr) auto auto;
+  }
+
+  .chat-user-group-modal__panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-user-group-modal__pane {
+    min-height: 260px;
+  }
+
+  .chat-user-group-modal__actions {
+    justify-content: stretch;
+  }
+
+  .chat-user-group-modal__actions button {
+    flex: 1 1 auto;
+  }
 }
 
 .related-resource-modal-backdrop {
@@ -13246,8 +22660,205 @@ watch(
   width: min(760px, calc(100vw - 40px));
 }
 
+.channel-pane-config-modal__title-wrap {
+  min-width: 0;
+}
+
+.channel-pane-config-modal__title-wrap.is-guided {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.channel-pane-config-modal__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #d7e2f1;
+  background: #ffffff;
+  padding: 5px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.channel-pane-binding-modal {
+  width: min(560px, calc(100vw - 40px));
+}
+
+.channel-pane-binding-form {
+  gap: 12px;
+}
+
+.channel-pane-binding-form__actions {
+  align-items: center;
+}
+
+.channel-pane-binding-form__buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-pane-binding-form__submit {
+  border-color: #f86a2b;
+  background: #f86a2b;
+  color: #ffffff;
+}
+
+.channel-pane-binding-form__submit:disabled {
+  opacity: 0.6;
+}
+
 .channel-pane-config-form {
   gap: 12px;
+}
+
+.channel-pane-config-form--guided {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  gap: 14px;
+}
+
+.channel-pane-guide {
+  display: grid;
+  gap: 12px;
+}
+
+.channel-pane-guide__steps {
+  border: 1px solid #dfe8f6;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 10px 12px;
+}
+
+.channel-pane-guide__steps strong {
+  display: block;
+  color: #2f3f5b;
+  font-size: 13px;
+}
+
+.channel-pane-guide__steps ol {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #637898;
+  font-size: 12px;
+}
+
+.channel-pane-guide__steps li + li {
+  margin-top: 5px;
+}
+
+.channel-pane-guide__install-card {
+  border: 1px solid #d4e0f1;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.channel-pane-guide__install-card strong {
+  color: #2f3f5b;
+  font-size: 15px;
+}
+
+.channel-pane-guide__install-card p {
+  margin: 0;
+  color: #6d809f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.channel-pane-guide__install-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-pane-guide__install-primary,
+.channel-pane-guide__install-secondary {
+  height: 34px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.channel-pane-guide__install-primary {
+  border: 1px solid #f86a2b;
+  background: #f86a2b;
+  color: #ffffff;
+}
+
+.channel-pane-guide__install-secondary {
+  border: 1px solid #d6dfef;
+  background: #f4f8ff;
+  color: #4d607f;
+}
+
+.channel-pane-guide__install-primary:disabled,
+.channel-pane-guide__install-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.channel-pane-guide__credential-section {
+  display: grid;
+  gap: 10px;
+}
+
+.channel-pane-guide__credential-section strong {
+  color: #2f3f5b;
+  font-size: 15px;
+}
+
+.channel-pane-guide__credential-section p {
+  margin: -4px 0 0;
+  color: #7b8ca7;
+  font-size: 12px;
+}
+
+.channel-pane-guide__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.channel-pane-guide__actions--dingtalk {
+  justify-content: space-between;
+}
+
+.channel-pane-config-form__link {
+  border: 0;
+  background: transparent;
+  color: #6a7f9f;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.channel-pane-config-form__link:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.channel-pane-guide__authorize {
+  width: 100%;
+  height: 36px;
+  border: 1px solid #7ea7e4;
+  border-radius: 10px;
+  background: #eef5ff;
+  color: #355f97;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.channel-pane-guide__authorize:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .channel-pane-config-form__steps {
@@ -13315,10 +22926,26 @@ watch(
   justify-content: flex-end;
 }
 
+.channel-pane-config-form__actions--split {
+  justify-content: stretch;
+}
+
+.channel-pane-config-form__actions--split > button {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 36px;
+}
+
 .channel-pane-config-form__submit {
   border-color: #8eb1ec;
   background: #eaf3ff;
   color: #36598f;
+}
+
+.channel-pane-config-form--guided .channel-pane-config-form__submit {
+  border-color: #3d7ee4;
+  background: #3e82ed;
+  color: #ffffff;
 }
 
 .related-memory-layout {
@@ -14429,6 +24056,56 @@ watch(
   gap: 6px;
 }
 
+.utility-log-categories-wrap {
+  margin-bottom: 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.utility-log-categories-wrap .utility-log-categories {
+  margin-bottom: 0;
+}
+
+.utility-log-filters {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.utility-log-filter {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.utility-log-filter span {
+  color: #6f83a3;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.utility-log-filter__select {
+  height: 28px;
+  min-width: 130px;
+  border: 1px solid #d8e3f4;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: #4e6384;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  outline: 0;
+}
+
+.utility-log-filter__select:focus {
+  border-color: #9dbdea;
+  box-shadow: 0 0 0 3px rgba(76, 133, 213, 0.14);
+}
+
 .utility-log-category {
   height: 28px;
   border: 1px solid #d8e3f4;
@@ -14478,12 +24155,22 @@ watch(
   padding: 8px 9px;
   text-align: left;
   cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
 .utility-log-item.is-active,
 .utility-error-item.is-active {
   border-color: #93b8ed;
   background: #edf5ff;
+  box-shadow: 0 6px 16px rgba(57, 88, 138, 0.12);
+}
+
+.utility-log-item:hover,
+.utility-error-item:hover {
+  border-color: #b8cdee;
 }
 
 .utility-log-item__head,
@@ -14557,6 +24244,13 @@ watch(
   word-break: break-all;
 }
 
+.utility-log-item p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .utility-log-item small,
 .utility-error-item small {
   display: block;
@@ -14566,87 +24260,184 @@ watch(
 }
 
 .utility-log-detail {
-  border: 1px solid #e2eaf6;
-  border-radius: 10px;
+  border: 1px solid #d9e4f6;
+  border-radius: 12px;
   background: #ffffff;
-  padding: 10px 11px;
+  padding: 11px;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  gap: 8px;
+  gap: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
 }
 
 .utility-log-detail__head {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: #ffffff;
-  padding-bottom: 2px;
+  border: 1px solid #e2eaf7;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f7faff 0%, #ffffff 100%);
+  padding: 10px;
 }
 
 .utility-log-detail__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  gap: 12px;
+}
+
+.utility-log-detail__title-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.utility-log-detail__route {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
   gap: 8px;
+}
+
+.utility-log-detail__method {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #e8f2ff;
+  color: #275287;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .utility-log-detail__header strong {
   color: #2f3f5b;
   font-size: 13px;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .utility-log-detail__header p {
-  margin: 4px 0 0;
-  color: #6f83a3;
+  margin: 0;
+  border: 1px solid #e4ebf8;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 5px 8px;
+  color: #657c9f;
   font-size: 11px;
+  line-height: 1.35;
+  word-break: break-all;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
 }
 
-.utility-log-detail__stats {
+.utility-log-detail__meta {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.utility-log-detail__stats span {
+.utility-log-detail__meta-item {
   border-radius: 999px;
-  background: #eff4fc;
-  color: #5a6d8d;
+  background: #edf3fc;
+  color: #546d92;
   font-size: 11px;
+  font-weight: 600;
   padding: 2px 8px;
+}
+
+.utility-log-detail__header-side {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+}
+
+.utility-log-detail__header .utility-log-status {
+  min-width: 58px;
+  padding: 3px 9px;
+}
+
+.utility-log-detail__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, max-content));
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.utility-log-detail__stat {
+  min-width: 0;
+  border: 1px solid #dbe7f8;
+  border-radius: 8px;
+  background: #f7faff;
+  padding: 5px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.utility-log-detail__stat small {
+  color: #6f84a6;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.utility-log-detail__stat strong {
+  color: #2f405d;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 .utility-log-detail-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-top: 8px;
+  border: 1px solid #e2eaf7;
+  border-radius: 9px;
+  background: #f7faff;
+  padding: 4px;
 }
 
 .utility-log-detail-tab {
   height: 28px;
-  border: 1px solid #d8e3f4;
-  border-radius: 8px;
-  padding: 0 10px;
-  background: #f8fbff;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 11px;
+  background: transparent;
   color: #6a7d9c;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
 }
 
 .utility-log-detail-tab.is-active {
-  border-color: #9dbdea;
-  background: #eaf3ff;
-  color: #345986;
+  border-color: #c6d8f2;
+  background: #ffffff;
+  color: #305581;
+  box-shadow: 0 1px 3px rgba(84, 109, 146, 0.18);
 }
 
 .utility-log-detail__content-wrap {
   position: relative;
   margin: 0;
-  border: 1px solid #e1e8f6;
-  border-radius: 8px;
-  background: #f8fbff;
+  border: 1px solid #dde7f7;
+  border-radius: 10px;
+  background: #f7faff;
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -14697,6 +24488,659 @@ watch(
   -webkit-user-select: text;
 }
 
+/* Sidebar-derived palette harmonization */
+.window-shell {
+  border-color: var(--cp-border-200);
+  background: var(--cp-shell-bg);
+}
+
+.chat-app {
+  background: var(--cp-shell-bg-soft);
+}
+
+.sidebar-icons {
+  border-right-color: var(--cp-border-200);
+  background: var(--cp-sidebar-bg);
+}
+
+.sidebar-profile {
+  background: var(--cp-surface-elevated);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.84);
+}
+
+.sidebar-profile__avatar {
+  background: linear-gradient(135deg, var(--cp-accent), var(--cp-accent-strong));
+  box-shadow: 0 4px 14px var(--cp-accent-shadow);
+}
+
+.sidebar-profile__avatar.is-group {
+  background: var(--cp-hover-bg);
+  box-shadow: inset 0 0 0 1px var(--cp-border);
+}
+
+.sidebar-profile__meta small {
+  color: var(--cp-text-muted);
+}
+
+.sidebar-profile__meta strong {
+  color: var(--cp-text-strong);
+}
+
+.nav-item {
+  color: var(--cp-text-muted);
+}
+
+.nav-item__icon {
+  color: var(--cp-icon);
+}
+
+.nav-item__badge {
+  background: var(--cp-soft-accent-bg);
+  color: var(--cp-soft-accent-text);
+}
+
+.nav-item:hover {
+  color: var(--cp-text);
+  background: var(--cp-hover-bg);
+}
+
+.nav-item.active {
+  color: var(--cp-text-strong);
+  background: var(--cp-surface-elevated);
+  box-shadow:
+    0 8px 18px var(--cp-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.nav-item.active .nav-item__icon {
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--cp-accent), var(--cp-accent-strong));
+}
+
+.nav-item.active .nav-item__badge {
+  background: var(--cp-soft-accent-bg-strong);
+  color: var(--cp-soft-accent-text-strong);
+}
+
+.chat-list {
+  border-right-color: var(--cp-border-200);
+  background: var(--cp-surface);
+}
+
+.chat-list__header {
+  border-bottom-color: var(--cp-border-200);
+  background: var(--cp-surface);
+}
+
+.search-box {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  color: var(--cp-text-muted);
+}
+
+.search-box input {
+  color: var(--cp-text);
+}
+
+.search-box input::placeholder {
+  color: var(--cp-text-muted);
+}
+
+.search-add {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  color: var(--cp-icon);
+}
+
+.search-add:hover {
+  color: var(--cp-accent-dark);
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+}
+
+.search-create-menu__popover {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  box-shadow: 0 14px 26px var(--cp-shadow);
+}
+
+.search-create-menu__item {
+  border-top-color: var(--cp-border-200);
+  color: var(--cp-text);
+}
+
+.search-create-menu__item:hover {
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-strong);
+}
+
+.agent-pane-tabs {
+  border-color: var(--cp-border);
+  background: var(--cp-hover-bg);
+}
+
+.agent-pane-tab {
+  color: var(--cp-text-muted);
+}
+
+.agent-pane-tab.active {
+  color: var(--cp-text-strong);
+  background: var(--cp-surface-elevated);
+  box-shadow: 0 3px 10px var(--cp-shadow);
+}
+
+.agent-context-menu {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  box-shadow: 0 14px 28px var(--cp-shadow);
+}
+
+.agent-context-menu__item {
+  border-top-color: var(--cp-border-200);
+  color: var(--cp-text);
+}
+
+.agent-context-menu__item:hover {
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-strong);
+}
+
+.agent-item:hover {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.agent-item.active {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-active-bg);
+  color: var(--cp-text-strong);
+}
+
+.agent-item--drag-over {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-active-bg);
+}
+
+.agent-group-collapse,
+.agent-group-delete,
+.agent-group-add {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  color: var(--cp-icon);
+}
+
+.agent-group-collapse:hover,
+.agent-group-delete:hover,
+.agent-group-add:hover {
+  color: var(--cp-accent-dark);
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+}
+
+.agent-group-delete {
+  color: var(--cp-text-muted);
+}
+
+.agent-group-delete:hover {
+  color: #c04747;
+  border-color: #e0b7b7;
+  background: #fff1f1;
+}
+
+.agent-context-menu__item--danger {
+  color: #c04747;
+}
+
+.agent-context-menu__item--danger:hover {
+  background: #fff1f1;
+  color: #b53838;
+}
+
+.agent-avatar {
+  color: var(--cp-text);
+  background: var(--cp-hover-bg);
+}
+
+.agent-flat-head,
+.agent-flat-head small {
+  color: var(--cp-text-muted);
+}
+
+.group-avatar-stack__item {
+  border-color: var(--cp-surface);
+  background: var(--cp-hover-bg);
+  color: var(--cp-text-muted);
+}
+
+.agent-channel {
+  background: var(--cp-soft-accent-bg);
+  color: var(--cp-soft-accent-text);
+}
+
+.agent-item.active .agent-channel {
+  background: var(--cp-active-bg-strong);
+  color: var(--cp-text);
+}
+
+.agent-preview,
+.agent-status,
+.agent-meta,
+.list-empty {
+  color: var(--cp-text-muted);
+}
+
+.agent-item.active .agent-preview,
+.agent-item.active .agent-status,
+.agent-item.active .agent-meta {
+  color: var(--cp-text);
+}
+
+.agent-unread {
+  background: var(--cp-accent);
+}
+
+.agent-item.active .agent-unread {
+  background: var(--cp-accent-strong);
+}
+
+.list-empty--compact {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.chat-channel-pane__chat-item,
+.chat-channel-pane__catalog-card--interactive {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.chat-channel-pane__chat-item:hover,
+.chat-channel-pane__catalog-card--interactive:hover {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+  box-shadow: 0 8px 18px var(--cp-shadow);
+}
+
+.chat-channel-pane__chat-item.is-active {
+  border-color: var(--cp-accent);
+  background: var(--cp-active-bg);
+  box-shadow: 0 10px 22px var(--cp-shadow);
+}
+
+.chat-channel-pane__chat-item-copy strong,
+.chat-channel-pane__identity strong,
+.chat-channel-pane__head h4,
+.chat-window__header strong,
+.chat-empty-action__content strong {
+  color: var(--cp-text-strong);
+}
+
+.chat-channel-pane__chat-item-copy small,
+.chat-channel-pane__head small,
+.chat-channel-pane__placeholder small,
+.chat-empty-state p,
+.chat-empty-action__content small,
+.chat-agent-header p {
+  color: var(--cp-text-muted);
+}
+
+.chat-channel-pane__chat-item-config {
+  border-color: var(--cp-border);
+  background: var(--cp-surface);
+  color: var(--cp-text-muted);
+}
+
+.chat-channel-pane__chat-item-config:hover {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-dark);
+}
+
+.chat-channel-pane__chat-item-dot,
+.chat-channel-pane__status-dot {
+  background: var(--cp-border-strong);
+}
+
+.chat-channel-pane__placeholder {
+  border-color: var(--cp-border);
+  background: var(--cp-hover-bg);
+}
+
+.chat-channel-pane__placeholder p {
+  color: var(--cp-text);
+}
+
+.chat-channel-pane__section {
+  border-color: var(--cp-border);
+  background: var(--cp-surface);
+}
+
+.chat-channel-pane__icon-shell {
+  background: var(--cp-hover-bg);
+  color: var(--cp-text);
+}
+
+.chat-window,
+.chat-window__header,
+.chat-window__content,
+.chat-window__composer,
+.module-board {
+  background: var(--cp-surface);
+}
+
+.chat-window__header {
+  border-bottom-color: var(--cp-border-200);
+}
+
+.chat-window__composer {
+  border-top-color: var(--cp-border-200);
+}
+
+.chat-agent-header__avatar {
+  color: var(--cp-accent-dark);
+  background: linear-gradient(135deg, #e0ecff, #c5dafe);
+}
+
+.chat-agent-header__avatar.is-group {
+  color: var(--cp-text-muted);
+  background: var(--cp-hover-bg);
+  box-shadow: inset 0 0 0 1px var(--cp-border);
+}
+
+.chat-window__group-summary-text {
+  color: var(--cp-text-muted);
+}
+
+.chat-window__group-summary--trigger:hover,
+.chat-window__group-summary--trigger.is-active {
+  background: var(--cp-hover-bg);
+}
+
+.chat-agent-header__avatar.is-clickable:hover {
+  box-shadow: inset 0 0 0 1px var(--cp-border-strong);
+}
+
+.header-btn {
+  color: var(--cp-icon);
+}
+
+.header-btn:hover,
+.header-btn.is-active {
+  color: var(--cp-accent-dark);
+  background: var(--cp-hover-bg);
+}
+
+.chat-settings-sidebar {
+  border-left-color: var(--cp-border-200);
+  background: linear-gradient(180deg, var(--cp-surface) 0%, var(--cp-shell-bg-soft) 100%);
+}
+
+.chat-settings-sidebar__header {
+  border-bottom-color: var(--cp-border-200);
+}
+
+.chat-settings-sidebar__close {
+  color: var(--cp-text-muted);
+}
+
+.chat-settings-sidebar__close:hover {
+  color: var(--cp-accent-dark);
+  background: var(--cp-hover-bg);
+}
+
+.chat-settings-logs-head strong {
+  color: var(--cp-text-strong);
+}
+
+.chat-group-info-card__header strong {
+  color: var(--cp-text-strong);
+}
+
+.chat-group-info-card__header small,
+.chat-group-info-card__section h5,
+.chat-group-info-member small,
+.chat-group-info-card__empty {
+  color: var(--cp-text-muted);
+}
+
+.chat-group-info-card__section {
+  border-top-color: var(--cp-border);
+}
+
+.chat-group-info-card__name {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  color: var(--cp-text);
+}
+
+.chat-group-info-member__avatar {
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-dark);
+}
+
+.chat-group-info-member strong {
+  color: var(--cp-text);
+}
+
+.chat-group-info-card__empty {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.chat-empty-state {
+  color: var(--cp-text);
+}
+
+.chat-empty-state__logo,
+.chat-empty-action {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.chat-empty-action:hover {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+  box-shadow: 0 8px 16px var(--cp-shadow);
+}
+
+.chat-empty-action__icon {
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-dark);
+}
+
+.composer-panel {
+  border-color: var(--cp-border);
+  background: linear-gradient(180deg, var(--cp-panel-bg-top), var(--cp-panel-bg-bottom));
+}
+
+.composer-panel:focus-within {
+  border-color: var(--cp-border-strong);
+  background: linear-gradient(180deg, var(--cp-surface-elevated), var(--cp-panel-bg-top));
+  box-shadow: 0 8px 16px var(--cp-shadow);
+}
+
+.chat-window__composer textarea {
+  color: var(--cp-text);
+}
+
+.chat-window__composer textarea:focus {
+  color: var(--cp-text-strong);
+}
+
+.chat-window__composer textarea:disabled,
+.chat-window__composer textarea::placeholder {
+  color: var(--cp-text-muted);
+}
+
+.composer-attachment-chip {
+  border-color: var(--cp-border);
+  background: var(--cp-hover-bg);
+  color: var(--cp-text);
+}
+
+.composer-attachment-chip small,
+.composer-attachment-chip button,
+.composer-input-action,
+.composer-model-chip,
+.composer-archive-chip {
+  color: var(--cp-text-muted);
+}
+
+.composer-attachment-chip button:hover,
+.composer-input-action:hover,
+.composer-model-chip--trigger:hover:not(:disabled),
+.composer-archive-chip:hover:not(:disabled) {
+  background: var(--cp-active-bg);
+  color: var(--cp-text);
+}
+
+.composer-send {
+  background: var(--cp-accent);
+}
+
+.composer-send:hover:not(:disabled) {
+  background: var(--cp-accent-strong);
+}
+
+.composer-send:disabled {
+  background: #c5cfdf;
+  color: #eff3fa;
+}
+
+.utility-log-filter span {
+  color: var(--cp-text-muted);
+}
+
+.utility-log-filter__select {
+  border-color: var(--cp-border);
+  background: var(--cp-surface);
+  color: var(--cp-text);
+}
+
+.utility-log-filter__select:focus {
+  border-color: var(--cp-border-strong);
+  box-shadow: var(--cp-focus-ring);
+}
+
+.utility-log-detail {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.utility-log-detail__head {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.utility-log-detail__method {
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-dark);
+}
+
+.utility-log-detail__header p,
+.utility-log-detail__meta-item,
+.utility-log-detail__stat,
+.utility-log-detail-tabs {
+  border-color: var(--cp-border);
+  background: var(--cp-surface);
+}
+
+.utility-log-detail__header strong,
+.utility-log-detail__stat strong {
+  color: var(--cp-text);
+}
+
+.utility-log-detail__header p,
+.utility-log-detail__meta-item,
+.utility-log-detail__stat small {
+  color: var(--cp-text-muted);
+}
+
+.utility-log-detail__content-wrap {
+  border-color: var(--cp-border);
+  background: var(--cp-surface);
+}
+
+.utility-log-detail-tab {
+  border-color: transparent;
+  background: transparent;
+  color: var(--cp-text-muted);
+}
+
+.utility-log-detail-tab.is-active {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+  color: var(--cp-text);
+}
+
+.utility-log-copy {
+  border-color: var(--cp-border);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--cp-text-muted);
+}
+
+.utility-log-copy:hover {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-dark);
+}
+
+.utility-log-status {
+  color: var(--cp-accent-dark);
+  background: var(--cp-hover-bg);
+}
+
+.feishu-connect-modal__scan-button,
+.feishu-connect-manual__actions button,
+.channel-pane-binding-form__submit {
+  border-color: var(--cp-accent);
+  background: var(--cp-accent);
+  color: #ffffff;
+}
+
+.feishu-connect-modal__scan-button:hover:not(:disabled),
+.feishu-connect-manual__actions button:hover:not(:disabled),
+.channel-pane-binding-form__submit:hover:not(:disabled) {
+  border-color: var(--cp-accent-strong);
+  background: var(--cp-accent-strong);
+}
+
+.feishu-connect-manual__field input:focus {
+  border-color: var(--cp-border-strong);
+  box-shadow: var(--cp-focus-ring);
+}
+
+html[data-app-theme-resolved="dark"] .sidebar-profile {
+  box-shadow: inset 0 1px 0 rgba(173, 191, 226, 0.12);
+}
+
+html[data-app-theme-resolved="dark"] .nav-item.active {
+  box-shadow:
+    0 8px 18px var(--cp-shadow),
+    inset 0 1px 0 rgba(173, 191, 226, 0.14);
+}
+
+html[data-app-theme-resolved="dark"] .utility-log-copy {
+  background: rgba(24, 31, 45, 0.9);
+}
+
+html[data-app-theme-resolved="dark"] .composer-send:disabled {
+  background: rgba(92, 109, 142, 0.72);
+  color: rgba(227, 236, 250, 0.68);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-window__composer textarea::placeholder {
+  color: rgba(203, 188, 230, 0.72);
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-window__composer textarea {
+  color: #e7dcfb;
+}
+
+html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-window__composer textarea:focus {
+  color: #f4ecff;
+}
+
 @media (max-width: 1100px) {
   .chat-app {
     grid-template-columns: 186px 280px minmax(0, 1fr);
@@ -14707,11 +25151,11 @@ watch(
   }
 
   .dashboard-stats-grid {
-    grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .dashboard-status-grid {
-    grid-template-columns: repeat(auto-fit, minmax(208px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .chat-window__content--settings-open {
@@ -14731,8 +25175,8 @@ watch(
   }
 
   .marketplace-surface {
-    padding: 14px;
-    gap: 16px;
+    padding: 12px;
+    gap: 12px;
   }
 
   .marketplan-grid {
@@ -14740,33 +25184,33 @@ watch(
   }
 
   .marketplan-card {
-    min-height: 300px;
+    min-height: 250px;
   }
 
   .marketplan-card__title {
-    font-size: 32px;
+    font-size: 21px;
   }
 
   .marketplan-card__price-currency {
-    font-size: 42px;
+    font-size: 26px;
   }
 
   .marketplan-card__price-value {
-    font-size: 64px;
+    font-size: 42px;
   }
 
   .marketplan-card__description {
-    font-size: 20px;
-    min-height: 100px;
+    font-size: 14px;
+    min-height: 84px;
   }
 
   .marketplan-card__points {
-    font-size: 30px;
+    font-size: 17px;
   }
 
   .marketplan-card__action {
-    height: 62px;
-    font-size: 28px;
+    height: 42px;
+    font-size: 16px;
   }
 
   .task-board-creator {
@@ -14785,6 +25229,17 @@ watch(
 @media (max-width: 880px) {
   .chat-page {
     padding: 0;
+  }
+
+  .task-reminder-stack {
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    width: auto;
+  }
+
+  .task-reminder-toast {
+    width: 100%;
   }
 
   .window-shell {
@@ -14815,6 +25270,110 @@ watch(
 
   .sidebar-nav {
     align-items: center;
+  }
+
+  .sidebar-quick-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    padding: 2px 0 2px;
+  }
+
+  .sidebar-quick-action {
+    min-height: 28px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 8px;
+    gap: 0;
+  }
+
+  .sidebar-quick-action--web-bar {
+    grid-column: auto;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .sidebar-quick-action__bubble {
+    width: 16px;
+    height: 16px;
+    border-radius: 5px;
+    box-shadow:
+      0 4px 8px rgba(49, 64, 94, 0.16),
+      inset 0 1px 0 rgba(255, 255, 255, 0.52);
+  }
+
+  .sidebar-quick-action__label {
+    display: none;
+  }
+
+  .sidebar-quick-action__bubble svg {
+    width: 10px;
+    height: 10px;
+    stroke-width: 2;
+  }
+
+  .sidebar-theme-popover {
+    left: calc(100% + 8px);
+    bottom: 0;
+    width: 170px;
+  }
+
+  .sidebar-profile-panel-layer {
+    padding: 10px;
+  }
+
+  .sidebar-profile-panel {
+    width: min(360px, calc(100vw - 18px));
+    max-height: calc(100vh - 20px);
+    padding: 14px 12px 16px;
+    border-radius: 22px;
+    gap: 10px;
+  }
+
+  .sidebar-profile-panel__title {
+    font-size: 20px;
+  }
+
+  .sidebar-profile-panel__avatar {
+    width: 76px;
+    height: 76px;
+  }
+
+  .sidebar-profile-panel__name {
+    font-size: 26px;
+  }
+
+  .sidebar-profile-panel__lobster {
+    font-size: 14px;
+    padding: 5px 12px;
+  }
+
+  .sidebar-profile-panel__tabs {
+    gap: 6px;
+    padding: 5px;
+  }
+
+  .sidebar-profile-panel__tab {
+    height: 34px;
+    border-radius: 10px;
+    font-size: 11px;
+  }
+
+  .sidebar-profile-panel__avatar-row {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .sidebar-theme-switcher {
+    padding: 6px;
+    gap: 6px;
+  }
+
+  .sidebar-theme-switcher__mode,
+  .sidebar-theme-switcher__preset {
+    height: 24px;
+    font-size: 10px;
+    letter-spacing: 0;
+    padding: 0 2px;
   }
 
   .nav-item {
@@ -14848,8 +25407,29 @@ watch(
     padding: 8px;
   }
 
-  .chat-window__composer input {
-    height: 42px;
+  .chat-window__composer textarea {
+    min-height: calc(1.55em * 3 + 18px);
+  }
+
+  .composer-meta {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .composer-meta__left {
+    flex-wrap: wrap;
+  }
+
+  .composer-meta__right {
+    margin-left: auto;
+  }
+
+  .composer-model-chip {
+    max-width: 160px;
+  }
+
+  .composer-attachment-chip__name {
+    max-width: 120px;
   }
 
   .chat-empty-state h3 {
@@ -14879,6 +25459,16 @@ watch(
 
   .chat-settings-agent-card__identity strong {
     font-size: 19px;
+  }
+
+  .chat-group-info-member-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .chat-group-info-member__avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
   }
 
   .related-resource-modal {
@@ -14950,6 +25540,38 @@ watch(
 
   .channel-pane-config-form__secret-toggle {
     width: 100%;
+  }
+
+  .channel-pane-config-modal__title-wrap.is-guided {
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .channel-pane-config-modal__icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    padding: 4px;
+  }
+
+  .channel-pane-guide__install-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .channel-pane-guide__install-primary,
+  .channel-pane-guide__install-secondary {
+    width: 100%;
+  }
+
+  .channel-pane-guide__actions--dingtalk {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .channel-pane-config-form__actions--split {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .related-resource-modal__header {
@@ -15082,6 +25704,37 @@ watch(
     min-height: 280px;
   }
 
+  .utility-log-detail__header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .utility-log-detail__header-side {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .utility-log-categories-wrap {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .utility-log-filters {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .utility-log-filter {
+    flex: 1 1 180px;
+  }
+
+  .utility-log-filter__select {
+    width: 100%;
+    min-width: 0;
+  }
+
   .module-board__header--dashboard {
     flex-direction: column;
     align-items: flex-start;
@@ -15175,6 +25828,33 @@ watch(
     white-space: normal;
   }
 
+  .recruitment-surface__toolbar {
+    align-items: stretch;
+  }
+
+  .recruitment-surface__switch {
+    margin-right: 0;
+    width: 100%;
+  }
+
+  .recruitment-surface__switch-item {
+    flex: 1 1 0;
+  }
+
+  .recruitment-surface__toolbar .module-surface__search {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+
+  .recruitment-division-filter {
+    width: 100%;
+    gap: 6px;
+  }
+
+  .recruitment-division-filter__item {
+    padding: 5px 11px;
+  }
+
   .module-surface__select,
   .module-surface__button {
     flex: 1 1 auto;
@@ -15206,19 +25886,32 @@ watch(
     grid-template-columns: repeat(5, minmax(220px, 1fr));
   }
 
-  .recruitment-role-card__actions,
+  .recruitment-role-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .recruitment-agent-card {
+    min-height: 200px;
+  }
+
+  .recruitment-agent-card__actions,
   .skill-market-card-v2__actions {
     width: 100%;
   }
 
-  .recruitment-role-card__action,
+  .recruitment-agent-card__chat,
   .skill-market-card-v2__action {
     flex: 1 1 auto;
     justify-content: center;
   }
 
   .skill-market-category-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    padding: 9px;
+  }
+
+  .skill-market-category-chip {
+    padding: 6px 12px;
   }
 
   .marketplace-toggle {
@@ -15228,10 +25921,9 @@ watch(
   .marketplace-toggle__button {
     flex: 1 1 0;
     min-width: 0;
-    font-size: 16px;
+    font-size: 14px;
   }
 
-  .recruitment-role-grid,
   .skill-market-grid,
   .marketplan-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -15239,34 +25931,34 @@ watch(
 
   .marketplan-card {
     min-height: 0;
-    padding: 16px;
-    gap: 11px;
+    padding: 13px;
+    gap: 8px;
   }
 
   .marketplan-card__title {
-    font-size: 27px;
+    font-size: 18px;
   }
 
   .marketplan-card__price-currency {
-    font-size: 34px;
+    font-size: 22px;
   }
 
   .marketplan-card__price-value {
-    font-size: 52px;
+    font-size: 34px;
   }
 
   .marketplan-card__description {
-    font-size: 16px;
+    font-size: 13px;
     min-height: 0;
   }
 
   .marketplan-card__points {
-    font-size: 24px;
+    font-size: 16px;
   }
 
   .marketplan-card__action {
-    height: 52px;
-    font-size: 22px;
+    height: 38px;
+    font-size: 14px;
   }
 
   .module-board {
