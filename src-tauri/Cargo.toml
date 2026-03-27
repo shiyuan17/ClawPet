@@ -1,5 +1,5 @@
 [package]
-name = "keai-desktop-pet"
+name = "DragonClaw"
 version = "0.2.0"
 description = "KeAI desktop pet"
 authors = ["hsy"]
@@ -13,6 +13,7 @@ name = "keai_desktop_pet_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+cc = "1"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
@@ -27,6 +28,7 @@ serde_json = "1"
 sha1 = "0.10"
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-autostart = "2"
