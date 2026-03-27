@@ -14,6 +14,7 @@ import packageJson from "../../package.json";
 import {
   DEFAULT_TASK_PROJECT_NAME,
   createTaskDraft,
+  deleteStaff,
   loadMemories,
   loadStaff,
   loadTasks,
@@ -46,7 +47,7 @@ type RelatedSkillCategory = "builtIn" | "installed";
 type RelatedToolsFilter = string;
 type RelatedScheduleFilter = "all" | "enabled" | "stopped" | "disabled";
 type UtilityModalType = "history" | "logs";
-type ChatSettingsPanelMode = "agent" | "group" | "logs";
+type ChatSettingsPanelMode = "agent" | "group" | "logs" | "history";
 type UtilityLogTab = "runtime" | "errorAnalysis";
 type UtilityLogDetailTab = "request" | "response" | "stream" | "raw";
 type UtilityLogCategory = "all" | "message" | "tool";
@@ -112,6 +113,10 @@ type CreateEmployeeRuleItem = {
   text: string;
   enabled: boolean;
   custom?: boolean;
+};
+type ChatSettingsTextPreviewModalState = {
+  title: string;
+  content: string;
 };
 
 type TaskModuleView = "projects" | "board";
@@ -189,6 +194,7 @@ type ChatConversationGroup = {
   id: string;
   name: string;
   memberAgentIds: string[];
+  ownerAgentId: string | null;
   createdAt: number;
 };
 
@@ -335,6 +341,32 @@ type ChannelPaneChatItem = {
   boundAgentId: string | null;
 };
 
+type OpenClawChannelMessageSendPayload = {
+  channelType: string;
+  accountId?: string | null;
+  target: string;
+  message: string;
+};
+
+type OpenClawChannelMessageSendResult = {
+  channelType: string;
+  accountId: string;
+  target: string;
+  command: string;
+  success: boolean;
+  detail: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+};
+
+type ChannelMessageMirrorTarget = {
+  channelType: string;
+  accountId: string;
+  target: string;
+};
+
 type OpenClawPlatformSnapshotItem = {
   id: string;
   providerId: string;
@@ -362,6 +394,14 @@ type RelatedModelDraft = {
   model: string;
   apiKey: string;
   apiPath: string;
+};
+
+type RelatedModelPopularPlatform = {
+  id: string;
+  label: string;
+  baseUrl: string;
+  apiKind: OpenClawProviderApiKind;
+  models: string[];
 };
 
 type ProxyConfigDraft = {
@@ -429,6 +469,35 @@ type OpenClawMessageLogItem = {
 type OpenClawMessageLogResponse = {
   detail: string;
   logs: OpenClawMessageLogItem[];
+};
+
+type OpenClawAgentSessionSnapshotItem = {
+  sessionKey: string;
+  sessionTarget: string;
+  sessionId: string;
+  updatedAtMs: number;
+  messageCount: number;
+  preview: string;
+  lastChannel?: string;
+  chatType?: string;
+};
+
+type OpenClawAgentSessionsSnapshotResponse = {
+  detail: string;
+  sessions: OpenClawAgentSessionSnapshotItem[];
+};
+
+type OpenClawAgentSessionHistoryMessage = {
+  id: string;
+  role: "assistant" | "user";
+  text: string;
+  createdAtMs: number;
+};
+
+type OpenClawAgentSessionHistoryResponse = {
+  detail: string;
+  sessionKey: string;
+  messages: OpenClawAgentSessionHistoryMessage[];
 };
 
 type GatewayHealthSnapshotResponse = {
@@ -546,6 +615,27 @@ type ChatArchiveRecord = {
   archivedAt: number;
   title: string;
   messages: AgentChatMessage[];
+};
+
+type ChatRelatedHistoryRecord = {
+  id: string;
+  scopeKey: string;
+  scopeLabel: string;
+  updatedAt: number;
+  messageCount: number;
+  preview: string;
+  isActiveScope: boolean;
+};
+
+type ChatRelatedArchiveRecord = {
+  id: string;
+  scopeKey: string;
+  scopeLabel: string;
+  archivedAt: number;
+  title: string;
+  messageCount: number;
+  preview: string;
+  record: ChatArchiveRecord;
 };
 
 type ChannelPaneConfigField = {
@@ -844,6 +934,7 @@ const sidebarAvatarPresetOptions = buildSidebarAvatarPresetOptions();
 const CHAT_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-history";
 const SESSION_STORAGE_PREFIX = "keai.desktop-pet.openclaw.session-id";
 const CHAT_ARCHIVE_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-archives";
+const VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE = "__openclaw_session__";
 const CHAT_USER_GROUPS_STORAGE_KEY = "keai.desktop-pet.chat-user-groups";
 const CHAT_USER_GROUP_MEMBERSHIP_STORAGE_KEY = "keai.desktop-pet.chat-user-group-membership";
 const CHAT_CONVERSATION_GROUPS_STORAGE_KEY = "keai.desktop-pet.chat-conversation-groups";
@@ -933,6 +1024,10 @@ const createChatUserGroupError = ref("");
 const createChatUserGroupSearch = ref("");
 const createChatUserGroupInputRef = ref<HTMLInputElement | null>(null);
 const createChatUserGroupSelectedAgentIds = ref<string[]>([]);
+const createChatUserGroupOwnerAgentId = ref("");
+const isConversationGroupRenameModalOpen = ref(false);
+const conversationGroupRenameDraft = ref("");
+const conversationGroupRenameError = ref("");
 const CREATE_CHAT_USER_GROUP_MAX_MEMBERS = 10;
 const isCreateEmployeeModalOpen = ref(false);
 const createEmployeeStep = ref<CreateEmployeeModalStep>(1);
@@ -960,7 +1055,13 @@ const chatQuickCreateMenuRef = ref<HTMLElement | null>(null);
 const isChatAgentContextMenuOpen = ref(false);
 const chatAgentContextMenuRef = ref<HTMLElement | null>(null);
 const chatAgentContextMenuAgentId = ref<string | null>(null);
+const chatAgentContextMenuTarget = ref<AgentListItem | null>(null);
 const chatAgentContextMenuPosition = ref({ x: 0, y: 0 });
+const isChatAgentDeleteConfirmModalOpen = ref(false);
+const chatAgentDeleteConfirmTarget = ref<AgentListItem | null>(null);
+const isChatAgentDeleteConfirming = ref(false);
+const chatAgentDeleteNotice = ref("");
+const CHAT_AGENT_DELETE_NOTICE_DURATION_MS = 2200;
 const isSidebarThemePopoverOpen = ref(false);
 const sidebarThemeQuickActionRef = ref<HTMLElement | null>(null);
 const isSidebarProfilePopoverOpen = ref(false);
@@ -1010,6 +1111,7 @@ const isAgentSettingsOpen = ref(false);
 const chatSettingsPanelMode = ref<ChatSettingsPanelMode>("agent");
 const isSidebarLogsOpen = ref(false);
 const isSidebarSettingsModalOpen = ref(false);
+const chatSettingsTextPreviewModal = ref<ChatSettingsTextPreviewModalState | null>(null);
 const sidebarSettingsActiveGroup = ref<SidebarSettingsMenuGroupId>("general");
 const sidebarSettingsAppearance = ref<SidebarSettingsAppearance>(
   normalizeSidebarSettingsAppearance(safeStorageGet(SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY))
@@ -1054,6 +1156,10 @@ const relatedToolsSnapshot = ref<OpenClawToolsListResponse | null>(null);
 const relatedModelSnapshot = ref<OpenClawPlatformSnapshotResponse | null>(null);
 const relatedModelDraft = ref<RelatedModelDraft | null>(null);
 const relatedModelCustomExpanded = ref(false);
+const relatedModelApiKeyVisible = ref(false);
+const relatedModelSelectedPopularPlatformId = ref<string | null>(null);
+const relatedModelEditingProviderId = ref<string | null>(null);
+const relatedModelPendingDeleteProviderId = ref<string | null>(null);
 const relatedChannelSnapshot = ref<OpenClawChannelAccountsSnapshotResponse | null>(null);
 const relatedTaskSnapshot = ref<TaskSnapshotResponse | null>(null);
 const taskReminderPopup = ref<TaskReminderPopupState | null>(null);
@@ -1061,9 +1167,15 @@ const taskReminderQueue = ref<TaskSnapshotItem[]>([]);
 const taskReminderSeenKeys = new Set<string>();
 const taskReminderAutoCloseMs = 7200;
 const taskReminderPollIntervalMs = 10000;
+const TEMP_TEST_TASK_REMINDER_ID_PREFIX = "temp-monitor-task-test";
 let taskReminderPollTimer = 0;
 let taskReminderAutoCloseTimer = 0;
 let taskReminderBootstrapped = false;
+let chatAgentDeleteNoticeTimer = 0;
+let taskReminderNotificationPermissionRequesting = false;
+const isTemporaryTaskReminderPopupActive = computed(() =>
+  Boolean(taskReminderPopup.value?.job.id.startsWith(TEMP_TEST_TASK_REMINDER_ID_PREFIX))
+);
 const relatedSkillCategory = ref<RelatedSkillCategory>("builtIn");
 const RELATED_TOOLS_FILTER_ALL = "__all__";
 const relatedToolsFilter = ref<RelatedToolsFilter>(RELATED_TOOLS_FILTER_ALL);
@@ -1118,6 +1230,8 @@ const utilityModalLoading = ref(false);
 const utilityModalError = ref("");
 const utilityModalNotice = ref("");
 const chatHistoryArchives = ref<ChatArchiveRecord[]>([]);
+const chatRelatedHistoryRecords = ref<ChatRelatedHistoryRecord[]>([]);
+const chatRelatedArchiveRecords = ref<ChatRelatedArchiveRecord[]>([]);
 const chatRuntimeLogs = ref<OpenClawMessageLogResponse | null>(null);
 const dashboardGatewayHealth = ref<GatewayHealthSnapshotResponse | null>(null);
 const dashboardChannelSnapshot = ref<OpenClawChannelAccountsSnapshotResponse | null>(null);
@@ -1136,6 +1250,8 @@ const runtimeToolSyncWindowMs = 180000;
 const runtimeToolSyncPostResponseWindowMs = 4000;
 const runtimeToolSyncRetryDelayMs = 400;
 let runtimeToolSyncRetryTimer = 0;
+const RELATED_HISTORY_FILTER_ALL = "__all__";
+const relatedHistoryChannelFilter = ref<string>(RELATED_HISTORY_FILTER_ALL);
 const recruitmentKeyword = ref("");
 const recruitmentDivisionFilter = ref(RECRUITMENT_DIVISION_FILTER_ALL);
 const recruitmentDivisions = loadAgencyRosterZh();
@@ -1190,6 +1306,71 @@ const relatedModelProtocolOptions: Array<{ id: OpenClawProviderApiKind; label: s
   { id: "openai-completions", label: "OpenAI Completions" },
   { id: "openai-responses", label: "OpenAI Responses" },
   { id: "anthropic-messages", label: "Anthropic Messages" }
+];
+const relatedModelPopularPlatforms: RelatedModelPopularPlatform[] = [
+  {
+    id: "custom",
+    label: "自定义",
+    baseUrl: "",
+    apiKind: "openai-responses",
+    models: []
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    apiKind: "openai-responses",
+    models: ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o-mini"]
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    baseUrl: "https://api.anthropic.com/v1",
+    apiKind: "anthropic-messages",
+    models: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-3-7-sonnet-latest"]
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/v1",
+    apiKind: "openai-completions",
+    models: ["deepseek-chat", "deepseek-reasoner"]
+  },
+  {
+    id: "gemini",
+    label: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiKind: "openai-completions",
+    models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]
+  },
+  {
+    id: "qwen",
+    label: "Qwen",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    apiKind: "openai-completions",
+    models: ["qwen-max", "qwen-plus", "qwen-turbo"]
+  },
+  {
+    id: "zhipu",
+    label: "智谱",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    apiKind: "openai-completions",
+    models: ["glm-4-plus", "glm-4-air", "glm-4-flash"]
+  },
+  {
+    id: "moonshot",
+    label: "月之暗面",
+    baseUrl: "https://api.moonshot.cn/v1",
+    apiKind: "openai-completions",
+    models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"]
+  },
+  {
+    id: "groq",
+    label: "Groq",
+    baseUrl: "https://api.groq.com/openai/v1",
+    apiKind: "openai-completions",
+    models: ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"]
+  }
 ];
 
 const skillMarketCategories: SkillMarketCategoryOption[] = [
@@ -1312,6 +1493,25 @@ function safeStorageSet(key: string, value: string) {
     getStorage()?.setItem(key, value);
   } catch {
     // Ignore storage failures.
+  }
+}
+
+function safeStorageKeysByPrefix(prefix: string) {
+  try {
+    const storage = getStorage();
+    if (!storage) {
+      return [] as string[];
+    }
+    const keys: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (typeof key === "string" && key.startsWith(prefix)) {
+        keys.push(key);
+      }
+    }
+    return keys;
+  } catch {
+    return [] as string[];
   }
 }
 
@@ -1899,6 +2099,8 @@ function normalizeChatConversationGroup(raw: unknown): ChatConversationGroup | n
         .filter(Boolean)
     : [];
   const dedupedMembers = Array.from(new Set(members)).slice(0, 30);
+  const ownerCandidate = typeof candidate.ownerAgentId === "string" ? candidate.ownerAgentId.trim() : "";
+  const ownerAgentId = ownerCandidate && dedupedMembers.includes(ownerCandidate) ? ownerCandidate : dedupedMembers[0] ?? null;
   const createdAt =
     typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
       ? Math.max(0, Math.floor(candidate.createdAt))
@@ -1907,6 +2109,7 @@ function normalizeChatConversationGroup(raw: unknown): ChatConversationGroup | n
     id,
     name,
     memberAgentIds: dedupedMembers,
+    ownerAgentId,
     createdAt
   };
 }
@@ -2202,7 +2405,7 @@ function findChatConversationGroupByName(name: string) {
   return chatConversationGroups.value.find((group) => group.name.toLowerCase() === normalized) ?? null;
 }
 
-function createChatConversationGroup(name: string, memberAgentIds: string[]) {
+function createChatConversationGroup(name: string, memberAgentIds: string[], ownerAgentId: string) {
   const normalizedName = normalizeChatUserGroupName(name);
   if (!normalizedName) {
     return null;
@@ -2211,10 +2414,15 @@ function createChatConversationGroup(name: string, memberAgentIds: string[]) {
     return null;
   }
   const dedupedMembers = Array.from(new Set(memberAgentIds.map((item) => item.trim()).filter(Boolean))).slice(0, 30);
+  const normalizedOwnerAgentId = ownerAgentId.trim();
+  if (!normalizedOwnerAgentId || !dedupedMembers.includes(normalizedOwnerAgentId)) {
+    return null;
+  }
   const nextGroup: ChatConversationGroup = {
     id: createChatConversationGroupId(),
     name: normalizedName,
     memberAgentIds: dedupedMembers,
+    ownerAgentId: normalizedOwnerAgentId,
     createdAt: Date.now()
   };
   chatConversationGroups.value = [...chatConversationGroups.value, nextGroup]
@@ -2234,13 +2442,16 @@ function syncChatConversationGroupsWithMembers(memberPool: AgentListItem[]) {
   let changed = false;
   const nextGroups = chatConversationGroups.value.map((group) => {
     const nextMembers = group.memberAgentIds.filter((memberId) => validMemberIds.has(memberId));
-    if (nextMembers.length === group.memberAgentIds.length) {
+    const nextOwnerAgentId =
+      group.ownerAgentId && nextMembers.includes(group.ownerAgentId) ? group.ownerAgentId : nextMembers[0] ?? null;
+    if (nextMembers.length === group.memberAgentIds.length && nextOwnerAgentId === group.ownerAgentId) {
       return group;
     }
     changed = true;
     return {
       ...group,
-      memberAgentIds: nextMembers
+      memberAgentIds: nextMembers,
+      ownerAgentId: nextOwnerAgentId
     } satisfies ChatConversationGroup;
   });
   if (!changed) {
@@ -2276,6 +2487,13 @@ function getConversationGroupPreviewMembers(agentId: string, limit = 3) {
 
 function getConversationGroupMemberCount(agentId: string) {
   return getConversationGroupMembersByAgentId(agentId).length;
+}
+
+function remapChatConversationGroupAgents() {
+  const baseAgents = agents.value.filter((agent) => !isChatConversationGroupAgentId(agent.agentId));
+  const mappedConversationGroups = chatConversationGroups.value.map((group) => mapChatConversationGroupAgent(group, baseAgents));
+  agents.value = [...baseAgents, ...mappedConversationGroups];
+  syncChatUserAgentOrder();
 }
 
 function pruneChatUserGroupMembership() {
@@ -2745,7 +2963,16 @@ function getTauriNamespace(): TauriNamespace | null {
 }
 
 function getTauriInvoke(): TauriInvoke | null {
-  return getTauriNamespace()?.core?.invoke ?? null;
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const runtime = window as Window & {
+    __TAURI__?: TauriNamespace;
+    __TAURI_INTERNALS__?: {
+      invoke?: TauriInvoke;
+    };
+  };
+  return runtime.__TAURI__?.core?.invoke ?? runtime.__TAURI_INTERNALS__?.invoke ?? null;
 }
 
 function getTauriWindow(): TauriWindowApi | null {
@@ -3124,6 +3351,9 @@ function resolveConversationScopeKey(agentId: string | null, channelSession: Cha
   if (!normalizedAgentId) {
     return null;
   }
+  if (channelSession?.channelType === VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE) {
+    return normalizeStoredConversationScopeKey(channelSession.accountId || channelSession.id);
+  }
   if (!channelSession) {
     return buildAgentConversationScopeKey(normalizedAgentId);
   }
@@ -3258,15 +3488,42 @@ function formatAttachmentSummaryForPrompt(attachments: ChatComposerAttachment[])
   return `[附件: ${details.join("；")}]`;
 }
 
+function stripLeadingUntrustedMetadataEnvelope(text: string) {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const hasMetadataMarker = /\(untrusted metadata\):/i.test(normalized);
+  const hasCodeBlock = /```(?:json)?/i.test(normalized);
+  const likelyEnvelopeStart = /^System:\s*\[/.test(normalized) || /^[^\n]*\(untrusted metadata\):/i.test(normalized);
+  if (!hasMetadataMarker || !hasCodeBlock || !likelyEnvelopeStart) {
+    return text;
+  }
+
+  let rest = normalized;
+  rest = rest.replace(/^System:[\s\S]*?\n{2}/, "");
+
+  const metadataSectionPattern = /^[^\n]*\(untrusted metadata\):\s*\n```(?:json)?\n[\s\S]*?\n```(?:\n{1,2})?/i;
+  let previous = "";
+  while (rest !== previous) {
+    previous = rest;
+    rest = rest.replace(metadataSectionPattern, "");
+  }
+
+  return rest.trimStart();
+}
+
+function sanitizeMessageTextForDisplay(rawText: string) {
+  return stripLeadingUntrustedMetadataEnvelope(rawText).trim();
+}
+
 function buildOpenClawMessageContent(message: AgentChatMessage) {
+  const normalizedText = sanitizeMessageTextForDisplay(message.text);
   if (message.role !== "user" || !message.attachments || message.attachments.length === 0) {
-    return message.text;
+    return normalizedText;
   }
   const summary = formatAttachmentSummaryForPrompt(message.attachments);
   if (!summary) {
-    return message.text;
+    return normalizedText;
   }
-  const baseText = message.text.trim() === "(附件)" ? "" : message.text.trim();
+  const baseText = normalizedText === "(附件)" ? "" : normalizedText;
   return baseText ? `${baseText}\n\n${summary}` : summary;
 }
 
@@ -3274,7 +3531,7 @@ function getMessageDisplayText(message: AgentChatMessage) {
   if (message.role === "user" && message.text.trim() === "(附件)" && message.attachments && message.attachments.length > 0) {
     return "";
   }
-  return message.text;
+  return sanitizeMessageTextForDisplay(message.text);
 }
 
 function isRuntimeToolMessage(message: AgentChatMessage) {
@@ -3302,7 +3559,7 @@ function normalizeMessage(raw: unknown): AgentChatMessage | null {
   return {
     id: typeof candidate.id === "string" && candidate.id.trim() ? candidate.id : createMessageId("msg"),
     role,
-    text: candidate.text,
+    text: sanitizeMessageTextForDisplay(candidate.text),
     status: normalizeStatus(candidate.status),
     createdAt: typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt) ? candidate.createdAt : Date.now(),
     attachments,
@@ -3435,7 +3692,8 @@ function getOpenClawMessages(items: AgentChatMessage[]): OpenClawMessage[] {
     .filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item))
     .filter((item) => !isRuntimeToolMessage(item) && !item.id.startsWith("runtime-tool-") && !item.toolName)
     .filter((item) => item.role === "assistant" || item.role === "user" || item.role === "system")
-    .map((item) => ({ role: item.role, content: buildOpenClawMessageContent(item) }));
+    .map((item) => ({ role: item.role, content: buildOpenClawMessageContent(item) }))
+    .filter((item) => item.content.trim().length > 0);
 }
 
 function getAgentInitial(agent: AgentListItem) {
@@ -3947,6 +4205,8 @@ function switchAgent(agentId: string | null, options: SwitchAgentOptions = {}) {
   setAgentMeta(agentId, { unread: 0 });
   if (utilityModalType.value) {
     void refreshUtilityModalData(utilityModalType.value);
+  } else if (isHistoryPanelActive.value) {
+    void refreshUtilityModalData("history");
   } else if (isLogsPanelActive.value || isSidebarLogsOpen.value) {
     void refreshUtilityModalData("logs");
   }
@@ -4218,8 +4478,12 @@ function handleChatQuickCreateMenuDocumentKeyDown(event: KeyboardEvent) {
 
 function resolveChatAgentContextMenuTarget() {
   const targetAgentId = chatAgentContextMenuAgentId.value;
+  const pinnedTarget = chatAgentContextMenuTarget.value;
   if (!targetAgentId) {
-    return null;
+    return pinnedTarget;
+  }
+  if (pinnedTarget && equalsIgnoreCase(pinnedTarget.agentId, targetAgentId)) {
+    return pinnedTarget;
   }
   return staffAgentsAll.value.find((agent) => equalsIgnoreCase(agent.agentId, targetAgentId)) ?? null;
 }
@@ -4227,6 +4491,7 @@ function resolveChatAgentContextMenuTarget() {
 function closeChatAgentContextMenu() {
   isChatAgentContextMenuOpen.value = false;
   chatAgentContextMenuAgentId.value = null;
+  chatAgentContextMenuTarget.value = null;
 }
 
 function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent) {
@@ -4248,6 +4513,7 @@ function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent)
     viewportHeight > 0 ? Math.max(8, Math.min(fallbackY, viewportHeight - menuHeight - 8)) : fallbackY;
   chatAgentContextMenuPosition.value = { x, y };
   chatAgentContextMenuAgentId.value = agent.agentId;
+  chatAgentContextMenuTarget.value = agent;
   isChatAgentContextMenuOpen.value = true;
 }
 
@@ -4353,6 +4619,19 @@ type OpenCreateChatUserGroupOptions = {
   presetAgentIds?: string[];
 };
 
+function syncCreateChatUserGroupOwnerWithSelection() {
+  const selectedAgentIds = createChatUserGroupSelectedAgentIds.value;
+  if (selectedAgentIds.length === 0) {
+    createChatUserGroupOwnerAgentId.value = "";
+    return;
+  }
+  const currentOwnerAgentId = createChatUserGroupOwnerAgentId.value.trim();
+  if (currentOwnerAgentId && selectedAgentIds.includes(currentOwnerAgentId)) {
+    return;
+  }
+  createChatUserGroupOwnerAgentId.value = selectedAgentIds[0] ?? "";
+}
+
 function openCreateChatUserGroupModal(options: OpenCreateChatUserGroupOptions = {}) {
   isCreateChatUserGroupModalOpen.value = true;
   createChatUserGroupDraft.value = normalizeChatUserGroupName(options.presetName ?? "");
@@ -4369,6 +4648,7 @@ function openCreateChatUserGroupModal(options: OpenCreateChatUserGroupOptions = 
   createChatUserGroupSelectedAgentIds.value = (
     dedupedPreset.length > 0 ? dedupedPreset : activeInPane ? [activeInPane.agentId] : []
   ).slice(0, CREATE_CHAT_USER_GROUP_MAX_MEMBERS);
+  syncCreateChatUserGroupOwnerWithSelection();
   void nextTick(() => {
     createChatUserGroupInputRef.value?.focus();
   });
@@ -4409,6 +4689,56 @@ function closeCreateChatUserGroupModal() {
   createChatUserGroupError.value = "";
   createChatUserGroupSearch.value = "";
   createChatUserGroupSelectedAgentIds.value = [];
+  createChatUserGroupOwnerAgentId.value = "";
+}
+
+function openConversationGroupRenameModal() {
+  const group = activeConversationGroup.value;
+  if (!group) {
+    return;
+  }
+  conversationGroupRenameDraft.value = group.name;
+  conversationGroupRenameError.value = "";
+  isConversationGroupRenameModalOpen.value = true;
+}
+
+function closeConversationGroupRenameModal() {
+  isConversationGroupRenameModalOpen.value = false;
+  conversationGroupRenameDraft.value = "";
+  conversationGroupRenameError.value = "";
+}
+
+function handleConversationGroupRenameSubmit() {
+  const group = activeConversationGroup.value;
+  if (!group) {
+    closeConversationGroupRenameModal();
+    return;
+  }
+  const normalizedName = normalizeChatUserGroupName(conversationGroupRenameDraft.value);
+  if (!normalizedName) {
+    conversationGroupRenameError.value = "请输入群聊名称（最多 24 个字符）。";
+    return;
+  }
+  const duplicated = findChatConversationGroupByName(normalizedName);
+  if (duplicated && duplicated.id !== group.id) {
+    conversationGroupRenameError.value = "团队名称已存在，请换一个名称。";
+    return;
+  }
+  if (normalizedName === group.name) {
+    closeConversationGroupRenameModal();
+    return;
+  }
+  chatConversationGroups.value = chatConversationGroups.value.map((item) =>
+    item.id === group.id
+      ? {
+          ...item,
+          name: normalizedName
+        }
+      : item
+  );
+  persistChatConversationGroups();
+  remapChatConversationGroupAgents();
+  closeConversationGroupRenameModal();
 }
 
 function handleCreateChatUserGroupSubmit() {
@@ -4433,18 +4763,19 @@ function handleCreateChatUserGroupSubmit() {
     createChatUserGroupError.value = `最多选择 ${CREATE_CHAT_USER_GROUP_MAX_MEMBERS} 位成员。`;
     return;
   }
+  const normalizedOwnerAgentId = createChatUserGroupOwnerAgentId.value.trim();
+  const ownerAgentId = selectedAgentIds.includes(normalizedOwnerAgentId) ? normalizedOwnerAgentId : (selectedAgentIds[0] ?? "");
+  createChatUserGroupOwnerAgentId.value = ownerAgentId;
 
-  const group = createChatConversationGroup(normalizedName, selectedAgentIds);
+  const group = createChatConversationGroup(normalizedName, selectedAgentIds, ownerAgentId);
   if (!group) {
     createChatUserGroupError.value = "团队名称已存在，请换一个名称。";
     return;
   }
 
-  const baseAgents = agents.value.filter((agent) => !isChatConversationGroupAgentId(agent.agentId));
-  const mappedConversationGroups = chatConversationGroups.value.map((item) => mapChatConversationGroupAgent(item, baseAgents));
-  const mappedGroupAgent = mappedConversationGroups.find((item) => item.agentId === getChatConversationGroupAgentId(group.id));
-  agents.value = [...baseAgents, ...mappedConversationGroups];
-  syncChatUserAgentOrder();
+  remapChatConversationGroupAgents();
+  const targetGroupAgentId = getChatConversationGroupAgentId(group.id);
+  const mappedGroupAgent = agents.value.find((item) => item.agentId === targetGroupAgentId) ?? null;
 
   if (activeSection.value !== "chat") {
     activeSection.value = "chat";
@@ -4452,11 +4783,24 @@ function handleCreateChatUserGroupSubmit() {
 
   closeCreateChatUserGroupModal();
   activeAgentPaneTab.value = "group";
-  switchAgent(mappedGroupAgent?.agentId ?? getChatConversationGroupAgentId(group.id), { force: true });
+  switchAgent(mappedGroupAgent?.agentId ?? targetGroupAgentId, { force: true });
 }
 
 function isCreateChatUserGroupMemberSelected(agentId: string) {
   return createChatUserGroupSelectedAgentIds.value.includes(agentId);
+}
+
+function isCreateChatUserGroupOwner(agentId: string) {
+  return createChatUserGroupOwnerAgentId.value === agentId;
+}
+
+function handleCreateChatUserGroupOwnerSelect(agentId: string) {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId || !createChatUserGroupSelectedAgentIds.value.includes(normalizedAgentId)) {
+    return;
+  }
+  createChatUserGroupOwnerAgentId.value = normalizedAgentId;
+  createChatUserGroupError.value = "";
 }
 
 function handleCreateChatUserGroupMemberToggle(agentId: string, selected: boolean) {
@@ -4476,11 +4820,13 @@ function handleCreateChatUserGroupMemberToggle(agentId: string, selected: boolea
     nextSelectedIds.delete(normalizedAgentId);
   }
   createChatUserGroupSelectedAgentIds.value = Array.from(nextSelectedIds);
+  syncCreateChatUserGroupOwnerWithSelection();
 }
 
 function handleCreateChatUserGroupSelectAllMembers() {
   const allIds = createChatUserGroupFilteredAgents.value.map((agent) => agent.agentId);
   createChatUserGroupSelectedAgentIds.value = allIds.slice(0, CREATE_CHAT_USER_GROUP_MAX_MEMBERS);
+  syncCreateChatUserGroupOwnerWithSelection();
   if (allIds.length > CREATE_CHAT_USER_GROUP_MAX_MEMBERS) {
     createChatUserGroupError.value = `已选择前 ${CREATE_CHAT_USER_GROUP_MAX_MEMBERS} 位成员。`;
   } else {
@@ -4490,7 +4836,16 @@ function handleCreateChatUserGroupSelectAllMembers() {
 
 function handleCreateChatUserGroupClearMembers() {
   createChatUserGroupSelectedAgentIds.value = [];
+  syncCreateChatUserGroupOwnerWithSelection();
   createChatUserGroupError.value = "";
+}
+
+function isActiveConversationGroupOwner(agentId: string) {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return false;
+  }
+  return activeConversationGroup.value?.ownerAgentId === normalizedAgentId;
 }
 
 function handleDeleteChatUserGroup(groupId: string) {
@@ -4570,22 +4925,82 @@ function removeChatUserCustomAgent(agentId: string) {
   return true;
 }
 
-async function handleChatAgentContextMenuDelete() {
+function removeFallbackStaffAgent(agentId: string) {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return false;
+  }
+  const fallbackMembers = loadStaff();
+  const matched = fallbackMembers.find((item) => equalsIgnoreCase(item.id, normalizedAgentId)) ?? null;
+  if (!matched) {
+    return false;
+  }
+  deleteStaff(fallbackMembers, matched.id);
+  return true;
+}
+
+function closeChatAgentDeleteConfirmModal() {
+  if (isChatAgentDeleteConfirming.value) {
+    return;
+  }
+  forceCloseChatAgentDeleteConfirmModal();
+}
+
+function forceCloseChatAgentDeleteConfirmModal() {
+  isChatAgentDeleteConfirmModalOpen.value = false;
+  chatAgentDeleteConfirmTarget.value = null;
+}
+
+function clearChatAgentDeleteNoticeTimer() {
+  if (typeof window !== "undefined" && chatAgentDeleteNoticeTimer > 0) {
+    window.clearTimeout(chatAgentDeleteNoticeTimer);
+    chatAgentDeleteNoticeTimer = 0;
+  }
+}
+
+function showChatAgentDeleteNotice(message: string) {
+  const normalized = message.trim();
+  if (!normalized) {
+    return;
+  }
+  chatAgentDeleteNotice.value = normalized;
+  clearChatAgentDeleteNoticeTimer();
+  if (typeof window !== "undefined") {
+    chatAgentDeleteNoticeTimer = window.setTimeout(() => {
+      chatAgentDeleteNotice.value = "";
+      chatAgentDeleteNoticeTimer = 0;
+    }, CHAT_AGENT_DELETE_NOTICE_DURATION_MS);
+  }
+}
+
+function handleChatAgentContextMenuDelete() {
   const target = resolveChatAgentContextMenuTarget();
   closeChatAgentContextMenu();
   if (!target) {
+    staffSourceDetail.value = "未找到可删除的数字员工，请重试。";
+    chatComposerError.value = "未找到可删除的数字员工，请重试。";
+    return;
+  }
+  chatAgentDeleteConfirmTarget.value = target;
+  isChatAgentDeleteConfirmModalOpen.value = true;
+}
+
+async function handleChatAgentDeleteConfirmSubmit() {
+  if (isChatAgentDeleteConfirming.value) {
+    return;
+  }
+  const target = chatAgentDeleteConfirmTarget.value;
+  if (!target) {
+    forceCloseChatAgentDeleteConfirmModal();
     return;
   }
   const targetCustomAgent = getChatUserCustomAgentById(target.agentId);
   const targetCustomKind = normalizeChatUserCustomAgentKind(targetCustomAgent?.kind);
 
   const displayName = stripRoleLabel(target.displayName) || target.agentId;
-  if (typeof window !== "undefined" && typeof window.confirm === "function") {
-    const confirmed = window.confirm(`确定删除数字员工「${displayName}」吗？`);
-    if (!confirmed) {
-      return;
-    }
-  }
+  chatComposerError.value = "";
+  isChatAgentDeleteConfirming.value = true;
+  let successMessage = "";
 
   try {
     if (isChatUserCustomAgent(target.agentId)) {
@@ -4593,27 +5008,45 @@ async function handleChatAgentContextMenuDelete() {
       if (!removed) {
         throw new Error("未找到可删除的自定义员工。");
       }
-      staffSourceDetail.value =
-        targetCustomKind === "staff" ? `已删除自定义员工「${displayName}」。` : `已删除虾友「${displayName}」。`;
+      successMessage = targetCustomKind === "staff" ? `已删除自定义员工「${displayName}」。` : `已删除虾友「${displayName}」。`;
     } else {
       const invoke = getTauriInvoke();
-      if (!invoke) {
-        throw new Error("当前环境不支持删除数字员工。");
-      }
-      const detail = (await invoke("remove_role_workflow_agent", {
-        agentId: target.agentId,
-        deleteFiles: true
-      })) as string;
-      if (detail && detail.trim()) {
-        staffSourceDetail.value = detail.trim();
+      if (invoke) {
+        try {
+          const detail = (await invoke("remove_role_workflow_agent", {
+            agentId: target.agentId,
+            deleteFiles: true
+          })) as string;
+          successMessage = detail?.trim() || `已删除员工「${displayName}」。`;
+        } catch (runtimeError) {
+          const removedFallback = removeFallbackStaffAgent(target.agentId);
+          if (!removedFallback) {
+            throw runtimeError;
+          }
+          successMessage = `已删除本地员工「${displayName}」。`;
+        }
+      } else {
+        const removedFallback = removeFallbackStaffAgent(target.agentId);
+        if (!removedFallback) {
+          throw new Error("当前环境不支持删除数字员工。");
+        }
+        successMessage = `已删除本地员工「${displayName}」。`;
       }
     }
+    if (!successMessage) {
+      successMessage = `已删除员工「${displayName}」。`;
+    }
+    staffSourceDetail.value = successMessage;
+    showChatAgentDeleteNotice(successMessage);
     await loadAgents();
+    chatComposerError.value = "";
+    forceCloseChatAgentDeleteConfirmModal();
   } catch (error) {
     const message = error instanceof Error ? error.message : "删除数字员工失败。";
-    if (typeof window !== "undefined" && typeof window.alert === "function") {
-      window.alert(message);
-    }
+    staffSourceDetail.value = message;
+    chatComposerError.value = message;
+  } finally {
+    isChatAgentDeleteConfirming.value = false;
   }
 }
 
@@ -4821,6 +5254,7 @@ async function submitChat() {
     return;
   }
 
+  const userContent = buildChannelMessageMirrorContent(text, pendingAttachments);
   const startedAt = Date.now();
   if (activeConversationGroup) {
     const groupMembers = getChatConversationGroupMembers(activeConversationGroup);
@@ -4837,6 +5271,7 @@ async function submitChat() {
       createdAt: startedAt,
       attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
     });
+    void dispatchChannelMessageMirror(conversationScopeKey, userContent, activeChannelChatSession.value);
 
     const pendingRows = groupMembers.map((member) => {
       const pendingId = createMessageId("assistant");
@@ -4927,11 +5362,6 @@ async function submitChat() {
 
   const history = getOpenClawMessages(chatMessages.value);
   const pendingId = createMessageId("assistant");
-  const attachmentSummary = formatAttachmentSummaryForPrompt(pendingAttachments);
-  const userContent =
-    pendingAttachments.length > 0
-      ? `${text || "(附件)"}${attachmentSummary ? `\n\n${attachmentSummary}` : ""}`
-      : text;
 
   chatMessages.value.push({
     id: createMessageId("user"),
@@ -4941,6 +5371,7 @@ async function submitChat() {
     createdAt: startedAt,
     attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
   });
+  void dispatchChannelMessageMirror(conversationScopeKey, userContent, activeChannelChatSession.value);
 
   chatMessages.value.push({
     id: pendingId,
@@ -4983,7 +5414,13 @@ async function submitChat() {
   void scrollMessagesToBottom();
 
   try {
-    const response = await sendOpenClawChat([...history, { role: "user", content: userContent }], { agentId: activeAgent.agentId });
+    const runtimeSessionKey = resolveOpenClawRuntimeSessionKey(conversationScopeKey);
+    const response = await sendOpenClawChat(
+      [...history, { role: "user", content: userContent }],
+      runtimeSessionKey
+        ? { agentId: activeAgent.agentId, sessionKey: runtimeSessionKey }
+        : { agentId: activeAgent.agentId }
+    );
     const doneAt = Date.now();
 
     const pendingMessage = chatMessages.value.find((item) => item.id === pendingId);
@@ -5167,9 +5604,25 @@ function getAgentCurrentWorkLabel(agent: AgentListItem) {
   return agent.currentWorkLabel.trim() || "正在处理什么";
 }
 
+function getAgentCurrentWork(agent: AgentListItem) {
+  const trimmed = agent.currentWork.trim();
+  return trimmed || "当前暂无处理事项。";
+}
+
 function getAgentRecentOutput(agent: AgentListItem) {
   const trimmed = agent.recentOutput.trim();
   return trimmed || "最近暂无产出。";
+}
+
+function openChatSettingsTextPreviewModal(title: string, content: string) {
+  chatSettingsTextPreviewModal.value = {
+    title: title.trim() || "详情内容",
+    content: content.trim() || "暂无内容。"
+  };
+}
+
+function closeChatSettingsTextPreviewModal() {
+  chatSettingsTextPreviewModal.value = null;
 }
 
 function getAgentToolsEnabledLabel(agent: AgentListItem) {
@@ -5452,10 +5905,11 @@ function openGroupInfoPanel() {
 }
 
 function closeAgentSettingsPanel() {
-  if (isLogsPanelActive.value) {
+  if (isLogsPanelActive.value || isHistoryPanelActive.value) {
     closeSidebarLogsPanel();
     return;
   }
+  closeConversationGroupRenameModal();
   isAgentSettingsOpen.value = false;
 }
 
@@ -5469,6 +5923,7 @@ async function openSidebarSettings() {
   closeFeishuConnectModal();
   closeChannelConfigModal();
   closeRelatedResourceModal();
+  closeConversationGroupRenameModal();
   isSidebarSettingsModalOpen.value = true;
   clearSidebarSettingsStatus();
   await loadSidebarSettingsGroupData(sidebarSettingsActiveGroup.value);
@@ -5482,6 +5937,7 @@ async function openSidebarLogs() {
   closeFeishuConnectModal();
   closeChannelConfigModal();
   closeRelatedResourceModal();
+  closeConversationGroupRenameModal();
   closeUtilityModal();
   isSidebarLogsOpen.value = false;
   chatSettingsPanelMode.value = "logs";
@@ -5489,6 +5945,23 @@ async function openSidebarLogs() {
   clearUtilityViewStatus();
   resetUtilityLogViewState();
   await refreshUtilityModalData("logs");
+}
+
+async function openSidebarHistory() {
+  activeSection.value = "chat";
+  closeSidebarThemePopover();
+  closeSidebarSettingsModal();
+  closeProxyConfigModal();
+  closeFeishuConnectModal();
+  closeChannelConfigModal();
+  closeRelatedResourceModal();
+  closeConversationGroupRenameModal();
+  closeUtilityModal();
+  isSidebarLogsOpen.value = false;
+  chatSettingsPanelMode.value = "history";
+  isAgentSettingsOpen.value = true;
+  clearUtilityViewStatus();
+  await refreshUtilityModalData("history");
 }
 
 function buildProxyConfigDraft(platform?: OpenClawPlatformSnapshotItem | null): ProxyConfigDraft {
@@ -5503,6 +5976,52 @@ function buildProxyConfigDraft(platform?: OpenClawPlatformSnapshotItem | null): 
     apiKey: platform?.apiKey ?? "",
     apiPath
   };
+}
+
+function buildRelatedModelCustomDraft(): RelatedModelDraft {
+  return {
+    providerId: "",
+    providerName: "",
+    protocol: "openai",
+    apiKind: "openai-responses",
+    baseUrl: "",
+    model: "",
+    apiKey: "",
+    apiPath: ""
+  };
+}
+
+function buildRelatedModelDraftFromPlatform(platform: OpenClawPlatformSnapshotItem): RelatedModelDraft {
+  const normalizedProtocol = normalizeProviderProtocol(platform.protocol);
+  return {
+    providerId: platform.providerId || normalizeProviderIdentifier(platform.pathPrefix) || "custom",
+    providerName: platform.name || platform.providerId || "未命名 Provider",
+    protocol: normalizedProtocol,
+    apiKind: inferProviderApiKind(normalizedProtocol, platform.apiPath || ""),
+    baseUrl: platform.baseUrl || "",
+    model: (platform.model ?? "").trim(),
+    apiKey: platform.apiKey || "",
+    apiPath: platform.apiPath || ""
+  };
+}
+
+function normalizeRelatedModelBaseUrl(value: string | null | undefined) {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\/+$/, "");
+}
+
+function resolveRelatedModelPopularPlatformIdByBaseUrl(baseUrl: string | null | undefined) {
+  const normalizedBaseUrl = normalizeRelatedModelBaseUrl(baseUrl);
+  if (!normalizedBaseUrl) {
+    return null;
+  }
+  const matched = relatedModelPopularPlatforms.find((platform) => {
+    const presetBaseUrl = normalizeRelatedModelBaseUrl(platform.baseUrl);
+    return normalizedBaseUrl === presetBaseUrl || normalizedBaseUrl.startsWith(`${presetBaseUrl}/`);
+  });
+  return matched?.id ?? null;
 }
 
 function syncProxyConfigDraft(preferredProviderId?: string | null) {
@@ -5751,6 +6270,94 @@ function buildProviderModelReference(providerId: string | null | undefined, mode
   return normalizedProviderId;
 }
 
+function normalizeProviderIdToken(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+}
+
+function inferProviderNameFromBaseUrl(value: string | null | undefined) {
+  const raw = (value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+  let hostname = "";
+  try {
+    hostname = new URL(candidate).hostname.trim().toLowerCase();
+  } catch {
+    const withoutScheme = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+    hostname = withoutScheme.split(/[/?#]/)[0]?.split(":")[0]?.trim().toLowerCase() ?? "";
+  }
+
+  if (!hostname) {
+    return "";
+  }
+
+  const parts = hostname
+    .split(".")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) {
+    return "";
+  }
+
+  let index = parts.length - 2;
+  if (parts.length >= 3) {
+    const tld = parts[parts.length - 1];
+    const secondLevel = parts[parts.length - 2];
+    if (tld.length === 2 && secondLevel.length <= 3) {
+      index = parts.length - 3;
+    }
+  }
+
+  const token = (parts[Math.max(0, index)] ?? "").replace(/[^a-z0-9-_]/g, "");
+  return token;
+}
+
+function buildRelatedModelProviderBaseId(draft: RelatedModelDraft) {
+  const rawBaseUrl = draft.baseUrl.trim();
+  let providerSeed = "";
+  if (rawBaseUrl) {
+    const urlCandidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(rawBaseUrl) ? rawBaseUrl : `https://${rawBaseUrl}`;
+    try {
+      const parsedUrl = new URL(urlCandidate);
+      const firstPath = parsedUrl.pathname.split("/").find((segment) => segment.trim().length > 0) ?? "";
+      providerSeed = [parsedUrl.hostname, firstPath].filter(Boolean).join("-");
+    } catch {
+      providerSeed = rawBaseUrl;
+    }
+  }
+  if (!providerSeed) {
+    providerSeed = draft.model.trim();
+  }
+  const normalized = normalizeProviderIdToken(providerSeed);
+  return normalized || "custom-provider";
+}
+
+function resolveRelatedModelNextProviderId(draft: RelatedModelDraft) {
+  const existingProviderIds = new Set(
+    (relatedModelSnapshot.value?.platforms ?? [])
+      .map((platform) => normalizeProviderIdentifier(platform.providerId))
+      .filter(Boolean)
+  );
+  const baseProviderId = buildRelatedModelProviderBaseId(draft);
+  if (!existingProviderIds.has(baseProviderId)) {
+    return baseProviderId;
+  }
+  let index = 2;
+  let candidate = `${baseProviderId}-${index}`;
+  while (existingProviderIds.has(candidate)) {
+    index += 1;
+    candidate = `${baseProviderId}-${index}`;
+  }
+  return candidate;
+}
+
 function getPlatformModelReference(platform: OpenClawPlatformSnapshotItem) {
   return buildProviderModelReference(platform.providerId || platform.pathPrefix, platform.model);
 }
@@ -5968,8 +6575,12 @@ function clearRelatedResourceSnapshots() {
   relatedSkillsSnapshot.value = null;
   relatedToolsSnapshot.value = null;
   relatedModelSnapshot.value = null;
-  relatedModelDraft.value = null;
+  relatedModelDraft.value = buildRelatedModelCustomDraft();
   relatedModelCustomExpanded.value = false;
+  relatedModelApiKeyVisible.value = false;
+  relatedModelSelectedPopularPlatformId.value = null;
+  relatedModelEditingProviderId.value = null;
+  relatedModelPendingDeleteProviderId.value = null;
   relatedChannelSnapshot.value = null;
   relatedTaskSnapshot.value = null;
 }
@@ -6003,6 +6614,692 @@ function getArchivePreviewText(record: ChatArchiveRecord) {
   }
   return text;
 }
+
+function normalizeStoredConversationScopeKey(rawScopeKey: string) {
+  const scopeKey = rawScopeKey.trim();
+  if (!scopeKey) {
+    return null;
+  }
+  const normalized = scopeKey.toLowerCase();
+  if (normalized.startsWith("agent:") || normalized.startsWith("channel:")) {
+    return normalized;
+  }
+  return buildAgentConversationScopeKey(scopeKey);
+}
+
+function resolveOpenClawRuntimeSessionKey(conversationScopeKey: string) {
+  const normalizedScopeKey = normalizeStoredConversationScopeKey(conversationScopeKey);
+  if (!normalizedScopeKey || !normalizedScopeKey.startsWith("agent:")) {
+    return null;
+  }
+  const rest = normalizedScopeKey.slice("agent:".length);
+  const [rawAgentId, ...targetParts] = rest.split(":");
+  const agentId = rawAgentId.trim().toLowerCase();
+  if (!agentId) {
+    return null;
+  }
+  const sessionTarget = normalizeConversationKeyPart(targetParts.join(":") || "main");
+  return `agent:${agentId}:${sessionTarget}`;
+}
+
+type ParsedConversationScope =
+  | { kind: "agent"; ownerAgentId: string; sessionTarget: string | null }
+  | { kind: "channel"; channelType: string; accountId: string; ownerAgentId: string };
+
+function parseConversationScope(scopeKey: string): ParsedConversationScope | null {
+  const normalizedScopeKey = normalizeStoredConversationScopeKey(scopeKey);
+  if (!normalizedScopeKey) {
+    return null;
+  }
+  if (normalizedScopeKey.startsWith("agent:")) {
+    const rest = normalizedScopeKey.slice("agent:".length);
+    const parts = rest.split(":");
+    const ownerAgentId = parts[0] || "unknown";
+    const sessionTarget = parts.slice(1).join(":").trim() || null;
+    return {
+      kind: "agent",
+      ownerAgentId,
+      sessionTarget
+    };
+  }
+  if (!normalizedScopeKey.startsWith("channel:")) {
+    return null;
+  }
+  const parts = normalizedScopeKey.split(":");
+  if (parts.length < 4) {
+    return null;
+  }
+  const channelType = parts[1] || "unknown";
+  const ownerAgentId = parts[parts.length - 1] || "unknown";
+  const accountId = parts.slice(2, -1).join(":") || "unknown";
+  return {
+    kind: "channel",
+    channelType,
+    accountId,
+    ownerAgentId
+  };
+}
+
+function resolveConversationScopeLabel(scopeKey: string) {
+  const parsed = parseConversationScope(scopeKey);
+  if (!parsed) {
+    return "默认会话";
+  }
+  if (parsed.kind === "agent") {
+    if (parsed.sessionTarget && parsed.sessionTarget !== "main") {
+      return parsed.sessionTarget;
+    }
+    return "默认会话";
+  }
+  const catalog = resolveChannelConfigCatalog(parsed.channelType);
+  const channelName = catalog?.name?.trim() || parsed.channelType || "频道";
+  const accountId = parsed.accountId.trim();
+  return accountId ? `${channelName} / ${accountId}` : channelName;
+}
+
+function resolveRelatedHistoryRecordChannelId(record: ChatRelatedHistoryRecord) {
+  const parsed = parseConversationScope(record.scopeKey);
+  if (!parsed) {
+    return "main";
+  }
+  if (parsed.kind === "channel") {
+    return normalizeChannelPaneType(parsed.channelType) || "main";
+  }
+  const target = parsed.sessionTarget?.trim().toLowerCase() || "";
+  if (!target || target === "main") {
+    return "main";
+  }
+  const channelCandidate = target.split(":").find((segment) => segment.trim().length > 0)?.trim() || "";
+  if (!channelCandidate || channelCandidate === "main") {
+    return "main";
+  }
+  return normalizeChannelPaneType(channelCandidate) || channelCandidate;
+}
+
+function resolveRelatedHistoryChannelLabel(channelId: string) {
+  const normalized = normalizeChannelPaneType(channelId) || channelId.trim().toLowerCase();
+  if (!normalized || normalized === "main") {
+    return "Main";
+  }
+  const catalog = resolveChannelConfigCatalog(normalized);
+  return catalog?.name?.trim() || channelId;
+}
+
+function isLikelyChannelConversationTarget(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === "main" || normalized === "default") {
+    return false;
+  }
+  if (normalized.includes(":")) {
+    return true;
+  }
+  if (normalized.startsWith("ou_") || normalized.startsWith("oc_")) {
+    return true;
+  }
+  if (normalized.startsWith("@")) {
+    return true;
+  }
+  if (/^[+-]?\d+$/.test(normalized)) {
+    return true;
+  }
+  if (normalized.includes("@")) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeChannelMessageMirrorTarget(channelTypeRaw: string, rawTarget: string) {
+  const channelType = normalizeChannelPaneType(channelTypeRaw);
+  const target = rawTarget.trim();
+  if (!target) {
+    return "";
+  }
+  if (channelType !== FEISHU_CHANNEL_ID) {
+    return target;
+  }
+
+  const normalizedTarget = target.toLowerCase();
+  if (normalizedTarget.startsWith("user:") || normalizedTarget.startsWith("chat:")) {
+    return target;
+  }
+  if (normalizedTarget.startsWith("ou_")) {
+    return `user:${target}`;
+  }
+  if (normalizedTarget.startsWith("oc_")) {
+    return `chat:${target}`;
+  }
+
+  const segments = target.split(":").map((segment) => segment.trim()).filter(Boolean);
+  if (segments.length >= 2) {
+    const prefix = normalizeChannelPaneType(segments[0]) || segments[0].toLowerCase();
+    const kind = segments[1]?.toLowerCase() || "";
+    const id = segments[segments.length - 1] || "";
+    if (id && (prefix === FEISHU_CHANNEL_ID || prefix === "openclaw-lark" || prefix === "lark")) {
+      if (kind === "direct" || kind === "user" || kind === "open_id" || kind === "openid") {
+        return `user:${id}`;
+      }
+      if (kind === "group" || kind === "chat") {
+        return `chat:${id}`;
+      }
+    }
+  }
+
+  return target;
+}
+
+function resolveChannelMessageMirrorTarget(
+  conversationScopeKey: string,
+  channelSession: ChannelPaneChatItem | null
+): ChannelMessageMirrorTarget | null {
+  const parsed = parseConversationScope(conversationScopeKey);
+  if (!parsed) {
+    return null;
+  }
+
+  const sessionAccountId =
+    channelSession?.channelType === VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE
+      ? "default"
+      : channelSession?.accountId?.trim() || "default";
+  const resolveWithChannel = (channelTypeRaw: string, rawTarget: string, accountId: string | null | undefined) => {
+    const channelType = normalizeChannelPaneType(channelTypeRaw);
+    const target = normalizeChannelMessageMirrorTarget(channelType, rawTarget);
+    const resolvedAccountId = (accountId ?? sessionAccountId).trim() || "default";
+    if (!channelType || !target || target.toLowerCase() === "main") {
+      return null;
+    }
+    return {
+      channelType,
+      accountId: resolvedAccountId,
+      target
+    };
+  };
+
+  if (parsed.kind === "agent") {
+    const sessionTarget = parsed.sessionTarget?.trim() || "";
+    if (!sessionTarget || sessionTarget.toLowerCase() === "main") {
+      return null;
+    }
+
+    const firstSegment = sessionTarget.split(":")[0]?.trim() || "";
+    const inferredChannelFromTarget = normalizeChannelPaneType(firstSegment);
+    if (inferredChannelFromTarget) {
+      return resolveWithChannel(inferredChannelFromTarget, sessionTarget, sessionAccountId);
+    }
+
+    const channelFromSession =
+      channelSession && channelSession.channelType !== VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE
+        ? normalizeChannelPaneType(channelSession.channelType)
+        : "";
+    if (!channelFromSession || !isLikelyChannelConversationTarget(sessionTarget)) {
+      return null;
+    }
+    return resolveWithChannel(channelFromSession, sessionTarget, sessionAccountId);
+  }
+
+  const channelType = normalizeChannelPaneType(parsed.channelType);
+  const accountId = parsed.accountId.trim();
+  if (!channelType || !isLikelyChannelConversationTarget(accountId)) {
+    return null;
+  }
+
+  let target = accountId;
+  const normalizedAccount = accountId.toLowerCase();
+  if (!normalizedAccount.startsWith(`${channelType}:`) && accountId.includes(":")) {
+    target = `${channelType}:${accountId}`;
+  } else if (!accountId.includes(":") && channelType === FEISHU_CHANNEL_ID) {
+    target = `user:${accountId}`;
+  }
+
+  return resolveWithChannel(channelType, target, accountId);
+}
+
+function buildChannelMessageMirrorContent(text: string, attachments: ChatComposerAttachment[]) {
+  const trimmed = text.trim();
+  const attachmentSummary = formatAttachmentSummaryForPrompt(attachments);
+  if (attachments.length <= 0) {
+    return trimmed;
+  }
+  const header = trimmed || "(附件)";
+  if (!attachmentSummary) {
+    return header;
+  }
+  return `${header}\n\n${attachmentSummary}`;
+}
+
+async function dispatchChannelMessageMirror(
+  conversationScopeKey: string,
+  message: string,
+  channelSession: ChannelPaneChatItem | null
+) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return;
+  }
+  const payload = message.trim();
+  if (!payload) {
+    return;
+  }
+
+  const target = resolveChannelMessageMirrorTarget(conversationScopeKey, channelSession);
+  if (!target) {
+    return;
+  }
+
+  const commandPayload: OpenClawChannelMessageSendPayload = {
+    channelType: target.channelType,
+    accountId: target.accountId,
+    target: target.target,
+    message: payload
+  };
+  try {
+    await invoke("send_openclaw_channel_message", {
+      payload: commandPayload
+    });
+  } catch (error) {
+    const errorText =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string" && error.trim()
+          ? error
+          : "未知错误";
+    const compactError = errorText.replace(/\s+/g, " ").trim();
+    const visibleError = compactError.length > 220 ? `${compactError.slice(0, 220)}...` : compactError;
+    const channelLabel = target.channelType === FEISHU_CHANNEL_ID ? "飞书" : target.channelType;
+    chatComposerError.value = `消息已发送，但转发到${channelLabel}失败：${visibleError || "未知错误"}`;
+    console.warn("[channel-mirror] send_openclaw_channel_message failed", {
+      payload: commandPayload,
+      error
+    });
+  }
+}
+
+function getRelatedHistoryPreviewText(messages: AgentChatMessage[]) {
+  const latest = messages[messages.length - 1];
+  if (!latest) {
+    return "暂无内容";
+  }
+  const text = latest.text.replace(/\s+/g, " ").trim();
+  if (text) {
+    if (text.length > 64) {
+      return `${text.slice(0, 64)}...`;
+    }
+    return text;
+  }
+  const attachmentCount = latest.attachments?.length ?? 0;
+  if (attachmentCount > 0) {
+    return `[附件 ${attachmentCount} 个]`;
+  }
+  return "暂无内容";
+}
+
+function getRelatedMessageItems(messages: AgentChatMessage[]) {
+  return getStableChatMessages(messages).filter(
+    (item) => (item.role === "assistant" || item.role === "user") && !isRuntimeToolMessage(item)
+  );
+}
+
+function shouldUseLegacyAgentStorage(scopeKey: string, agentId: string) {
+  const normalizedScopeKey = normalizeStoredConversationScopeKey(scopeKey);
+  if (!normalizedScopeKey) {
+    return false;
+  }
+  return normalizedScopeKey === buildAgentConversationScopeKey(agentId);
+}
+
+function formatOpenClawSessionScopeLabel(item: OpenClawAgentSessionSnapshotItem) {
+  const base = item.sessionTarget?.trim() || "main";
+  const channel = item.lastChannel?.trim() || "";
+  return channel ? `${base} · ${channel}` : base;
+}
+
+async function loadOpenClawRelatedHistoryRecords(agent: AgentListItem, activeScopeKey: string | null) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return [] as ChatRelatedHistoryRecord[];
+  }
+  try {
+    const snapshot = (await invoke("load_openclaw_agent_sessions_snapshot", {
+      agentId: agent.agentId
+    })) as OpenClawAgentSessionsSnapshotResponse;
+    const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+    return sessions
+      .map((item) => ({
+        id: `openclaw-session:${item.sessionKey}`,
+        scopeKey: item.sessionKey,
+        scopeLabel:
+          activeScopeKey && normalizeStoredConversationScopeKey(item.sessionKey) === activeScopeKey
+            ? `${formatOpenClawSessionScopeLabel(item)}（当前）`
+            : formatOpenClawSessionScopeLabel(item),
+        updatedAt: typeof item.updatedAtMs === "number" && Number.isFinite(item.updatedAtMs) ? item.updatedAtMs : Date.now(),
+        messageCount: typeof item.messageCount === "number" && Number.isFinite(item.messageCount) ? Math.max(0, item.messageCount) : 0,
+        preview: item.preview?.trim() || "暂无消息",
+        isActiveScope: Boolean(activeScopeKey && normalizeStoredConversationScopeKey(item.sessionKey) === activeScopeKey)
+      }))
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+  } catch {
+    return [] as ChatRelatedHistoryRecord[];
+  }
+}
+
+async function loadOpenClawSessionHistory(agent: AgentListItem, scopeKey: string) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return [] as AgentChatMessage[];
+  }
+  try {
+    const response = (await invoke("load_openclaw_agent_session_history", {
+      agentId: agent.agentId,
+      sessionKey: scopeKey
+    })) as OpenClawAgentSessionHistoryResponse;
+    const messages = Array.isArray(response.messages) ? response.messages : [];
+    return messages
+      .filter((item) => item.role === "assistant" || item.role === "user")
+      .map((item, index) => ({
+        id: item.id?.trim() || createMessageId(`runtime-${index}`),
+        role: item.role,
+        text: typeof item.text === "string" ? sanitizeMessageTextForDisplay(item.text) : "",
+        status: "done" as ChatStatus,
+        createdAt: typeof item.createdAtMs === "number" && Number.isFinite(item.createdAtMs) ? item.createdAtMs : Date.now()
+      }))
+      .filter((item) => item.text.trim().length > 0 || item.role === "assistant" || item.role === "user");
+  } catch {
+    return [] as AgentChatMessage[];
+  }
+}
+
+function isOpenClawAgentSessionScope(scopeKey: string, agentId: string) {
+  const normalizedScopeKey = normalizeStoredConversationScopeKey(scopeKey);
+  if (!normalizedScopeKey) {
+    return false;
+  }
+  const baseScope = buildAgentConversationScopeKey(agentId);
+  if (normalizedScopeKey === baseScope) {
+    return true;
+  }
+  const agentPrefix = `${baseScope}:`;
+  return normalizedScopeKey.startsWith(agentPrefix);
+}
+
+function areChatHistoriesEquivalent(left: AgentChatMessage[], right: AgentChatMessage[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftItem = left[index];
+    const rightItem = right[index];
+    if (!leftItem || !rightItem) {
+      return false;
+    }
+    if (leftItem.role !== rightItem.role) {
+      return false;
+    }
+    if (leftItem.text !== rightItem.text) {
+      return false;
+    }
+    if ((leftItem.createdAt ?? 0) !== (rightItem.createdAt ?? 0)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function syncOpenClawSessionHistoryToLocal(
+  agent: AgentListItem,
+  scopeKey: string,
+  options: { applyToActiveConversation?: boolean } = {}
+) {
+  const normalizedScopeKey = normalizeStoredConversationScopeKey(scopeKey);
+  if (!normalizedScopeKey || !isOpenClawAgentSessionScope(normalizedScopeKey, agent.agentId)) {
+    return [] as AgentChatMessage[];
+  }
+
+  const latestHistory = await loadOpenClawSessionHistory(agent, normalizedScopeKey);
+  if (latestHistory.length === 0) {
+    return [] as AgentChatMessage[];
+  }
+
+  const localCachedHistory = agentHistories.value[normalizedScopeKey] ?? loadChatHistory(normalizedScopeKey);
+  if (!areChatHistoriesEquivalent(localCachedHistory, latestHistory)) {
+    agentHistories.value[normalizedScopeKey] = [...latestHistory];
+    safeStorageSet(chatStorageKeyFor(normalizedScopeKey), JSON.stringify(latestHistory));
+  }
+
+  if (options.applyToActiveConversation && activeConversationScopeKey.value === normalizedScopeKey) {
+    const hasPendingMessage = chatMessages.value.some((message) => message.status === "pending");
+    if (!hasPendingMessage && !areChatHistoriesEquivalent(chatMessages.value, latestHistory)) {
+      chatMessages.value = latestHistory.map((message) => ({ ...message }));
+      chatAttachments.value = [];
+      chatComposerError.value = "";
+      refreshAgentMetaFromHistory(agent.agentId, latestHistory, agent.currentWork);
+      void scrollMessagesToBottom();
+    }
+  }
+
+  return latestHistory;
+}
+
+function buildVirtualOpenClawSessionItem(scopeKey: string, scopeLabel: string, agentId: string, preview: string): ChannelPaneChatItem {
+  return {
+    id: `virtual-openclaw-${scopeKey}`,
+    catalogId: "openclaw-session",
+    channelType: VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE,
+    name: scopeLabel,
+    icon: null,
+    accountId: scopeKey,
+    summary: preview || "历史会话",
+    statusLabel: "历史会话",
+    statusTone: "online",
+    boundAgentId: agentId
+  };
+}
+
+const activeConversationScopeKey = computed(() =>
+  normalizeStoredConversationScopeKey(resolveConversationScopeKey(activeAgent.value?.agentId ?? null, activeChannelChatSession.value) ?? "")
+);
+
+function isRelatedHistoryRecordActive(record: ChatRelatedHistoryRecord) {
+  const activeScopeKey = activeConversationScopeKey.value;
+  const targetScopeKey = normalizeStoredConversationScopeKey(record.scopeKey);
+  if (!activeScopeKey || !targetScopeKey) {
+    return false;
+  }
+  return activeScopeKey === targetScopeKey;
+}
+
+async function handleRelatedHistoryRecordSelect(record: ChatRelatedHistoryRecord) {
+  const agent = activeAgent.value;
+  if (!agent) {
+    return;
+  }
+  const normalizedScopeKey = normalizeStoredConversationScopeKey(record.scopeKey);
+  if (!normalizedScopeKey) {
+    return;
+  }
+
+  const loadOptions: ConversationStorageReadOptions = shouldUseLegacyAgentStorage(normalizedScopeKey, agent.agentId)
+    ? { legacyAgentId: agent.agentId }
+    : {};
+  if (isOpenClawAgentSessionScope(normalizedScopeKey, agent.agentId)) {
+    await syncOpenClawSessionHistoryToLocal(agent, normalizedScopeKey);
+  } else {
+    const history = loadChatHistory(normalizedScopeKey, loadOptions);
+    if (history.length > 0) {
+      agentHistories.value[normalizedScopeKey] = [...history];
+    }
+  }
+
+  const targetSession = buildVirtualOpenClawSessionItem(
+    normalizedScopeKey,
+    resolveConversationScopeLabel(normalizedScopeKey),
+    agent.agentId,
+    record.preview
+  );
+  switchAgent(agent.agentId, { channelSession: targetSession, force: true });
+}
+
+function collectRelatedConversationScopeKeys(agent: AgentListItem) {
+  const normalizedAgentId = normalizeConversationKeyPart(agent.agentId);
+  const historyKeyPrefix = `${CHAT_STORAGE_PREFIX}.`;
+  const archiveKeyPrefix = `${CHAT_ARCHIVE_STORAGE_PREFIX}.`;
+  const scopeSet = new Set<string>();
+
+  const collectFromStoragePrefix = (prefix: string) => {
+    const rawKeys = safeStorageKeysByPrefix(prefix);
+    for (const rawKey of rawKeys) {
+      const rawScopeKey = rawKey.slice(prefix.length).trim();
+      if (!rawScopeKey) {
+        continue;
+      }
+      const normalizedScopeKey = normalizeStoredConversationScopeKey(rawScopeKey);
+      if (!normalizedScopeKey) {
+        continue;
+      }
+      const parsed = parseConversationScope(normalizedScopeKey);
+      if (!parsed || parsed.ownerAgentId !== normalizedAgentId) {
+        continue;
+      }
+      scopeSet.add(normalizedScopeKey);
+    }
+  };
+
+  collectFromStoragePrefix(historyKeyPrefix);
+  collectFromStoragePrefix(archiveKeyPrefix);
+
+  const activeScopeKey = resolveConversationScopeKey(agent.agentId, activeChannelChatSession.value);
+  const normalizedActiveScopeKey = activeScopeKey ? normalizeStoredConversationScopeKey(activeScopeKey) : null;
+  if (normalizedActiveScopeKey) {
+    scopeSet.add(normalizedActiveScopeKey);
+  }
+
+  return Array.from(scopeSet.values());
+}
+
+function collectRelatedHistoryRecords(agent: AgentListItem) {
+  const activeScopeKey = resolveConversationScopeKey(agent.agentId, activeChannelChatSession.value);
+  const normalizedActiveScopeKey = activeScopeKey ? normalizeStoredConversationScopeKey(activeScopeKey) : null;
+  const scopeKeys = collectRelatedConversationScopeKeys(agent);
+  const records: ChatRelatedHistoryRecord[] = [];
+
+  for (const scopeKey of scopeKeys) {
+    const parsed = parseConversationScope(scopeKey);
+    const loadOptions: ConversationStorageReadOptions = shouldUseLegacyAgentStorage(scopeKey, agent.agentId)
+      ? { legacyAgentId: agent.agentId }
+      : {};
+    let messages = getRelatedMessageItems(loadChatHistory(scopeKey, loadOptions));
+    if (normalizedActiveScopeKey && scopeKey === normalizedActiveScopeKey) {
+      const activeMessages = getRelatedMessageItems(chatMessages.value);
+      if (activeMessages.length > 0 || messages.length === 0) {
+        messages = activeMessages;
+      }
+    }
+    if (messages.length === 0) {
+      if (normalizedActiveScopeKey && scopeKey === normalizedActiveScopeKey) {
+        records.push({
+          id: `related-history:${scopeKey}`,
+          scopeKey,
+          scopeLabel: `${resolveConversationScopeLabel(scopeKey)}（当前）`,
+          updatedAt: Date.now(),
+          messageCount: 0,
+          preview: "当前会话暂无消息",
+          isActiveScope: true
+        });
+      }
+      continue;
+    }
+    const latest = messages[messages.length - 1];
+    records.push({
+      id: `related-history:${scopeKey}`,
+      scopeKey,
+      scopeLabel: scopeKey === normalizedActiveScopeKey ? `${resolveConversationScopeLabel(scopeKey)}（当前）` : resolveConversationScopeLabel(scopeKey),
+      updatedAt: latest?.createdAt ?? Date.now(),
+      messageCount: messages.length,
+      preview: getRelatedHistoryPreviewText(messages),
+      isActiveScope: Boolean(normalizedActiveScopeKey && scopeKey === normalizedActiveScopeKey)
+    });
+  }
+
+  records.sort((left, right) => {
+    if (left.isActiveScope !== right.isActiveScope) {
+      return left.isActiveScope ? -1 : 1;
+    }
+    return right.updatedAt - left.updatedAt;
+  });
+  return records;
+}
+
+function collectRelatedArchiveRecords(agent: AgentListItem) {
+  const scopeKeys = collectRelatedConversationScopeKeys(agent);
+  const records: ChatRelatedArchiveRecord[] = [];
+  for (const scopeKey of scopeKeys) {
+    const loadOptions: ConversationStorageReadOptions = shouldUseLegacyAgentStorage(scopeKey, agent.agentId)
+      ? { legacyAgentId: agent.agentId }
+      : {};
+    const archives = loadChatArchives(scopeKey, loadOptions);
+    for (const record of archives) {
+      records.push({
+        id: `${scopeKey}::${record.id}`,
+        scopeKey,
+        scopeLabel: resolveConversationScopeLabel(scopeKey),
+        archivedAt: record.archivedAt,
+        title: record.title,
+        messageCount: record.messages.length,
+        preview: getArchivePreviewText(record),
+        record
+      });
+    }
+  }
+  records.sort((left, right) => right.archivedAt - left.archivedAt);
+  return records;
+}
+
+const relatedHistoryChannelFilterOptions = computed(() => {
+  const records = chatRelatedHistoryRecords.value;
+  const channelMap = new Map<string, { count: number; firstIndex: number }>();
+  records.forEach((record, index) => {
+    const channelId = resolveRelatedHistoryRecordChannelId(record);
+    const existing = channelMap.get(channelId);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+    channelMap.set(channelId, { count: 1, firstIndex: index });
+  });
+  const channelOptions = Array.from(channelMap.entries())
+    .sort((left, right) => {
+      if (left[0] === "main" && right[0] !== "main") {
+        return -1;
+      }
+      if (right[0] === "main" && left[0] !== "main") {
+        return 1;
+      }
+      return left[1].firstIndex - right[1].firstIndex;
+    })
+    .map(([id, meta]) => ({
+      id,
+      label: resolveRelatedHistoryChannelLabel(id),
+      count: meta.count
+    }));
+  return [
+    { id: RELATED_HISTORY_FILTER_ALL, label: "所有", count: records.length },
+    ...channelOptions
+  ];
+});
+
+const effectiveRelatedHistoryChannelFilter = computed(() => {
+  const selected = relatedHistoryChannelFilter.value;
+  if (selected === RELATED_HISTORY_FILTER_ALL) {
+    return selected;
+  }
+  return relatedHistoryChannelFilterOptions.value.some((option) => option.id === selected) ? selected : RELATED_HISTORY_FILTER_ALL;
+});
+
+const filteredChatRelatedHistoryRecords = computed(() => {
+  const activeFilter = effectiveRelatedHistoryChannelFilter.value;
+  if (activeFilter === RELATED_HISTORY_FILTER_ALL) {
+    return chatRelatedHistoryRecords.value;
+  }
+  return chatRelatedHistoryRecords.value.filter((record) => resolveRelatedHistoryRecordChannelId(record) === activeFilter);
+});
 
 function syncRelatedMemorySelection(preferredId: string | null = null) {
   const items = relatedMemoryItems.value;
@@ -6569,32 +7866,23 @@ async function loadRelatedModelSnapshot() {
       detail: "当前环境不支持读取模型平台配置。",
       platforms: []
     };
-    relatedModelDraft.value = null;
+    relatedModelDraft.value = buildRelatedModelCustomDraft();
     relatedModelCustomExpanded.value = true;
+    relatedModelApiKeyVisible.value = false;
+    relatedModelSelectedPopularPlatformId.value = null;
+    relatedModelEditingProviderId.value = null;
+    relatedModelPendingDeleteProviderId.value = null;
     relatedResourceModalError.value = "当前环境不支持模型配置快照。";
     return;
   }
 
   relatedModelSnapshot.value = (await invoke("load_openclaw_platforms_snapshot")) as OpenClawPlatformSnapshotResponse;
   relatedModelCustomExpanded.value = (relatedModelSnapshot.value?.platforms ?? []).length === 0;
-  const target = resolveRelatedModelPlatform(activeAgent.value, relatedModelSnapshot.value?.platforms ?? []);
-  if (!target) {
-    relatedModelDraft.value = null;
-    return;
-  }
-
-  const modelRef = parseAgentModelReference(activeAgent.value?.model);
-  const fallbackModel = modelRef.modelId || modelRef.rawModel;
-  relatedModelDraft.value = {
-    providerId: target.providerId || normalizeProviderIdentifier(target.pathPrefix) || "custom",
-    providerName: target.name || target.providerId || "未命名 Provider",
-    protocol: normalizeProviderProtocol(target.protocol),
-    apiKind: inferProviderApiKind(normalizeProviderProtocol(target.protocol), target.apiPath || ""),
-    baseUrl: target.baseUrl || "",
-    model: target.model || fallbackModel,
-    apiKey: target.apiKey || "",
-    apiPath: target.apiPath || ""
-  };
+  relatedModelDraft.value = buildRelatedModelCustomDraft();
+  relatedModelApiKeyVisible.value = false;
+  relatedModelSelectedPopularPlatformId.value = null;
+  relatedModelEditingProviderId.value = null;
+  relatedModelPendingDeleteProviderId.value = null;
 }
 
 async function loadRelatedChannelSnapshot() {
@@ -6653,6 +7941,102 @@ function clearTaskReminderAutoCloseTimer() {
   }
 }
 
+function buildTaskReminderSystemNotificationBody(job: TaskSnapshotItem) {
+  const lines = [`${formatTaskScheduleKind(job.scheduleKind, job.deleteAfterRun)} · 到点 ${formatDateTime(job.nextRunAtMs)}`];
+  const summary = job.summary.trim();
+  if (summary) {
+    lines.push(summary);
+  }
+  return lines.join("\n");
+}
+
+function buildTaskReminderSystemNotificationTitle(job: TaskSnapshotItem) {
+  const title = `任务提醒：${job.name || "未命名任务"}`;
+  return title;
+}
+
+async function tryShowTauriTaskReminderNotification(job: TaskSnapshotItem) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return false;
+  }
+
+  const title = buildTaskReminderSystemNotificationTitle(job);
+  const body = buildTaskReminderSystemNotificationBody(job);
+  const notifyByBackendCommand = async () => {
+    await invoke("show_system_notification", {
+      title,
+      body
+    });
+  };
+
+  try {
+    await notifyByBackendCommand();
+    return true;
+  } catch (error) {
+    console.warn("Failed to show task reminder system notification via Tauri backend.", error);
+    return false;
+  }
+}
+
+function showWebTaskReminderNotification(job: TaskSnapshotItem) {
+  if (typeof window === "undefined" || typeof Notification === "undefined") {
+    return;
+  }
+
+  const title = buildTaskReminderSystemNotificationTitle(job);
+  const body = buildTaskReminderSystemNotificationBody(job);
+  const tag = `dragonclaw-task-reminder-${job.id}`;
+
+  const dispatchNotification = () => {
+    try {
+      const notification = new Notification(title, { body, tag });
+      notification.onclick = () => {
+        if (typeof window.focus === "function") {
+          window.focus();
+        }
+        activeSection.value = "tasks";
+        if (typeof notification.close === "function") {
+          notification.close();
+        }
+      };
+    } catch {
+      // Ignore web notification failures and keep in-app reminders available.
+    }
+  };
+
+  if (Notification.permission === "granted") {
+    dispatchNotification();
+    return;
+  }
+
+  if (Notification.permission !== "default" || taskReminderNotificationPermissionRequesting) {
+    return;
+  }
+
+  taskReminderNotificationPermissionRequesting = true;
+  Notification.requestPermission()
+    .then((permission) => {
+      if (permission === "granted") {
+        dispatchNotification();
+      }
+    })
+    .catch(() => {
+      // Ignore permission request failures.
+    })
+    .finally(() => {
+      taskReminderNotificationPermissionRequesting = false;
+    });
+}
+
+async function showSystemTaskReminderNotification(job: TaskSnapshotItem) {
+  const shownByTauri = await tryShowTauriTaskReminderNotification(job);
+  if (shownByTauri) {
+    return;
+  }
+  showWebTaskReminderNotification(job);
+}
+
 function showNextTaskReminder() {
   if (taskReminderPopup.value || taskReminderQueue.value.length === 0) {
     return;
@@ -6664,6 +8048,7 @@ function showNextTaskReminder() {
     job: nextJob,
     queuedCount: taskReminderQueue.value.length
   };
+  void showSystemTaskReminderNotification(nextJob);
   clearTaskReminderAutoCloseTimer();
   taskReminderAutoCloseTimer = window.setTimeout(() => {
     closeTaskReminderPopup();
@@ -6686,6 +8071,42 @@ function closeTaskReminderPopup() {
 function openTaskBoardFromReminder() {
   activeSection.value = "tasks";
   closeTaskReminderPopup();
+}
+
+function triggerTemporaryTaskReminderTestPopup() {
+  const nowMs = Date.now();
+  const currentPopup = taskReminderPopup.value;
+  if (currentPopup && !currentPopup.job.id.startsWith(TEMP_TEST_TASK_REMINDER_ID_PREFIX)) {
+    taskReminderQueue.value = [currentPopup.job, ...taskReminderQueue.value];
+  }
+
+  const testJob: TaskSnapshotItem = {
+    id: `${TEMP_TEST_TASK_REMINDER_ID_PREFIX}-${nowMs}`,
+    name: "临时测试监控任务",
+    agentId: "monitor-test-agent",
+    sessionTarget: "manual-test",
+    enabled: true,
+    deleteAfterRun: true,
+    statusKind: "enabled",
+    statusLabel: "启用",
+    summary: "这是测试任务消息：用于验证左侧按钮触发监控任务提醒弹窗。",
+    nextRunAtMs: nowMs,
+    createdAtMs: nowMs,
+    updatedAtMs: nowMs,
+    scheduleKind: "at"
+  };
+
+  taskReminderPopup.value = {
+    id: `task-reminder-test-${nowMs}`,
+    job: testJob,
+    queuedCount: taskReminderQueue.value.length
+  };
+  void showSystemTaskReminderNotification(testJob);
+
+  clearTaskReminderAutoCloseTimer();
+  taskReminderAutoCloseTimer = window.setTimeout(() => {
+    closeTaskReminderPopup();
+  }, taskReminderAutoCloseMs);
 }
 
 function queueTaskReminder(job: TaskSnapshotItem) {
@@ -9093,8 +10514,12 @@ function closeRelatedResourceModal() {
   relatedSkillSearch.value = "";
   relatedToolsFilter.value = RELATED_TOOLS_FILTER_ALL;
   relatedScheduleFilter.value = "all";
-  relatedModelDraft.value = null;
+  relatedModelDraft.value = buildRelatedModelCustomDraft();
   relatedModelCustomExpanded.value = false;
+  relatedModelApiKeyVisible.value = false;
+  relatedModelSelectedPopularPlatformId.value = null;
+  relatedModelEditingProviderId.value = null;
+  relatedModelPendingDeleteProviderId.value = null;
 }
 
 async function handleRelatedResourceRefresh() {
@@ -9155,12 +10580,12 @@ function clearUtilityViewStatus() {
 }
 
 function closeSidebarLogsPanel() {
-  const closeSidebarLogsView = chatSettingsPanelMode.value === "logs";
-  if (!isSidebarLogsOpen.value && !closeSidebarLogsView) {
+  const closeSidebarUtilityView = chatSettingsPanelMode.value === "logs" || chatSettingsPanelMode.value === "history";
+  if (!isSidebarLogsOpen.value && !closeSidebarUtilityView) {
     return;
   }
   isSidebarLogsOpen.value = false;
-  if (closeSidebarLogsView) {
+  if (closeSidebarUtilityView) {
     isAgentSettingsOpen.value = false;
     chatSettingsPanelMode.value = "agent";
   }
@@ -9186,10 +10611,41 @@ async function refreshUtilityModalData(type: UtilityModalType) {
       const conversationScopeKey = resolveConversationScopeKey(agent?.agentId ?? null, activeChannelChatSession.value);
       if (!agent || !conversationScopeKey) {
         chatHistoryArchives.value = [];
+        chatRelatedHistoryRecords.value = [];
+        chatRelatedArchiveRecords.value = [];
         return;
+      }
+      const normalizedConversationScopeKey = normalizeStoredConversationScopeKey(conversationScopeKey);
+      if (normalizedConversationScopeKey && isOpenClawAgentSessionScope(normalizedConversationScopeKey, agent.agentId)) {
+        await syncOpenClawSessionHistoryToLocal(agent, normalizedConversationScopeKey, { applyToActiveConversation: true });
       }
       const readOptions: ConversationStorageReadOptions = activeChannelChatSession.value ? {} : { legacyAgentId: agent.agentId };
       chatHistoryArchives.value = loadChatArchives(conversationScopeKey, readOptions);
+      const localRelatedRecords = collectRelatedHistoryRecords(agent);
+      const openclawRelatedRecords = await loadOpenClawRelatedHistoryRecords(
+        agent,
+        normalizeStoredConversationScopeKey(conversationScopeKey)
+      );
+      if (openclawRelatedRecords.length === 0) {
+        chatRelatedHistoryRecords.value = localRelatedRecords;
+      } else {
+        const mergedMap = new Map<string, ChatRelatedHistoryRecord>();
+        for (const record of openclawRelatedRecords) {
+          mergedMap.set(record.scopeKey, record);
+        }
+        for (const record of localRelatedRecords) {
+          if (!mergedMap.has(record.scopeKey)) {
+            mergedMap.set(record.scopeKey, record);
+          }
+        }
+        chatRelatedHistoryRecords.value = Array.from(mergedMap.values()).sort((left, right) => {
+          if (left.isActiveScope !== right.isActiveScope) {
+            return left.isActiveScope ? -1 : 1;
+          }
+          return right.updatedAt - left.updatedAt;
+        });
+      }
+      chatRelatedArchiveRecords.value = collectRelatedArchiveRecords(agent);
       return;
     }
 
@@ -9221,21 +10677,13 @@ async function refreshUtilityModalData(type: UtilityModalType) {
   }
 }
 
-async function openUtilityModal(type: UtilityModalType) {
-  closeChannelBindingModal();
-  closeSidebarLogsPanel();
-  utilityModalType.value = type;
-  utilityModalNotice.value = "";
-  utilityModalError.value = "";
-  if (type === "logs") {
-    resetUtilityLogViewState();
-  }
-  await refreshUtilityModalData(type);
-}
-
 async function handleUtilityModalRefresh() {
   if (utilityModalType.value) {
     await refreshUtilityModalData(utilityModalType.value);
+    return;
+  }
+  if (isHistoryPanelActive.value) {
+    await refreshUtilityModalData("history");
     return;
   }
   if (isLogsPanelActive.value || isSidebarLogsOpen.value) {
@@ -9283,7 +10731,7 @@ async function handleArchiveCurrentChat() {
   refreshAgentMetaFromHistory(agent.agentId, chatMessages.value, agent.currentWork);
 
   utilityModalNotice.value = "当前会话已归档，可在聊天记录中查看。";
-  if (utilityModalType.value === "history") {
+  if (utilityModalType.value === "history" || isHistoryPanelActive.value) {
     await refreshUtilityModalData("history");
   }
   void scrollMessagesToBottom();
@@ -9306,7 +10754,9 @@ function handleRestoreArchive(record: ChatArchiveRecord) {
   agentHistories.value[conversationScopeKey] = [...chatMessages.value];
   refreshAgentMetaFromHistory(agent.agentId, chatMessages.value, agent.currentWork);
   utilityModalNotice.value = `已恢复归档会话「${record.title}」。`;
-  closeUtilityModal();
+  if (utilityModalType.value === "history") {
+    closeUtilityModal();
+  }
   void scrollMessagesToBottom();
 }
 
@@ -9391,6 +10841,149 @@ function isRelatedModelPresetActive(reference: string) {
   return normalizeModelReference(reference) === relatedModelActiveReference.value;
 }
 
+function isRelatedModelPresetEditing(providerId: string) {
+  return equalsIgnoreCase(relatedModelEditingProviderId.value, providerId);
+}
+
+function isRelatedModelPresetDeletePending(providerId: string) {
+  return equalsIgnoreCase(relatedModelPendingDeleteProviderId.value, providerId);
+}
+
+function clearRelatedModelPendingDelete(providerId?: string) {
+  if (providerId && !equalsIgnoreCase(relatedModelPendingDeleteProviderId.value, providerId)) {
+    return;
+  }
+  relatedModelPendingDeleteProviderId.value = null;
+}
+
+function toggleRelatedModelApiKeyVisibility() {
+  relatedModelApiKeyVisible.value = !relatedModelApiKeyVisible.value;
+}
+
+function handleRelatedModelPopularPlatformSelect(platformId: string) {
+  if (relatedResourceModalSaving.value || relatedResourceModalLoading.value) {
+    return;
+  }
+  const target = relatedModelPopularPlatforms.find((item) => item.id === platformId);
+  const draft = relatedModelDraft.value;
+  if (!target || !draft) {
+    return;
+  }
+  clearRelatedModelPendingDelete();
+  const protocol = resolveProviderProtocolByApiKind(target.apiKind);
+  relatedModelDraft.value = {
+    ...draft,
+    providerName: inferProviderNameFromBaseUrl(target.baseUrl),
+    protocol,
+    apiKind: normalizeProviderApiKind(protocol, target.apiKind),
+    baseUrl: target.baseUrl,
+    model: target.models[0] ?? ""
+  };
+  relatedModelSelectedPopularPlatformId.value = target.id;
+}
+
+function handleRelatedModelSuggestedModelSelect(modelId: string) {
+  if (relatedResourceModalSaving.value || !relatedModelDraft.value) {
+    return;
+  }
+  clearRelatedModelPendingDelete();
+  relatedModelDraft.value = {
+    ...relatedModelDraft.value,
+    model: modelId.trim()
+  };
+}
+
+function handleRelatedModelPresetEdit(providerId: string) {
+  if (relatedResourceModalSaving.value || relatedResourceModalLoading.value) {
+    relatedResourceModalNotice.value = "当前正在处理模型配置，请稍后再试。";
+    return;
+  }
+  const target = (relatedModelSnapshot.value?.platforms ?? []).find((platform) => equalsIgnoreCase(platform.providerId, providerId));
+  if (!target) {
+    relatedResourceModalError.value = `未找到可编辑的平台：${providerId}`;
+    return;
+  }
+  relatedModelCustomExpanded.value = true;
+  relatedModelDraft.value = buildRelatedModelDraftFromPlatform(target);
+  relatedModelApiKeyVisible.value = false;
+  relatedModelSelectedPopularPlatformId.value = resolveRelatedModelPopularPlatformIdByBaseUrl(target.baseUrl);
+  relatedModelEditingProviderId.value = target.providerId;
+  clearRelatedModelPendingDelete();
+  relatedResourceModalError.value = "";
+  relatedResourceModalNotice.value = "";
+}
+
+async function handleRelatedModelPresetDelete(providerId: string) {
+  const target = (relatedModelSnapshot.value?.platforms ?? []).find((platform) => equalsIgnoreCase(platform.providerId, providerId));
+  if (!target) {
+    relatedResourceModalError.value = `未找到可删除的平台：${providerId}`;
+    return;
+  }
+  if (relatedResourceModalSaving.value || relatedResourceModalLoading.value) {
+    relatedResourceModalNotice.value = "当前正在处理模型配置，请稍后再试删除。";
+    return;
+  }
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    relatedResourceModalError.value = "当前环境不支持删除模型配置。";
+    return;
+  }
+
+  if (!isRelatedModelPresetDeletePending(target.providerId)) {
+    relatedModelPendingDeleteProviderId.value = target.providerId;
+    relatedResourceModalError.value = "";
+    relatedResourceModalNotice.value = `再次点击删除，确认移除「${target.name || target.providerId}」。`;
+    return;
+  }
+
+  clearRelatedModelPendingDelete(target.providerId);
+  relatedResourceModalSaving.value = true;
+  relatedResourceModalError.value = "";
+  relatedResourceModalNotice.value = "";
+  try {
+    await invoke("delete_openclaw_provider_config", { providerId: target.providerId });
+    relatedResourceModalNotice.value = `模型配置已删除：${target.providerId}`;
+    await Promise.all([loadRelatedModelSnapshot(), loadAgents()]);
+    relatedModelCustomExpanded.value = (relatedModelSnapshot.value?.platforms ?? []).length === 0;
+    relatedModelDraft.value = buildRelatedModelCustomDraft();
+    relatedModelApiKeyVisible.value = false;
+    relatedModelSelectedPopularPlatformId.value = null;
+    relatedModelEditingProviderId.value = null;
+    clearRelatedModelPendingDelete();
+  } catch (error) {
+    relatedResourceModalError.value =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string" && error.trim()
+          ? error
+          : "模型配置删除失败。";
+  } finally {
+    relatedResourceModalSaving.value = false;
+  }
+}
+
+function handleRelatedModelCustomToggle() {
+  if (relatedResourceModalSaving.value || relatedResourceModalLoading.value) {
+    relatedResourceModalNotice.value = "当前正在处理模型配置，请稍后再试。";
+    return;
+  }
+  clearRelatedModelPendingDelete();
+  if (relatedModelCustomExpanded.value) {
+    relatedModelCustomExpanded.value = false;
+    relatedModelApiKeyVisible.value = false;
+    relatedModelSelectedPopularPlatformId.value = null;
+    relatedModelEditingProviderId.value = null;
+    return;
+  }
+  relatedModelCustomExpanded.value = true;
+  relatedModelDraft.value = buildRelatedModelCustomDraft();
+  relatedModelApiKeyVisible.value = false;
+  relatedModelSelectedPopularPlatformId.value = null;
+  relatedModelEditingProviderId.value = null;
+  relatedResourceModalError.value = "";
+  relatedResourceModalNotice.value = "";
+}
+
 async function handleRelatedModelQuickSwitch(reference: string) {
   const invoke = getTauriInvoke();
   const agent = activeAgent.value;
@@ -9398,10 +10991,14 @@ async function handleRelatedModelQuickSwitch(reference: string) {
   if (!invoke || !agent || !targetModel || relatedResourceModalSaving.value) {
     return;
   }
+  clearRelatedModelPendingDelete();
 
   if (isRelatedModelPresetActive(targetModel)) {
     relatedResourceModalNotice.value = `当前已在使用模型：${targetModel}`;
     relatedModelCustomExpanded.value = false;
+    relatedModelApiKeyVisible.value = false;
+    relatedModelSelectedPopularPlatformId.value = null;
+    relatedModelEditingProviderId.value = null;
     return;
   }
 
@@ -9411,9 +11008,17 @@ async function handleRelatedModelQuickSwitch(reference: string) {
     await invoke("save_openclaw_agent_model", { agentId: agent.agentId, model: targetModel });
     relatedResourceModalNotice.value = `已切换模型：${targetModel}`;
     relatedModelCustomExpanded.value = false;
+    relatedModelApiKeyVisible.value = false;
+    relatedModelSelectedPopularPlatformId.value = null;
+    relatedModelEditingProviderId.value = null;
     await Promise.all([loadAgents(), loadRelatedModelSnapshot()]);
   } catch (error) {
-    relatedResourceModalError.value = error instanceof Error ? error.message : "模型切换失败。";
+    relatedResourceModalError.value =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string" && error.trim()
+          ? error
+          : "模型切换失败。";
   } finally {
     relatedResourceModalSaving.value = false;
   }
@@ -9425,14 +11030,11 @@ async function handleRelatedModelSave() {
   if (!invoke || !draft || relatedResourceModalSaving.value) {
     return;
   }
+  clearRelatedModelPendingDelete();
 
-  const providerId = draft.providerId.trim();
   const baseUrl = draft.baseUrl.trim();
   const model = draft.model.trim();
-  if (!providerId) {
-    relatedResourceModalError.value = "缺少 providerId，无法保存模型配置。";
-    return;
-  }
+  const providerName = draft.providerName.trim() || inferProviderNameFromBaseUrl(baseUrl);
   if (!baseUrl) {
     relatedResourceModalError.value = "请先填写基础 URL。";
     return;
@@ -9445,6 +11047,10 @@ async function handleRelatedModelSave() {
   relatedResourceModalSaving.value = true;
   relatedResourceModalError.value = "";
   try {
+    const editingProviderId = normalizeProviderIdentifier(relatedModelEditingProviderId.value);
+    const draftProviderId = normalizeProviderIdentifier(draft.providerId);
+    const providerId = editingProviderId || draftProviderId || resolveRelatedModelNextProviderId(draft);
+    const isEditing = Boolean(editingProviderId || draftProviderId);
     const selectedProtocol = resolveProviderProtocolByApiKind(draft.apiKind || draft.protocol);
     const selectedApiKind = normalizeProviderApiKind(
       selectedProtocol,
@@ -9453,6 +11059,7 @@ async function handleRelatedModelSave() {
     await invoke("save_openclaw_provider_config", {
       config: {
         providerId,
+        providerName,
         protocol: selectedProtocol,
         apiKind: selectedApiKind,
         baseUrl,
@@ -9460,10 +11067,36 @@ async function handleRelatedModelSave() {
         apiKey: draft.apiKey.trim()
       }
     });
-    relatedResourceModalNotice.value = `模型配置已保存：${providerId}/${model}`;
+    relatedResourceModalNotice.value = isEditing ? `模型配置已更新：${providerId}/${model}` : `模型配置已新增：${providerId}/${model}`;
     await Promise.all([loadRelatedModelSnapshot(), loadAgents()]);
+    relatedModelApiKeyVisible.value = false;
+    if (isEditing) {
+      const updatedPlatform =
+        (relatedModelSnapshot.value?.platforms ?? []).find((platform) => equalsIgnoreCase(platform.providerId, providerId)) ?? null;
+      if (updatedPlatform) {
+        relatedModelCustomExpanded.value = true;
+        relatedModelDraft.value = buildRelatedModelDraftFromPlatform(updatedPlatform);
+        relatedModelSelectedPopularPlatformId.value = resolveRelatedModelPopularPlatformIdByBaseUrl(updatedPlatform.baseUrl);
+        relatedModelEditingProviderId.value = updatedPlatform.providerId;
+      } else {
+        relatedModelCustomExpanded.value = false;
+        relatedModelDraft.value = buildRelatedModelCustomDraft();
+        relatedModelSelectedPopularPlatformId.value = null;
+        relatedModelEditingProviderId.value = null;
+      }
+    } else {
+      relatedModelCustomExpanded.value = true;
+      relatedModelDraft.value = buildRelatedModelCustomDraft();
+      relatedModelSelectedPopularPlatformId.value = null;
+      relatedModelEditingProviderId.value = null;
+    }
   } catch (error) {
-    relatedResourceModalError.value = error instanceof Error ? error.message : "模型配置保存失败。";
+    relatedResourceModalError.value =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string" && error.trim()
+          ? error
+          : "模型配置保存失败。";
   } finally {
     relatedResourceModalSaving.value = false;
   }
@@ -9675,7 +11308,16 @@ const activeConversationGroupMembers = computed(() =>
 );
 const activeConversationGroupPreviewMembers = computed(() => activeConversationGroupMembers.value.slice(0, 3));
 const activeConversationGroupMemberCount = computed(() => activeConversationGroupMembers.value.length);
+const activeConversationGroupOwner = computed(() => {
+  const ownerAgentId = activeConversationGroup.value?.ownerAgentId?.trim();
+  if (!ownerAgentId) {
+    return null;
+  }
+  return activeConversationGroupMembers.value.find((member) => member.agentId === ownerAgentId) ?? null;
+});
 const isLogsPanelActive = computed(() => isAgentSettingsOpen.value && chatSettingsPanelMode.value === "logs");
+const isHistoryPanelActive = computed(() => isAgentSettingsOpen.value && chatSettingsPanelMode.value === "history");
+const isAgentProfilePanelActive = computed(() => isAgentSettingsOpen.value && chatSettingsPanelMode.value === "agent");
 const isGroupInfoPanelActive = computed(() => chatSettingsPanelMode.value === "group" && activeAgentIsConversationGroup.value);
 const activeAgentAvatarUrl = computed(() => {
   const agent = activeAgent.value;
@@ -10086,6 +11728,9 @@ const activeChannelSessionLabel = computed(() => {
   if (!session) {
     return "";
   }
+  if (session.channelType === VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE) {
+    return session.name?.trim() || "历史会话";
+  }
   const channelName = session.name?.trim() || session.channelType || "频道";
   const accountId = session.accountId?.trim();
   return accountId ? `${channelName} / ${accountId}` : channelName;
@@ -10106,7 +11751,20 @@ const chatComposerPlaceholder = computed(() => {
   }
   return `发送给 ${stripRoleLabel(agent.displayName)}`;
 });
-const chatMessagesForDisplay = computed(() => chatMessages.value.filter((item) => !isLegacyWelcomeMessage(item)));
+const chatMessagesForDisplay = computed(() =>
+  chatMessages.value.filter((item) => {
+    if (isLegacyWelcomeMessage(item)) {
+      return false;
+    }
+    if (isRuntimeToolMessage(item) || item.status === "pending") {
+      return true;
+    }
+    if (item.attachments && item.attachments.length > 0) {
+      return true;
+    }
+    return getMessageDisplayText(item).length > 0;
+  })
+);
 const isConversationEmpty = computed(() => chatMessagesForDisplay.value.length === 0);
 const proxyConfigPlatforms = computed(() => proxyConfigSnapshot.value?.platforms ?? []);
 const proxyConfigSelectedPlatform = computed(() => {
@@ -10129,6 +11787,14 @@ const relatedModelPresets = computed(() => {
       };
     })
     .filter((item) => item.reference.trim().length > 0);
+});
+const relatedModelSelectedPopularPlatform = computed(() =>
+  relatedModelPopularPlatforms.find((item) => item.id === relatedModelSelectedPopularPlatformId.value) ?? null
+);
+const relatedModelSuggestedModels = computed(() => relatedModelSelectedPopularPlatform.value?.models ?? []);
+const relatedModelProviderNamePlaceholder = computed(() => {
+  const inferredName = inferProviderNameFromBaseUrl(relatedModelDraft.value?.baseUrl);
+  return inferredName ? `默认自动取：${inferredName}` : "例如 openai（可不填）";
 });
 const relatedModelActiveReference = computed(() => normalizeModelReference(activeAgent.value?.model));
 const proxyConfigModalSubtitle = computed(() => {
@@ -11210,7 +12876,7 @@ onMounted(async () => {
   syncTaskProjectNamesFromTasks();
   startTaskReminderMonitor();
   await ensureStartupOpenClawReady();
-  await Promise.all([loadAgents(), refreshDashboardData()]);
+  await Promise.all([loadAgents(), refreshDashboardData(), loadSidebarSettingsAppVersion()]);
   await scrollMessagesToBottom();
   await nextTick();
   resizeChatComposerInput();
@@ -11232,6 +12898,7 @@ onBeforeUnmount(() => {
   stopFeishuQrCountdown();
   resetChannelQrBindingState({ clearSession: true });
   stopTaskReminderMonitor();
+  clearChatAgentDeleteNoticeTimer();
 });
 
 watch(
@@ -11356,6 +13023,15 @@ watch(
       </transition>
     </div>
 
+    <div class="chat-action-toast-stack" aria-live="polite" aria-atomic="true">
+      <transition name="chat-action-toast-pop">
+        <section v-if="chatAgentDeleteNotice" class="chat-action-toast" role="status">
+          <span class="chat-action-toast__mark" aria-hidden="true">✓</span>
+          <span>{{ chatAgentDeleteNotice }}</span>
+        </section>
+      </transition>
+    </div>
+
     <Teleport to="body">
       <transition name="sidebar-profile-panel-fade">
         <div v-if="isSidebarProfilePopoverOpen" class="sidebar-profile-panel-layer" @click="closeSidebarProfilePopover">
@@ -11364,7 +13040,7 @@ watch(
             class="sidebar-profile-panel"
             role="dialog"
             aria-modal="true"
-            aria-label="邀请成员"
+            aria-label="头像设置"
             data-no-window-drag
             @click.stop
             @mousedown.stop
@@ -11373,7 +13049,6 @@ watch(
             <button class="sidebar-profile-panel__close" type="button" aria-label="关闭头像设置" @click="closeSidebarProfilePopover">
               <ControlIcon name="close" />
             </button>
-            <p class="sidebar-profile-panel__title">邀请成员</p>
             <span class="sidebar-profile-panel__avatar">
               <img
                 v-if="sidebarProfileAvatarPreviewUrl"
@@ -11385,10 +13060,15 @@ watch(
               <span v-else>{{ activeAgent ? getAgentInitial(activeAgent) : "M" }}</span>
             </span>
             <strong class="sidebar-profile-panel__name" :title="sidebarDisplayName">{{ sidebarDisplayName }}</strong>
-            <button class="sidebar-profile-panel__lobster" type="button" @click="handleSidebarLobsterIdCopy">
-              <span>龙虾号 {{ sidebarProfileLobsterId }}</span>
-              <ControlIcon name="copy" />
-            </button>
+            <div class="sidebar-profile-panel__lobster-wrap">
+              <span class="sidebar-profile-panel__lobster-label">龙虾号</span>
+              <button class="sidebar-profile-panel__lobster" type="button" aria-label="复制龙虾号" @click="handleSidebarLobsterIdCopy">
+                <span class="sidebar-profile-panel__lobster-value">{{ sidebarProfileLobsterId }}</span>
+                <span class="sidebar-profile-panel__lobster-copy" aria-hidden="true">
+                  <ControlIcon name="copy" />
+                </span>
+              </button>
+            </div>
 
             <div class="sidebar-profile-panel__tabs" role="tablist" aria-label="头像分类">
               <button
@@ -11462,25 +13142,31 @@ watch(
           @mousedown.left="handleRegionMouseDown"
         >
           <div class="sidebar-top">
-            <div class="window-controls" aria-label="窗口控制">
-              <button
-                class="window-control window-control--close"
-                type="button"
-                :title="isSidebarProfilePopoverOpen ? undefined : '关闭'"
-                @click="handleWindowClose"
-              />
-              <button
-                class="window-control window-control--minimize"
-                type="button"
-                :title="isSidebarProfilePopoverOpen ? undefined : '最小化'"
-                @click="handleWindowMinimize"
-              />
-              <button
-                class="window-control window-control--expand"
-                type="button"
-                :title="isSidebarProfilePopoverOpen ? undefined : '全屏 / 还原'"
-                @click="handleWindowExpand"
-              />
+            <div class="window-controls-row">
+              <div class="window-controls" aria-label="窗口控制">
+                <button
+                  class="window-control window-control--close"
+                  type="button"
+                  :title="isSidebarProfilePopoverOpen ? undefined : '关闭'"
+                  @click="handleWindowClose"
+                />
+                <button
+                  class="window-control window-control--minimize"
+                  type="button"
+                  :title="isSidebarProfilePopoverOpen ? undefined : '最小化'"
+                  @click="handleWindowMinimize"
+                />
+                <button
+                  class="window-control window-control--expand"
+                  type="button"
+                  :title="isSidebarProfilePopoverOpen ? undefined : '全屏 / 还原'"
+                  @click="handleWindowExpand"
+                />
+              </div>
+              <div class="window-version-chip" aria-label="当前版本">
+                <span class="window-version-chip__version">{{ sidebarSettingsAppVersion }}</span>
+                <span class="window-version-chip__beta" aria-hidden="true">beta</span>
+              </div>
             </div>
             <div
               ref="sidebarProfileTriggerRef"
@@ -11647,7 +13333,7 @@ watch(
             </button>
             <button
               class="sidebar-quick-action"
-              :class="{ 'is-active': activeSection === 'chat' && (isLogsPanelActive || utilityModalType === 'logs') }"
+              :class="{ 'is-active': activeSection === 'chat' && isLogsPanelActive }"
               type="button"
               :title="isSidebarProfilePopoverOpen ? undefined : '日志'"
               aria-label="打开日志"
@@ -11657,6 +13343,19 @@ watch(
                 <ControlIcon name="logs" />
               </span>
               <span class="sidebar-quick-action__label">日志</span>
+            </button>
+            <button
+              class="sidebar-quick-action"
+              :class="{ 'is-active': isTemporaryTaskReminderPopupActive }"
+              type="button"
+              :title="isSidebarProfilePopoverOpen ? undefined : '测试提醒'"
+              aria-label="触发测试任务提醒"
+              @click="triggerTemporaryTaskReminderTestPopup"
+            >
+              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--test" aria-hidden="true">
+                <ControlIcon name="nav-tasks" />
+              </span>
+              <span class="sidebar-quick-action__label">测试提醒</span>
             </button>
             <button
               class="sidebar-quick-action"
@@ -12213,20 +13912,83 @@ watch(
             }"
             @mousedown.stop
           >
-            <button type="button" class="agent-context-menu__item" role="menuitem" @click="handleChatAgentContextMenuDetail">
+            <button
+              type="button"
+              class="agent-context-menu__item"
+              role="menuitem"
+              @mousedown.left.stop.prevent="handleChatAgentContextMenuDetail"
+              @keydown.enter.stop.prevent="handleChatAgentContextMenuDetail"
+              @keydown.space.stop.prevent="handleChatAgentContextMenuDetail"
+            >
               详情
             </button>
-            <button type="button" class="agent-context-menu__item" role="menuitem" @click="handleChatAgentContextMenuPin">
+            <button
+              type="button"
+              class="agent-context-menu__item"
+              role="menuitem"
+              @mousedown.left.stop.prevent="handleChatAgentContextMenuPin"
+              @keydown.enter.stop.prevent="handleChatAgentContextMenuPin"
+              @keydown.space.stop.prevent="handleChatAgentContextMenuPin"
+            >
               置顶
             </button>
             <button
               type="button"
               class="agent-context-menu__item agent-context-menu__item--danger"
               role="menuitem"
-              @click="handleChatAgentContextMenuDelete"
+              @mousedown.left.stop.prevent="handleChatAgentContextMenuDelete"
+              @keydown.enter.stop.prevent="handleChatAgentContextMenuDelete"
+              @keydown.space.stop.prevent="handleChatAgentContextMenuDelete"
             >
               删除
             </button>
+          </div>
+
+          <div
+            v-if="isChatAgentDeleteConfirmModalOpen && chatAgentDeleteConfirmTarget"
+            class="related-resource-modal-backdrop"
+            @click.self="closeChatAgentDeleteConfirmModal"
+          >
+            <section class="related-resource-modal chat-agent-delete-modal" role="dialog" aria-modal="true" aria-label="确认删除员工">
+              <header class="related-resource-modal__header chat-agent-delete-modal__header">
+                <div class="chat-agent-delete-modal__title">
+                  <span class="chat-agent-delete-modal__icon" aria-hidden="true">
+                    <ControlIcon name="trash" />
+                  </span>
+                  <div>
+                    <strong>确认删除</strong>
+                    <p>该操作不可撤销，请确认后继续。</p>
+                  </div>
+                </div>
+              </header>
+              <div class="related-resource-modal__body chat-agent-delete-modal__body">
+                <div class="chat-agent-delete-modal__risk">
+                  <p>
+                    即将删除
+                    <strong>「{{ stripRoleLabel(chatAgentDeleteConfirmTarget.displayName) || chatAgentDeleteConfirmTarget.agentId }}」</strong>。
+                  </p>
+                  <small>删除后该员工将从列表移除，且可能同时删除本地配置文件。</small>
+                </div>
+                <div class="chat-agent-delete-modal__actions">
+                  <button
+                    class="related-resource-modal__refresh"
+                    type="button"
+                    :disabled="isChatAgentDeleteConfirming"
+                    @click="closeChatAgentDeleteConfirmModal"
+                  >
+                    取消
+                  </button>
+                  <button
+                    class="related-resource-modal__refresh chat-agent-delete-modal__confirm"
+                    type="button"
+                    :disabled="isChatAgentDeleteConfirming"
+                    @click="handleChatAgentDeleteConfirmSubmit"
+                  >
+                    {{ isChatAgentDeleteConfirming ? "删除中..." : "确认删除" }}
+                  </button>
+                </div>
+              </div>
+            </section>
           </div>
 
           <section class="chat-window" :class="{ 'chat-window--settings-open': isAgentSettingsOpen }">
@@ -12312,17 +14074,17 @@ watch(
                 <button
                   type="button"
                   class="header-btn"
-                  :class="{ 'is-active': utilityModalType === 'history' }"
+                  :class="{ 'is-active': isHistoryPanelActive }"
                   title="聊天记录"
                   aria-label="打开聊天记录"
-                  @click="openUtilityModal('history')"
+                  @click="openSidebarHistory"
                 >
                   <ControlIcon name="history" />
                 </button>
                 <button
                   type="button"
                   class="header-btn"
-                  :class="{ 'is-active': isLogsPanelActive || utilityModalType === 'logs' }"
+                  :class="{ 'is-active': isLogsPanelActive }"
                   title="运行日志"
                   aria-label="打开运行日志"
                   @click="openSidebarLogs"
@@ -12332,7 +14094,7 @@ watch(
                 <button
                   type="button"
                   class="header-btn"
-                  :class="{ 'is-active': isAgentSettingsOpen && !isLogsPanelActive }"
+                  :class="{ 'is-active': isAgentProfilePanelActive }"
                   title="设置"
                   aria-label="打开会话设置"
                   @click="toggleAgentSettingsPanel"
@@ -12437,11 +14199,11 @@ watch(
               </div>
 
               <aside v-if="isAgentSettingsOpen" class="chat-settings-sidebar" data-no-window-drag @mousedown.left.stop>
-                <header class="chat-settings-sidebar__header chat-settings-sidebar__header--plain">
+                <header v-if="isLogsPanelActive || isHistoryPanelActive" class="chat-settings-sidebar__header chat-settings-sidebar__header--plain">
                   <button
                     type="button"
                     class="chat-settings-sidebar__close"
-                    :aria-label="isLogsPanelActive ? '关闭日志' : '关闭设置'"
+                    :aria-label="isLogsPanelActive ? '关闭日志' : '关闭聊天记录'"
                     @click="closeAgentSettingsPanel"
                   >
                     ×
@@ -12675,16 +14437,126 @@ watch(
                   </template>
                 </div>
 
+                <div v-else-if="isHistoryPanelActive" class="chat-settings-sidebar__body chat-settings-sidebar__body--history">
+                  <div class="chat-settings-logs-head">
+                    <strong>聊天记录</strong>
+                    <button class="utility-modal__refresh" type="button" :disabled="utilityModalLoading" @click="handleUtilityModalRefresh">
+                      刷新
+                    </button>
+                  </div>
+                  <p class="utility-modal__detail">
+                    当前 Agent 关联记录 {{ chatRelatedHistoryRecords.length }} 条 · 归档记录 {{ chatRelatedArchiveRecords.length }} 条
+                  </p>
+                  <p v-if="utilityModalNotice" class="utility-modal__notice">{{ utilityModalNotice }}</p>
+                  <p v-if="utilityModalError" class="utility-modal__error">{{ utilityModalError }}</p>
+
+                  <div v-if="utilityModalLoading" class="utility-modal__empty">正在加载数据...</div>
+                  <div v-else-if="!activeAgent" class="utility-modal__empty">请选择用户后查看聊天记录。</div>
+                  <template v-else>
+                    <section class="utility-history-current">
+                      <div>
+                        <strong>当前会话</strong>
+                        <p>{{ currentSessionPreviewText }}</p>
+                      </div>
+                      <button
+                        class="utility-history-current__action"
+                        type="button"
+                        :disabled="currentSessionMessages.length === 0"
+                        @click="handleArchiveCurrentChat"
+                      >
+                        归档当前会话
+                      </button>
+                    </section>
+
+                    <p class="chat-settings-history-section-title">关联记录</p>
+                    <div v-if="chatRelatedHistoryRecords.length === 0" class="utility-modal__empty">当前 Agent 暂无关联会话记录。</div>
+                    <div v-else>
+                      <div class="utility-history-filter related-schedule-filter" role="tablist" aria-label="关联记录渠道筛选">
+                        <button
+                          v-for="option in relatedHistoryChannelFilterOptions"
+                          :key="`related-history-channel-filter-${option.id}`"
+                          class="related-schedule-filter__button"
+                          :class="{ 'is-active': effectiveRelatedHistoryChannelFilter === option.id }"
+                          type="button"
+                          @click="relatedHistoryChannelFilter = option.id"
+                        >
+                          {{ option.label }}
+                          <em>{{ option.count }}</em>
+                        </button>
+                      </div>
+                      <div v-if="filteredChatRelatedHistoryRecords.length === 0" class="utility-modal__empty">当前筛选暂无关联会话记录。</div>
+                      <div v-else class="utility-history-list">
+                        <article
+                          v-for="record in filteredChatRelatedHistoryRecords"
+                          :key="record.id"
+                          class="utility-history-card utility-history-card--clickable"
+                          :class="{ 'is-active': isRelatedHistoryRecordActive(record) }"
+                          role="button"
+                          tabindex="0"
+                          @click="handleRelatedHistoryRecordSelect(record)"
+                          @keydown.enter.prevent="handleRelatedHistoryRecordSelect(record)"
+                          @keydown.space.prevent="handleRelatedHistoryRecordSelect(record)"
+                        >
+                          <div class="utility-history-card__head">
+                            <strong>{{ record.scopeLabel }}</strong>
+                            <small>{{ formatDateTime(record.updatedAt) }}</small>
+                          </div>
+                          <p>{{ record.preview }}</p>
+                          <div class="utility-history-card__foot">
+                            <span>{{ record.messageCount }} 条消息</span>
+                          </div>
+                        </article>
+                      </div>
+                    </div>
+
+                    <p class="chat-settings-history-section-title">归档记录</p>
+                    <div v-if="chatRelatedArchiveRecords.length === 0" class="utility-modal__empty">暂无归档记录。</div>
+                    <div v-else class="utility-history-list">
+                      <article v-for="archive in chatRelatedArchiveRecords" :key="archive.id" class="utility-history-card">
+                        <div class="utility-history-card__head">
+                          <strong>{{ archive.title }}</strong>
+                          <small>{{ formatDateTime(archive.archivedAt) }}</small>
+                        </div>
+                        <p>{{ archive.preview }}</p>
+                        <div class="utility-history-card__foot">
+                          <span>{{ archive.scopeLabel }} · {{ archive.messageCount }} 条消息</span>
+                          <button class="utility-history-card__action" type="button" @click="handleRestoreArchive(archive.record)">
+                            恢复到当前会话
+                          </button>
+                        </div>
+                      </article>
+                    </div>
+                  </template>
+                </div>
+
                 <div v-else-if="activeAgent && isGroupInfoPanelActive" class="chat-settings-sidebar__body chat-settings-sidebar__body--group">
                   <section class="chat-group-info-card">
                     <header class="chat-group-info-card__header">
-                      <strong>{{ activeConversationGroup?.name || stripRoleLabel(activeAgent.displayName) }}</strong>
-                      <small>{{ activeConversationGroupMemberCount }} 位成员</small>
+                      <div class="chat-group-info-card__header-main">
+                        <strong>{{ activeConversationGroup?.name || stripRoleLabel(activeAgent.displayName) }}</strong>
+                        <small>{{ activeConversationGroupMemberCount }} 位成员</small>
+                      </div>
+                      <button class="chat-group-info-card__close" type="button" aria-label="关闭群聊信息" @click="closeAgentSettingsPanel">
+                        ×
+                      </button>
                     </header>
 
                     <section class="chat-group-info-card__section">
-                      <h5>群聊名称</h5>
-                      <div class="chat-group-info-card__name">{{ activeConversationGroup?.name || "未命名群聊" }}</div>
+                      <div class="chat-group-info-card__section-head">
+                        <h5>群聊名称</h5>
+                        <button class="chat-group-info-card__edit" type="button" aria-label="修改群聊名称" @click="openConversationGroupRenameModal">
+                          <ControlIcon name="edit" />
+                        </button>
+                      </div>
+                      <p class="chat-group-info-card__value">{{ activeConversationGroup?.name || "未命名群聊" }}</p>
+                    </section>
+
+                    <section class="chat-group-info-card__section">
+                      <h5>负责人</h5>
+                      <p class="chat-group-info-card__value chat-group-info-card__value--owner">
+                        <span class="chat-group-info-card__owner-dot" aria-hidden="true"></span>
+                        <span>{{ activeConversationGroupOwner ? stripRoleLabel(activeConversationGroupOwner.displayName) : "未设置" }}</span>
+                      </p>
                     </section>
 
                     <section class="chat-group-info-card__section">
@@ -12704,6 +14576,9 @@ watch(
                               decoding="async"
                             />
                             <span v-else>{{ getAgentInitial(member) }}</span>
+                            <span v-if="isActiveConversationGroupOwner(member.agentId)" class="chat-group-info-member__owner-badge" title="负责人">
+                              <ControlIcon name="bolt" />
+                            </span>
                           </div>
                           <strong :title="stripRoleLabel(member.displayName)">{{ stripRoleLabel(member.displayName) }}</strong>
                           <small>{{ member.channel || "main" }}</small>
@@ -12725,6 +14600,7 @@ watch(
                           <span class="chat-settings-soft-chip">{{ getAgentScheduledLabel(activeAgent) }}</span>
                         </div>
                       </div>
+                      <button class="chat-settings-agent-card__close" type="button" aria-label="关闭设置" @click="closeAgentSettingsPanel">×</button>
                     </div>
 
                     <section class="chat-settings-resource-quick">
@@ -12821,13 +14697,39 @@ watch(
                       </div>
                       <div class="chat-settings-list__row">
                         <dt>{{ getAgentCurrentWorkLabel(activeAgent) }}</dt>
-                        <dd>{{ activeAgent.currentWork }}</dd>
+                        <dd>
+                          <div class="chat-settings-preview">
+                            <p class="chat-settings-preview__text">{{ getAgentCurrentWork(activeAgent) }}</p>
+                            <button
+                              class="chat-settings-preview__expand"
+                              type="button"
+                              :title="`展开${getAgentCurrentWorkLabel(activeAgent)}`"
+                              :aria-label="`展开${getAgentCurrentWorkLabel(activeAgent)}`"
+                              @click="openChatSettingsTextPreviewModal(getAgentCurrentWorkLabel(activeAgent), getAgentCurrentWork(activeAgent))"
+                            >
+                              <ControlIcon name="expand" />
+                            </button>
+                          </div>
+                        </dd>
                       </div>
                     </dl>
 
                     <section class="chat-settings-output">
                       <h5>最近产出</h5>
-                      <div class="chat-settings-recent-output">{{ getAgentRecentOutput(activeAgent) }}</div>
+                      <div class="chat-settings-recent-output">
+                        <div class="chat-settings-preview chat-settings-preview--boxed">
+                          <p class="chat-settings-preview__text">{{ getAgentRecentOutput(activeAgent) }}</p>
+                          <button
+                            class="chat-settings-preview__expand"
+                            type="button"
+                            title="展开最近产出"
+                            aria-label="展开最近产出"
+                            @click="openChatSettingsTextPreviewModal('最近产出', getAgentRecentOutput(activeAgent))"
+                          >
+                            <ControlIcon name="expand" />
+                          </button>
+                        </div>
+                      </div>
                     </section>
                   </div>
                 </div>
@@ -13020,16 +14922,12 @@ watch(
             <template v-if="activeSection === 'recruitment'">
               <section class="module-surface recruitment-surface">
                 <div class="module-surface__toolbar recruitment-surface__toolbar">
-                  <div class="recruitment-surface__switch" role="tablist" aria-label="员工视图">
-                    <button class="recruitment-surface__switch-item active" role="tab" aria-selected="true" type="button">我的员工</button>
-                  </div>
                   <input
                     v-model="recruitmentKeyword"
                     class="module-surface__search"
                     type="search"
                     placeholder="搜索角色 / 分组 / 领域"
                   />
-                  <span class="module-surface__meta">显示 {{ recruitmentVisibleCount }} / {{ recruitmentTotalInFilter }} 个角色</span>
                 </div>
                 <div class="recruitment-division-filter" role="tablist" aria-label="角色分类筛选">
                   <button
@@ -13046,21 +14944,28 @@ watch(
                     {{ option.label }}
                   </button>
                 </div>
+                <section class="recruitment-create-division" aria-label="新增员工入口">
+                  <header class="recruitment-create-division__header">
+                    <strong>新增员工</strong>
+                  </header>
+                  <div class="recruitment-role-grid recruitment-role-grid--create">
+                    <article class="recruitment-agent-card recruitment-agent-card--new recruitment-agent-card--new-standalone">
+                      <button class="recruitment-agent-card__new-button" type="button" @click="openCreateEmployeeModal">
+                        <span class="recruitment-agent-card__new-plus">+</span>
+                        <strong class="recruitment-agent-card__new-title">新增员工</strong>
+                        <p class="recruitment-agent-card__new-hint">创建一个新的员工角色卡片</p>
+                      </button>
+                    </article>
+                  </div>
+                </section>
                 <div v-if="filteredRecruitmentDivisions.length === 0" class="module-empty">未找到匹配角色，请调整搜索词。</div>
                 <div v-else class="recruitment-division-list">
-                  <section v-for="(division, divisionIndex) in filteredRecruitmentDivisions" :key="division.id" class="recruitment-division">
+                  <section v-for="division in filteredRecruitmentDivisions" :key="division.id" class="recruitment-division">
                     <header class="recruitment-division__header">
                       <strong>{{ division.titleZh }}</strong>
                       <small>{{ division.count }} 个</small>
                     </header>
                     <div class="recruitment-role-grid">
-                      <article v-if="divisionIndex === 0" class="recruitment-agent-card recruitment-agent-card--new">
-                        <button class="recruitment-agent-card__new-button" type="button" @click="openCreateEmployeeModal">
-                          <span class="recruitment-agent-card__new-plus">+</span>
-                          <strong class="recruitment-agent-card__new-title">新增员工</strong>
-                          <p class="recruitment-agent-card__new-hint">创建一个新的员工角色卡片</p>
-                        </button>
-                      </article>
                       <article
                         v-for="item in division.groups.flatMap((group) => group.roles.map((role) => ({ role, groupTitleZh: group.titleZh })))"
                         :key="item.role.id"
@@ -13603,14 +15508,24 @@ watch(
                     <strong>{{ stripRoleLabel(agent.displayName) }}</strong>
                     <small>{{ agent.roleLabel || agent.channel }}</small>
                   </div>
-                  <button
-                    class="chat-user-group-modal__selected-remove"
-                    type="button"
-                    aria-label="移除成员"
-                    @click="handleCreateChatUserGroupMemberToggle(agent.agentId, false)"
-                  >
-                    ×
-                  </button>
+                  <div class="chat-user-group-modal__selected-actions">
+                    <button
+                      class="chat-user-group-modal__selected-owner"
+                      :class="{ 'is-active': isCreateChatUserGroupOwner(agent.agentId) }"
+                      type="button"
+                      @click="handleCreateChatUserGroupOwnerSelect(agent.agentId)"
+                    >
+                      {{ isCreateChatUserGroupOwner(agent.agentId) ? "负责人" : "设为负责人" }}
+                    </button>
+                    <button
+                      class="chat-user-group-modal__selected-remove"
+                      type="button"
+                      aria-label="移除成员"
+                      @click="handleCreateChatUserGroupMemberToggle(agent.agentId, false)"
+                    >
+                      ×
+                    </button>
+                  </div>
                 </article>
               </div>
               <label class="chat-user-group-modal__field">
@@ -13632,6 +15547,48 @@ watch(
             <button type="submit">创建团队</button>
           </div>
         </form>
+      </section>
+    </div>
+
+    <div v-if="isConversationGroupRenameModalOpen" class="related-resource-modal-backdrop" @click.self="closeConversationGroupRenameModal">
+      <section class="related-resource-modal conversation-group-rename-modal" role="dialog" aria-modal="true" aria-label="修改群聊名称">
+        <header class="related-resource-modal__header">
+          <div>
+            <strong>修改群聊名称</strong>
+            <p>修改后会同步更新群聊列表与会话标题。</p>
+          </div>
+          <div class="related-resource-modal__actions">
+            <button class="related-resource-modal__close" type="button" aria-label="关闭" @click="closeConversationGroupRenameModal">×</button>
+          </div>
+        </header>
+        <form class="related-resource-modal__body conversation-group-rename-modal__form" @submit.prevent="handleConversationGroupRenameSubmit">
+          <label class="conversation-group-rename-modal__field">
+            <span>群聊名称 *</span>
+            <input v-model="conversationGroupRenameDraft" type="text" maxlength="24" placeholder="请输入群聊名称" />
+          </label>
+          <p v-if="conversationGroupRenameError" class="related-resource-modal__error">{{ conversationGroupRenameError }}</p>
+          <div class="conversation-group-rename-modal__actions">
+            <button class="related-resource-modal__refresh" type="button" @click="closeConversationGroupRenameModal">取消</button>
+            <button class="related-resource-modal__refresh conversation-group-rename-modal__submit" type="submit">保存</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div v-if="chatSettingsTextPreviewModal" class="related-resource-modal-backdrop" @click.self="closeChatSettingsTextPreviewModal">
+      <section class="related-resource-modal chat-settings-text-detail-modal" role="dialog" aria-modal="true" :aria-label="chatSettingsTextPreviewModal.title">
+        <header class="related-resource-modal__header">
+          <div>
+            <strong>{{ chatSettingsTextPreviewModal.title }}</strong>
+            <p>完整内容</p>
+          </div>
+          <div class="related-resource-modal__actions">
+            <button class="related-resource-modal__close" type="button" aria-label="关闭" @click="closeChatSettingsTextPreviewModal">×</button>
+          </div>
+        </header>
+        <div class="related-resource-modal__body chat-settings-text-detail-modal__body">
+          <pre class="chat-settings-text-detail-modal__content">{{ chatSettingsTextPreviewModal.content }}</pre>
+        </div>
       </section>
     </div>
 
@@ -14436,24 +16393,60 @@ watch(
           <template v-else-if="relatedResourceModalTarget === 'model'">
             <div class="related-model-panel">
               <div class="related-model-quick-list">
-                <button
+                <div
                   v-for="preset in relatedModelPresets"
                   :key="`related-model-preset-${preset.id}`"
-                  class="related-model-quick-item"
-                  :class="{ 'is-active': isRelatedModelPresetActive(preset.reference) && !relatedModelCustomExpanded }"
-                  type="button"
-                  :disabled="relatedResourceModalSaving || relatedResourceModalLoading"
-                  @click="handleRelatedModelQuickSwitch(preset.reference)"
+                  class="related-model-quick-item related-model-quick-item--editable"
+                  :class="{
+                    'is-active': isRelatedModelPresetActive(preset.reference) && !relatedModelCustomExpanded,
+                    'is-editing': isRelatedModelPresetEditing(preset.providerId),
+                    'is-pending-delete': isRelatedModelPresetDeletePending(preset.providerId),
+                    'is-disabled': relatedResourceModalSaving || relatedResourceModalLoading
+                  }"
+                  role="button"
+                  :tabindex="relatedResourceModalSaving || relatedResourceModalLoading ? -1 : 0"
+                  @click="!relatedResourceModalSaving && !relatedResourceModalLoading && handleRelatedModelQuickSwitch(preset.reference)"
+                  @keydown.enter.prevent="!relatedResourceModalSaving && !relatedResourceModalLoading && handleRelatedModelQuickSwitch(preset.reference)"
+                  @keydown.space.prevent="!relatedResourceModalSaving && !relatedResourceModalLoading && handleRelatedModelQuickSwitch(preset.reference)"
                 >
                   <strong>{{ preset.modelId || preset.name }}</strong>
                   <p>{{ preset.reference }}</p>
-                </button>
+                  <div class="related-model-quick-item__actions">
+                    <button
+                      class="related-model-quick-item__action"
+                      type="button"
+                      :aria-label="`编辑 ${preset.name || preset.providerId}`"
+                      @mousedown.stop.prevent
+                      @click.stop.prevent="handleRelatedModelPresetEdit(preset.providerId)"
+                    >
+                      <ControlIcon name="edit" />
+                    </button>
+                    <button
+                      :class="[
+                        'related-model-quick-item__action',
+                        'related-model-quick-item__action--danger',
+                        { 'is-pending': isRelatedModelPresetDeletePending(preset.providerId) }
+                      ]"
+                      type="button"
+                      :title="isRelatedModelPresetDeletePending(preset.providerId) ? '再次点击确认删除' : '删除该模型配置'"
+                      :aria-label="
+                        isRelatedModelPresetDeletePending(preset.providerId)
+                          ? `确认删除 ${preset.name || preset.providerId}`
+                          : `删除 ${preset.name || preset.providerId}`
+                      "
+                      @mousedown.stop.prevent
+                      @click.stop.prevent="handleRelatedModelPresetDelete(preset.providerId)"
+                    >
+                      <ControlIcon name="trash" />
+                    </button>
+                  </div>
+                </div>
                 <button
                   class="related-model-quick-item related-model-quick-item--custom"
                   :class="{ 'is-active': relatedModelCustomExpanded }"
                   type="button"
                   :disabled="relatedResourceModalSaving || relatedResourceModalLoading"
-                  @click="relatedModelCustomExpanded = !relatedModelCustomExpanded"
+                  @click="handleRelatedModelCustomToggle"
                 >
                   <strong>自定义配置</strong>
                   <p>手动编辑 URL、协议与密钥</p>
@@ -14462,6 +16455,22 @@ watch(
 
               <div v-if="relatedModelCustomExpanded">
                 <div v-if="relatedModelDraft" class="related-model-form related-model-form--custom">
+                  <section class="related-model-popular">
+                    <strong>主流平台</strong>
+                    <div class="related-model-popular__list">
+                      <button
+                        v-for="platform in relatedModelPopularPlatforms"
+                        :key="`related-model-popular-${platform.id}`"
+                        class="related-model-popular__item"
+                        :class="{ 'is-active': relatedModelSelectedPopularPlatformId === platform.id }"
+                        type="button"
+                        :disabled="relatedResourceModalSaving || relatedResourceModalLoading"
+                        @click="handleRelatedModelPopularPlatformSelect(platform.id)"
+                      >
+                        <span>{{ platform.label }}</span>
+                      </button>
+                    </div>
+                  </section>
                   <label class="related-model-form__field">
                     <span>基础 URL</span>
                     <input
@@ -14473,7 +16482,32 @@ watch(
                     />
                   </label>
                   <label class="related-model-form__field">
-                    <span>模型 ID</span>
+                    <span>名称（可选）</span>
+                    <input
+                      v-model="relatedModelDraft.providerName"
+                      class="related-model-form__input"
+                      type="text"
+                      :placeholder="relatedModelProviderNamePlaceholder"
+                      :disabled="relatedResourceModalSaving"
+                    />
+                  </label>
+                  <label class="related-model-form__field">
+                    <div class="related-model-form__field-head">
+                      <span>模型 ID</span>
+                      <div v-if="relatedModelSuggestedModels.length > 0" class="related-model-form__model-tags">
+                        <button
+                          v-for="modelId in relatedModelSuggestedModels"
+                          :key="`related-model-suggested-${modelId}`"
+                          class="related-model-form__model-tag"
+                          :class="{ 'is-active': relatedModelDraft.model.trim().toLowerCase() === modelId.trim().toLowerCase() }"
+                          type="button"
+                          :disabled="relatedResourceModalSaving"
+                          @click="handleRelatedModelSuggestedModelSelect(modelId)"
+                        >
+                          {{ modelId }}
+                        </button>
+                      </div>
+                    </div>
                     <input
                       v-model="relatedModelDraft.model"
                       class="related-model-form__input"
@@ -14492,13 +16526,25 @@ watch(
                   </label>
                   <label class="related-model-form__field">
                     <span>API 密钥</span>
-                    <input
-                      v-model="relatedModelDraft.apiKey"
-                      class="related-model-form__input"
-                      type="password"
-                      placeholder="sk-..."
-                      :disabled="relatedResourceModalSaving"
-                    />
+                    <div class="related-model-form__secret-input-wrap">
+                      <input
+                        v-model="relatedModelDraft.apiKey"
+                        class="related-model-form__input related-model-form__input--secret"
+                        :type="relatedModelApiKeyVisible ? 'text' : 'password'"
+                        placeholder="sk-..."
+                        :disabled="relatedResourceModalSaving"
+                      />
+                      <button
+                        class="related-model-form__secret-icon"
+                        type="button"
+                        :aria-label="relatedModelApiKeyVisible ? '隐藏 API 密钥' : '显示 API 密钥'"
+                        :title="relatedModelApiKeyVisible ? '隐藏 API 密钥' : '显示 API 密钥'"
+                        :disabled="relatedResourceModalSaving"
+                        @click="toggleRelatedModelApiKeyVisibility"
+                      >
+                        <ControlIcon :name="relatedModelApiKeyVisible ? 'eye-off' : 'eye'" />
+                      </button>
+                    </div>
                   </label>
                   <div class="related-model-form__actions">
                     <small>当前协议：{{ getProviderApiKindLabel(relatedModelDraft.apiKind) }}</small>
@@ -14508,7 +16554,7 @@ watch(
                       :disabled="relatedResourceModalSaving || relatedResourceModalLoading"
                       @click="handleRelatedModelSave"
                     >
-                      保存
+                      {{ relatedModelEditingProviderId ? "保存修改" : "保存" }}
                     </button>
                   </div>
                 </div>
@@ -15449,6 +17495,55 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-p
   z-index: 1650;
 }
 
+.chat-action-toast-stack {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 24px));
+  pointer-events: none;
+  z-index: 1660;
+}
+
+.chat-action-toast {
+  border: 1px solid #b8dfca;
+  border-radius: 12px;
+  background: #f3fcf7;
+  box-shadow: 0 12px 28px rgba(40, 75, 58, 0.2);
+  color: #24553b;
+  min-height: 44px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.chat-action-toast__mark {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #2da977;
+  color: #ffffff;
+  display: inline-grid;
+  place-items: center;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.chat-action-toast-pop-enter-active,
+.chat-action-toast-pop-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.chat-action-toast-pop-enter-from,
+.chat-action-toast-pop-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
 .task-reminder-toast {
   position: relative;
   display: grid;
@@ -15654,6 +17749,11 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-p
   .task-reminder-pop-leave-active {
     transition: opacity 120ms linear !important;
     transform: none !important;
+  }
+
+  .chat-action-toast-pop-enter-active,
+  .chat-action-toast-pop-leave-active {
+    transition: opacity 120ms linear !important;
   }
 }
 
@@ -15916,14 +18016,6 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-p
   transform: scale(1.04);
 }
 
-.sidebar-profile-panel__title {
-  margin: 6px 0 0;
-  font-size: clamp(20px, 4.5vw, 27px);
-  font-weight: 700;
-  color: var(--spp-text-strong);
-  letter-spacing: 0.01em;
-}
-
 .sidebar-profile-panel__avatar {
   width: 84px;
   height: 84px;
@@ -15958,26 +18050,58 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-p
   text-overflow: ellipsis;
 }
 
+.sidebar-profile-panel__lobster-wrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: -1px;
+}
+
+.sidebar-profile-panel__lobster-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--spp-text-muted);
+  letter-spacing: 0.06em;
+}
+
 .sidebar-profile-panel__lobster {
+  max-width: 100%;
+  min-height: 38px;
   border: 1px solid var(--spp-lobster-border);
-  background: var(--spp-lobster-bg);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.95), var(--spp-lobster-bg));
   color: var(--spp-lobster-color);
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  font-size: 16px;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 15px;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.08em;
   border-radius: 999px;
-  padding: 6px 14px;
+  padding: 4px 7px 4px 14px;
   cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.sidebar-profile-panel__lobster-value {
+  white-space: nowrap;
+}
+
+.sidebar-profile-panel__lobster-copy {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(93, 131, 201, 0.14);
+  border: 1px solid rgba(120, 154, 218, 0.38);
 }
 
 .sidebar-profile-panel__lobster svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -15985,7 +18109,14 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-p
 
 .sidebar-profile-panel__lobster:hover {
   background: var(--spp-lobster-bg-hover);
-  border-color: var(--spp-lobster-border);
+  border-color: rgba(132, 163, 219, 0.9);
+  box-shadow: 0 6px 12px rgba(65, 98, 153, 0.14);
+  transform: translateY(-1px);
+}
+
+.sidebar-profile-panel__lobster:focus-visible {
+  outline: 2px solid rgba(87, 126, 204, 0.5);
+  outline-offset: 2px;
 }
 
 .sidebar-profile-panel__tabs {
@@ -16208,6 +18339,14 @@ html[data-app-theme-resolved="dark"] .sidebar-profile-panel-layer {
   margin-top: 10px;
 }
 
+.window-controls-row {
+  width: 100%;
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .window-controls {
   flex-shrink: 0;
   width: auto;
@@ -16243,6 +18382,52 @@ html[data-app-theme-resolved="dark"] .sidebar-profile-panel-layer {
 
 .window-control--expand {
   background: #28c840;
+}
+
+.window-version-chip {
+  margin-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(186, 202, 229, 0.86);
+  background: rgba(255, 255, 255, 0.72);
+  color: #61718b;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+}
+
+.window-version-chip__version {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+.window-version-chip__beta {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: #2f62d0;
+  border-radius: 999px;
+  background: rgba(85, 128, 237, 0.16);
+  padding: 2px 5px;
+}
+
+html[data-app-theme-resolved="dark"] .window-version-chip {
+  border-color: rgba(116, 133, 171, 0.7);
+  background: rgba(38, 47, 66, 0.72);
+  color: #d4dff3;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+html[data-app-theme-resolved="dark"] .window-version-chip__beta {
+  color: #dce7ff;
+  background: rgba(96, 132, 224, 0.38);
 }
 
 .nav-item {
@@ -16501,6 +18686,12 @@ html[data-app-theme-resolved="dark"] .sidebar-profile-panel-layer {
   --quick-icon: #4f477b;
   --quick-bg-start: #f0eaff;
   --quick-bg-end: #d4c7ff;
+}
+
+.sidebar-quick-action__bubble--test {
+  --quick-icon: #7f4e1e;
+  --quick-bg-start: #fff3d8;
+  --quick-bg-end: #ffd698;
 }
 
 .sidebar-quick-action__bubble--settings {
@@ -18033,13 +20224,33 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .chat-settings-sidebar__body--group {
-  padding-top: 4px;
+  padding-top: 10px;
 }
 
 .chat-settings-sidebar__body--logs {
   padding: 8px 12px 12px;
   gap: 8px;
   min-height: 0;
+}
+
+.chat-settings-sidebar__body--history {
+  padding: 8px 12px 12px;
+  gap: 8px;
+}
+
+.chat-settings-sidebar__body--history .utility-modal__detail {
+  margin-bottom: 6px;
+}
+
+.chat-settings-history-section-title {
+  margin: 2px 0 0;
+  color: #4f6589;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.utility-history-filter {
+  margin-bottom: 8px;
 }
 
 .chat-settings-logs-head {
@@ -18101,9 +20312,15 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 
 .chat-group-info-card__header {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+}
+
+.chat-group-info-card__header-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
 }
 
 .chat-group-info-card__header strong {
@@ -18119,6 +20336,28 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   white-space: nowrap;
 }
 
+.chat-group-info-card__close {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #d3e0f4;
+  border-radius: 8px;
+  color: #6f82a3;
+  background: #ffffff;
+  font-size: 20px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.chat-group-info-card__close:hover {
+  color: #2a6be0;
+  border-color: #b4c8e6;
+  background: #e9f1ff;
+}
+
 .chat-group-info-card__section {
   border-top: 1px solid #e7eef9;
   padding-top: 10px;
@@ -18131,16 +20370,62 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   color: #7a8ca8;
 }
 
-.chat-group-info-card__name {
-  min-height: 44px;
+.chat-group-info-card__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chat-group-info-card__section-head h5 {
+  margin: 0;
+}
+
+.chat-group-info-card__edit {
+  width: 28px;
+  height: 28px;
   border: 1px solid #d3e0f4;
-  border-radius: 12px;
-  padding: 10px 12px;
+  border-radius: 8px;
   background: #ffffff;
+  color: #6f84a4;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.chat-group-info-card__edit:hover {
+  border-color: #b4c8e6;
+  background: #f2f7ff;
+  color: #4f678c;
+}
+
+.chat-group-info-card__edit svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-group-info-card__value {
+  margin: 0;
   color: #2b3f5c;
   font-size: 14px;
   line-height: 1.4;
   word-break: break-word;
+}
+
+.chat-group-info-card__value--owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.chat-group-info-card__owner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #36b474;
+  box-shadow: 0 0 0 3px rgba(54, 180, 116, 0.18);
 }
 
 .chat-group-info-member-grid {
@@ -18158,6 +20443,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .chat-group-info-member__avatar {
+  position: relative;
   width: 48px;
   height: 48px;
   border-radius: 14px;
@@ -18168,6 +20454,25 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   place-items: center;
   font-size: 17px;
   font-weight: 700;
+}
+
+.chat-group-info-member__owner-badge {
+  position: absolute;
+  right: -4px;
+  top: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid #ffffff;
+  background: #31a56a;
+  color: #f3fff9;
+  display: inline-grid;
+  place-items: center;
+}
+
+.chat-group-info-member__owner-badge svg {
+  width: 10px;
+  height: 10px;
 }
 
 .chat-group-info-member__avatar img {
@@ -18203,6 +20508,135 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   font-size: 13px;
 }
 
+.conversation-group-rename-modal {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.conversation-group-rename-modal__form {
+  display: grid;
+  gap: 12px;
+}
+
+.conversation-group-rename-modal__field {
+  display: grid;
+  gap: 7px;
+}
+
+.conversation-group-rename-modal__field span {
+  font-size: 12px;
+  font-weight: 700;
+  color: #6f84a4;
+}
+
+.conversation-group-rename-modal__field input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid #cad8ec;
+  border-radius: 10px;
+  padding: 0 12px;
+  background: #ffffff;
+  color: #2d4260;
+  font-size: 13px;
+  outline: 0;
+}
+
+.conversation-group-rename-modal__field input:focus {
+  border-color: #89a9d8;
+  box-shadow: 0 0 0 3px rgba(114, 150, 208, 0.2);
+}
+
+.conversation-group-rename-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.conversation-group-rename-modal__submit {
+  border-color: #2f8e69;
+  background: linear-gradient(180deg, #2da977, #21855d);
+  color: #ebfff6;
+}
+
+.related-resource-modal.chat-agent-delete-modal {
+  width: min(360px, calc(100vw - 24px));
+}
+
+.chat-agent-delete-modal__title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.chat-agent-delete-modal__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #f2cad3;
+  background: #fff3f6;
+  color: #cf5573;
+  font-size: 16px;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.chat-agent-delete-modal__header p {
+  margin-top: 3px;
+  color: #7b8eaa;
+}
+
+.chat-agent-delete-modal__body {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-agent-delete-modal__risk {
+  border: 1px solid #f2d4dc;
+  border-radius: 10px;
+  background: #fff8fa;
+  padding: 11px 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.chat-agent-delete-modal__risk p {
+  margin: 0;
+  color: #6f83a3;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.chat-agent-delete-modal__risk strong {
+  color: #2d4260;
+}
+
+.chat-agent-delete-modal__risk small {
+  color: #8598b2;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.chat-agent-delete-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.chat-agent-delete-modal__actions .related-resource-modal__refresh {
+  min-width: 92px;
+}
+
+.chat-agent-delete-modal__confirm {
+  border-color: #d95e7d;
+  background: #d95e7d;
+  color: #ffffff;
+}
+
+.chat-agent-delete-modal__confirm:hover:not(:disabled) {
+  border-color: #ca5270;
+  background: #ca5270;
+}
+
 .chat-settings-agent-card {
   border: 0;
   border-radius: 0;
@@ -18216,9 +20650,9 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 
 .chat-settings-agent-card__head {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
+  grid-template-columns: 54px minmax(0, 1fr) auto;
   gap: 10px;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .chat-settings-agent-card__avatar {
@@ -18244,6 +20678,27 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   margin: 4px 0 0;
   color: #7a8ba7;
   font-size: 12px;
+}
+
+.chat-settings-agent-card__close {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #d3e0f4;
+  border-radius: 8px;
+  color: #6f82a3;
+  background: #ffffff;
+  font-size: 20px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.chat-settings-agent-card__close:hover {
+  color: #2a6be0;
+  border-color: #b4c8e6;
+  background: #e9f1ff;
 }
 
 .chat-settings-chip-row {
@@ -18491,16 +20946,89 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   font-weight: 600;
 }
 
-.chat-settings-recent-output {
-  white-space: pre-wrap;
-  line-height: 1.45;
-  max-height: 132px;
-  overflow: auto;
+.chat-settings-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: start;
+  gap: 8px;
+}
+
+.chat-settings-preview--boxed {
   padding: 8px 9px;
   border-radius: 10px;
   background: #edf3fc;
+}
+
+.chat-settings-preview__text {
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  overflow: hidden;
+  max-height: calc(1.45em * 7);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 7;
+}
+
+.chat-settings-preview__expand {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  background: transparent;
+  color: #6f86a9;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.chat-settings-preview__expand:hover {
+  color: #2f6fd6;
+  background: #eaf2ff;
+}
+
+.chat-settings-preview__expand:focus-visible {
+  outline: 2px solid #86b5f3;
+  outline-offset: 1px;
+}
+
+.chat-settings-preview__expand svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-settings-recent-output {
   color: #2c3a54;
   font-size: 12px;
+}
+
+.chat-settings-text-detail-modal {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.chat-settings-text-detail-modal__body {
+  padding-top: 12px;
+}
+
+.chat-settings-text-detail-modal__content {
+  margin: 0;
+  color: #2c3a54;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-settings-sidebar__empty {
@@ -19563,11 +22091,12 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 
 .recruitment-surface__toolbar {
   justify-content: flex-end;
-  gap: 12px;
+  gap: 10px;
 }
 
 .recruitment-surface__toolbar .module-surface__search {
-  flex: 0 1 240px;
+  flex: 0 1 clamp(240px, 36vw, 320px);
+  margin-left: auto;
   border-color: #d7dbe4;
   background: #ffffff;
   color: #2e3137;
@@ -19576,51 +22105,6 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .recruitment-surface__toolbar .module-surface__search:focus {
   border-color: #b9c0ce;
   box-shadow: 0 0 0 3px rgba(116, 126, 148, 0.18);
-}
-
-.recruitment-surface__toolbar .module-surface__meta {
-  border-color: #dbdfe7;
-  background: #ffffff;
-  color: #6a6f79;
-}
-
-.recruitment-surface__switch {
-  margin-right: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  border: 1px solid #d9dce4;
-  border-radius: 999px;
-  background: #f1f2f6;
-  padding: 3px;
-}
-
-.recruitment-surface__switch-item {
-  border: 0;
-  min-height: 30px;
-  border-radius: 999px;
-  background: transparent;
-  color: #868c98;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 0 12px;
-  cursor: pointer;
-  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
-}
-
-.recruitment-surface__switch-item.active {
-  background: #ffffff;
-  color: #3a404b;
-  box-shadow: 0 5px 12px rgba(58, 64, 75, 0.15);
-}
-
-.recruitment-surface__switch-item:not(.active):hover {
-  color: #5d6370;
-}
-
-.recruitment-surface__switch-item:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(129, 138, 157, 0.24);
 }
 
 .skill-market-surface {
@@ -19933,6 +22417,27 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   box-shadow: 0 0 0 3px rgba(124, 131, 146, 0.22);
 }
 
+.recruitment-create-division {
+  margin-top: 12px;
+  border: 1px solid #dde2ea;
+  border-radius: 16px;
+  padding: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(252, 252, 253, 0.52));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.recruitment-create-division__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.recruitment-create-division__header strong {
+  font-size: 14px;
+  color: #424955;
+  letter-spacing: 0.01em;
+}
+
 .recruitment-division-list {
   margin-top: 14px;
   display: flex;
@@ -19978,6 +22483,10 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   gap: 12px;
 }
 
+.recruitment-role-grid--create {
+  grid-template-columns: minmax(188px, 220px);
+}
+
 .recruitment-agent-card {
   border: 1px solid #dfe3ea;
   border-radius: 18px;
@@ -20005,6 +22514,10 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   background: #f1f3f7;
   border-style: dashed;
   border-color: #d3d7df;
+}
+
+.recruitment-agent-card--new-standalone {
+  min-height: 214px;
 }
 
 .recruitment-agent-card__new-button {
@@ -21808,7 +24321,8 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   font-weight: 700;
 }
 
-.chat-user-group-modal__field input {
+.chat-user-group-modal__field input,
+.chat-user-group-modal__field select {
   width: 100%;
   height: 40px;
   border: 1px solid #353f4e;
@@ -21820,9 +24334,31 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   outline: 0;
 }
 
-.chat-user-group-modal__field input:focus {
+.chat-user-group-modal__field input:focus,
+.chat-user-group-modal__field select:focus {
   border-color: #4b5c79;
   box-shadow: 0 0 0 3px rgba(77, 118, 190, 0.2);
+}
+
+.chat-user-group-modal__owner-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+  padding-right: 32px;
+  background:
+    linear-gradient(45deg, transparent 50%, #8ba0c3 50%) calc(100% - 15px) calc(50% - 1px) / 5px 5px no-repeat,
+    linear-gradient(135deg, #8ba0c3 50%, transparent 50%) calc(100% - 10px) calc(50% - 1px) / 5px 5px no-repeat,
+    linear-gradient(180deg, #1f293a 0%, #1a2231 100%);
+}
+
+.chat-user-group-modal__owner-select:hover {
+  border-color: #52637f;
+}
+
+.chat-user-group-modal__owner-select option {
+  background: #1a2231;
+  color: #e5ecfb;
 }
 
 .chat-user-group-modal__members-head {
@@ -21984,6 +24520,35 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
   gap: 9px;
+}
+
+.chat-user-group-modal__selected-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.chat-user-group-modal__selected-owner {
+  border: 1px solid #3d475a;
+  border-radius: 999px;
+  background: #202939;
+  color: #8d9ab1;
+  font-size: 11px;
+  line-height: 1;
+  height: 23px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.chat-user-group-modal__selected-owner:hover {
+  border-color: #4f5d75;
+  color: #c0cade;
+}
+
+.chat-user-group-modal__selected-owner.is-active {
+  border-color: #2f8e69;
+  background: #1b6d4e;
+  color: #dcfff0;
 }
 
 .chat-user-group-modal__selected-remove {
@@ -22545,6 +25110,12 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   text-align: left;
   padding: 9px 10px;
   cursor: pointer;
+  position: relative;
+  overflow: visible;
+}
+
+.related-model-quick-item--editable {
+  padding-right: 72px;
 }
 
 .related-model-quick-item.is-active {
@@ -22552,7 +25123,20 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   background: #eef5ff;
 }
 
-.related-model-quick-item:disabled {
+.related-model-quick-item.is-editing {
+  border-color: #58bb88;
+  background: #f1fbf5;
+  box-shadow: 0 0 0 1px rgba(88, 187, 136, 0.18) inset;
+}
+
+.related-model-quick-item.is-pending-delete {
+  border-color: #e6baba;
+  background: #fff8f8;
+  box-shadow: 0 0 0 1px rgba(208, 80, 80, 0.14) inset;
+}
+
+.related-model-quick-item:disabled,
+.related-model-quick-item.is-disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }
@@ -22570,12 +25154,111 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   word-break: break-word;
 }
 
+.related-model-quick-item__actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  gap: 4px;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.related-model-quick-item__action {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  position: relative;
+  z-index: 4;
+  border: 1px solid #d6dfef;
+  border-radius: 7px;
+  background: #f4f8ff;
+  color: #5b7194;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.related-model-quick-item__action--danger {
+  border-color: #ecd4d4;
+  background: #fff6f6;
+  color: #8d5a5a;
+}
+
+.related-model-quick-item__action--danger.is-pending {
+  border-color: #d46868;
+  background: #ffe8e8;
+  color: #9b2c2c;
+}
+
+.related-model-quick-item__action .control-icon {
+  font-size: 12px;
+}
+
+.related-model-quick-item__action:disabled,
+.related-model-quick-item__action.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .related-model-quick-item--custom {
   border-style: dashed;
 }
 
 .related-model-form--custom {
   margin-top: 2px;
+}
+
+.related-model-popular {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.related-model-popular > strong {
+  color: #5f7394;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.related-model-popular__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.related-model-popular__item {
+  border: 1px solid #d9e3f1;
+  border-radius: 7px;
+  background: #f8fbff;
+  color: #405878;
+  height: 22px;
+  padding: 0 7px;
+  width: auto;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.related-model-popular__item span {
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.related-model-popular__item.is-active {
+  border-color: #95b7ee;
+  background: #eaf3ff;
+  color: #2f4d7a;
+}
+
+.related-model-popular__item:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .related-model-form__meta {
@@ -22596,6 +25279,42 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   font-weight: 600;
 }
 
+.related-model-form__field-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.related-model-form__model-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.related-model-form__model-tag {
+  border: 1px solid #d7e2f0;
+  border-radius: 999px;
+  background: #f7faff;
+  color: #57719a;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.related-model-form__model-tag.is-active {
+  border-color: #90b2ea;
+  background: #e8f1ff;
+  color: #305181;
+}
+
+.related-model-form__model-tag:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .related-model-form__input {
   width: 100%;
   height: 34px;
@@ -22606,6 +25325,44 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   color: #2c3a54;
   padding: 0 10px;
   font-size: 13px;
+}
+
+.related-model-form__secret-input-wrap {
+  position: relative;
+}
+
+.related-model-form__input--secret {
+  padding-right: 42px;
+}
+
+.related-model-form__secret-icon {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #5c7498;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.related-model-form__secret-icon .control-icon {
+  font-size: 14px;
+}
+
+.related-model-form__secret-icon:hover {
+  background: rgba(145, 174, 220, 0.18);
+}
+
+.related-model-form__secret-icon:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .related-model-form__select {
@@ -23946,19 +26703,51 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   padding: 10px 11px;
 }
 
+.utility-history-card--clickable {
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.utility-history-card--clickable:hover,
+.utility-history-card--clickable:focus-visible {
+  border-color: #c6d7f5;
+  background: #f4f8ff;
+  box-shadow: 0 3px 10px rgba(80, 112, 165, 0.12);
+  outline: none;
+}
+
+.utility-history-card--clickable.is-active {
+  border-color: #9db8eb;
+  background: #ecf4ff;
+  box-shadow: 0 3px 12px rgba(62, 116, 195, 0.16);
+}
+
 .utility-history-card__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
 }
 
 .utility-history-card__head strong {
+  flex: 1 1 auto;
+  min-width: 0;
   color: #2f3f5b;
   font-size: 13px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .utility-history-card__head small {
+  flex-shrink: 0;
+  margin-top: 1px;
+  white-space: nowrap;
   color: #8596b1;
   font-size: 11px;
 }
@@ -23967,6 +26756,14 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   margin: 5px 0 0;
   color: #6f83a3;
   font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: calc(1.45em * 3);
 }
 
 .utility-history-card__foot {
@@ -23978,8 +26775,11 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .utility-history-card__foot span {
+  min-width: 0;
   color: #8a98ae;
   font-size: 11px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .utility-history-card__action {
@@ -24879,19 +27679,64 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   color: var(--cp-text-muted);
 }
 
+.chat-group-info-card__close {
+  border-color: var(--cp-border);
+  color: var(--cp-text-muted);
+  background: var(--cp-surface-elevated);
+}
+
+.chat-group-info-card__close:hover {
+  border-color: var(--cp-border-strong);
+  color: var(--cp-accent-dark);
+  background: var(--cp-hover-bg);
+}
+
+.chat-settings-agent-card__close {
+  border-color: var(--cp-border);
+  color: var(--cp-text-muted);
+  background: var(--cp-surface-elevated);
+}
+
+.chat-settings-agent-card__close:hover {
+  border-color: var(--cp-border-strong);
+  color: var(--cp-accent-dark);
+  background: var(--cp-hover-bg);
+}
+
 .chat-group-info-card__section {
   border-top-color: var(--cp-border);
 }
 
-.chat-group-info-card__name {
+.chat-group-info-card__value {
+  color: var(--cp-text);
+}
+
+.chat-group-info-card__edit {
   border-color: var(--cp-border);
   background: var(--cp-surface-elevated);
-  color: var(--cp-text);
+  color: var(--cp-icon);
+}
+
+.chat-group-info-card__edit:hover {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-dark);
+}
+
+.chat-group-info-card__owner-dot {
+  background: var(--cp-accent);
+  box-shadow: 0 0 0 3px var(--cp-active-bg);
 }
 
 .chat-group-info-member__avatar {
   background: var(--cp-hover-bg);
   color: var(--cp-accent-dark);
+}
+
+.chat-group-info-member__owner-badge {
+  border-color: var(--cp-surface);
+  background: var(--cp-accent);
+  color: #ffffff;
 }
 
 .chat-group-info-member strong {
@@ -24901,6 +27746,65 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .chat-group-info-card__empty {
   border-color: var(--cp-border);
   background: var(--cp-surface-elevated);
+}
+
+.conversation-group-rename-modal__field span {
+  color: var(--cp-text-muted);
+}
+
+.conversation-group-rename-modal__field input {
+  border-color: var(--cp-border);
+  background: var(--cp-surface);
+  color: var(--cp-text);
+}
+
+.conversation-group-rename-modal__field input:focus {
+  border-color: var(--cp-border-strong);
+  box-shadow: var(--cp-focus-ring);
+}
+
+.conversation-group-rename-modal__submit {
+  border-color: var(--cp-accent);
+  background: var(--cp-accent);
+  color: #ffffff;
+}
+
+.conversation-group-rename-modal__submit:hover {
+  border-color: var(--cp-accent-strong);
+  background: var(--cp-accent-strong);
+}
+
+.chat-agent-delete-modal__icon {
+  border-color: var(--cp-border);
+  background: var(--cp-hover-bg);
+}
+
+.chat-agent-delete-modal__header p {
+  color: var(--cp-text-muted);
+}
+
+.chat-agent-delete-modal__risk {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.chat-agent-delete-modal__risk p {
+  color: var(--cp-text-muted);
+}
+
+.chat-agent-delete-modal__risk strong {
+  color: var(--cp-text);
+}
+
+.chat-agent-delete-modal__risk small {
+  color: var(--cp-text-muted);
+}
+
+.chat-action-toast {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  box-shadow: 0 10px 24px var(--cp-shadow);
+  color: var(--cp-text);
 }
 
 .chat-empty-state {
@@ -24996,6 +27900,199 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .utility-log-filter__select:focus {
   border-color: var(--cp-border-strong);
   box-shadow: var(--cp-focus-ring);
+}
+
+.chat-user-group-modal {
+  border-color: var(--cp-border);
+  background: linear-gradient(180deg, var(--cp-panel-bg-top), var(--cp-panel-bg-bottom));
+  box-shadow: 0 30px 66px var(--cp-shadow);
+  color: var(--cp-text-strong);
+}
+
+.chat-user-group-modal__header {
+  border-bottom-color: var(--cp-border);
+}
+
+.chat-user-group-modal__header strong {
+  color: var(--cp-text-strong);
+}
+
+.chat-user-group-modal__header p {
+  color: var(--cp-text-muted);
+}
+
+.chat-user-group-modal__close {
+  border-color: var(--cp-border);
+  background: var(--cp-surface);
+  color: var(--cp-icon);
+}
+
+.chat-user-group-modal__close:hover {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+  color: var(--cp-text);
+}
+
+.chat-user-group-modal__pane {
+  border-color: var(--cp-border);
+  background: var(--cp-surface);
+}
+
+.chat-user-group-modal__search {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.chat-user-group-modal__search svg {
+  stroke: var(--cp-icon);
+}
+
+.chat-user-group-modal__search input {
+  color: var(--cp-text);
+}
+
+.chat-user-group-modal__search input::placeholder {
+  color: var(--cp-text-muted);
+}
+
+.chat-user-group-modal__field span,
+.chat-user-group-modal__members-head > span,
+.chat-user-group-modal__selected-head span {
+  color: var(--cp-text-muted);
+}
+
+.chat-user-group-modal__field input,
+.chat-user-group-modal__field select {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  color: var(--cp-text);
+}
+
+.chat-user-group-modal__field input:focus,
+.chat-user-group-modal__field select:focus {
+  border-color: var(--cp-border-strong);
+  box-shadow: var(--cp-focus-ring);
+}
+
+.chat-user-group-modal__owner-select {
+  border-color: var(--cp-border);
+  color: var(--cp-text);
+  background:
+    linear-gradient(45deg, transparent 50%, var(--cp-icon) 50%) calc(100% - 15px) calc(50% - 1px) / 5px 5px no-repeat,
+    linear-gradient(135deg, var(--cp-icon) 50%, transparent 50%) calc(100% - 10px) calc(50% - 1px) / 5px 5px no-repeat,
+    linear-gradient(180deg, var(--cp-surface-elevated) 0%, var(--cp-surface) 100%);
+}
+
+.chat-user-group-modal__owner-select:hover {
+  border-color: var(--cp-border-strong);
+  background:
+    linear-gradient(45deg, transparent 50%, var(--cp-icon) 50%) calc(100% - 15px) calc(50% - 1px) / 5px 5px no-repeat,
+    linear-gradient(135deg, var(--cp-icon) 50%, transparent 50%) calc(100% - 10px) calc(50% - 1px) / 5px 5px no-repeat,
+    linear-gradient(180deg, var(--cp-hover-bg) 0%, var(--cp-surface) 100%);
+}
+
+.chat-user-group-modal__owner-select:focus {
+  border-color: var(--cp-border-strong);
+  box-shadow: var(--cp-focus-ring);
+}
+
+.chat-user-group-modal__owner-select option {
+  background: var(--cp-surface-elevated);
+  color: var(--cp-text);
+}
+
+.chat-user-group-modal__members-head button {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  color: var(--cp-text-muted);
+}
+
+.chat-user-group-modal__members-head button:hover {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+  color: var(--cp-text);
+}
+
+.chat-user-group-modal__members-empty {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  color: var(--cp-text-muted);
+}
+
+.chat-user-group-modal__member-row,
+.chat-user-group-modal__selected-row {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.chat-user-group-modal__member-row:hover {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+}
+
+.chat-user-group-modal__member-row.is-selected {
+  border-color: var(--cp-accent);
+  background: var(--cp-active-bg);
+  box-shadow: inset 0 0 0 1px var(--cp-active-bg-strong);
+}
+
+.chat-user-group-modal__member-avatar {
+  border-color: var(--cp-border);
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-dark);
+}
+
+.chat-user-group-modal__member-row strong {
+  color: var(--cp-text);
+}
+
+.chat-user-group-modal__member-row small {
+  color: var(--cp-text-muted);
+}
+
+.chat-user-group-modal__member-action {
+  border-color: var(--cp-border-300);
+  color: var(--cp-icon);
+}
+
+.chat-user-group-modal__member-row.is-selected .chat-user-group-modal__member-action {
+  border-color: var(--cp-accent);
+  background: var(--cp-accent);
+  color: #ffffff;
+}
+
+.chat-user-group-modal__selected-owner,
+.chat-user-group-modal__selected-remove,
+.chat-user-group-modal__actions button {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  color: var(--cp-text-muted);
+}
+
+.chat-user-group-modal__selected-owner:hover,
+.chat-user-group-modal__selected-remove:hover,
+.chat-user-group-modal__actions button:hover {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-hover-bg);
+  color: var(--cp-text);
+}
+
+.chat-user-group-modal__selected-owner.is-active,
+.chat-user-group-modal__actions button:last-child {
+  border-color: var(--cp-accent);
+  background: var(--cp-accent);
+  color: #ffffff;
+}
+
+.chat-user-group-modal__actions button:last-child:hover {
+  border-color: var(--cp-accent-strong);
+  background: var(--cp-accent-strong);
+}
+
+.chat-user-group-modal__error {
+  border-color: rgba(222, 94, 133, 0.42);
+  background: rgba(222, 94, 133, 0.14);
+  color: #d1497c;
 }
 
 .utility-log-detail {
@@ -25305,10 +28402,6 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
     gap: 10px;
   }
 
-  .sidebar-profile-panel__title {
-    font-size: 20px;
-  }
-
   .sidebar-profile-panel__avatar {
     width: 76px;
     height: 76px;
@@ -25319,8 +28412,20 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
   }
 
   .sidebar-profile-panel__lobster {
-    font-size: 14px;
-    padding: 5px 12px;
+    min-height: 34px;
+    font-size: 13px;
+    padding: 3px 6px 3px 10px;
+    gap: 8px;
+  }
+
+  .sidebar-profile-panel__lobster-copy {
+    width: 22px;
+    height: 22px;
+  }
+
+  .sidebar-profile-panel__lobster svg {
+    width: 12px;
+    height: 12px;
   }
 
   .sidebar-profile-panel__tabs {
@@ -25589,6 +28694,10 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .related-model-popular__list {
+    gap: 4px;
+  }
+
   .related-channel-row {
     align-items: flex-start;
     flex-direction: column;
@@ -25806,15 +28915,6 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
 
   .recruitment-surface__toolbar {
     align-items: stretch;
-  }
-
-  .recruitment-surface__switch {
-    margin-right: 0;
-    width: 100%;
-  }
-
-  .recruitment-surface__switch-item {
-    flex: 1 1 0;
   }
 
   .recruitment-surface__toolbar .module-surface__search {

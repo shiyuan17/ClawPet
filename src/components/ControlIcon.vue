@@ -16,13 +16,17 @@ export type ControlIconName =
   | "search"
   | "plus"
   | "chevron-down"
+  | "expand"
   | "trash"
   | "history"
   | "runtime"
   | "chat"
   | "tool"
+  | "edit"
   | "bolt"
-  | "send";
+  | "send"
+  | "eye"
+  | "eye-off";
 
 withDefaults(
   defineProps<{
@@ -130,6 +134,13 @@ withDefaults(
       <path d="m7 10 5 5 5-5" />
     </g>
 
+    <g v-else-if="name === 'expand'">
+      <path d="M14 4h6v6" />
+      <path d="m20 4-7 7" />
+      <path d="M10 20H4v-6" />
+      <path d="m4 20 7-7" />
+    </g>
+
     <g v-else-if="name === 'trash'">
       <path d="M4.8 6h14.4" />
       <path d="M8.7 6V4.5a1.5 1.5 0 0 1 1.5-1.5h3.6a1.5 1.5 0 0 1 1.5 1.5V6" />
@@ -160,6 +171,11 @@ withDefaults(
       <circle class="accent-fill" cx="18.4" cy="5.7" r="0.9" />
     </g>
 
+    <g v-else-if="name === 'edit'">
+      <path d="M4.5 19.5h4l9.7-9.7a1.8 1.8 0 0 0 0-2.6l-1.4-1.4a1.8 1.8 0 0 0-2.6 0L4.5 15.5v4Z" />
+      <path class="accent-stroke" d="m12.6 7.4 4 4" />
+    </g>
+
     <g v-else-if="name === 'bolt'">
       <path d="M13.2 2.8 6.2 12h4.2l-1.2 9.2 8.6-11.2h-4.4z" />
       <path class="accent-stroke" d="M9.4 12h3.1" />
@@ -169,6 +185,18 @@ withDefaults(
       <path d="M12 19V5" />
       <path d="m7 10 5-5 5 5" />
       <path class="accent-stroke" d="M12 19h.01" />
+    </g>
+
+    <g v-else-if="name === 'eye'">
+      <path d="M2.8 12s3.4-5.8 9.2-5.8 9.2 5.8 9.2 5.8-3.4 5.8-9.2 5.8-9.2-5.8-9.2-5.8Z" />
+      <circle class="accent-fill" cx="12" cy="12" r="2.2" />
+    </g>
+
+    <g v-else-if="name === 'eye-off'">
+      <path d="M2.8 12s3.4-5.8 9.2-5.8c2.1 0 3.8.7 5.2 1.7" />
+      <path d="M21.2 12s-3.4 5.8-9.2 5.8c-2.1 0-3.9-.8-5.3-1.8" />
+      <circle cx="12" cy="12" r="2.2" />
+      <path d="M4 4l16 16" />
     </g>
   </svg>
 </template>

@@ -9,7 +9,7 @@ export default defineConfig({
     lib: {
       entry: resolve(__dirname, "src/embed.ts"),
       name: "KeAIDesktopPet",
-      fileName: "keai-desktop-pet",
+      fileName: "DragonClaw",
       formats: ["es", "umd"]
     },
     rollupOptions: {
