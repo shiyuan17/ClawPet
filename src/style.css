@@ -8576,7 +8576,11 @@ html[data-app-theme-resolved="dark"] .system-settings-footer {
 .chat-tool-call__avatar svg {
   width: 13px;
   height: 13px;
-  fill: currentColor;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-tool-call__body {
@@ -8623,7 +8627,12 @@ html[data-app-theme-resolved="dark"] .system-settings-footer {
 .chat-tool-call__icon {
   width: 14px;
   height: 14px;
-  fill: #64748b;
+  color: #64748b;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-tool-call__name {

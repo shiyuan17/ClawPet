@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
+import ControlIcon from "./ControlIcon.vue";
 import appLogoUrl from "../../images/xia-logo.png";
 import channelDingtalkIcon from "../images/channels/dingtalk.svg";
 import channelDiscordIcon from "../images/channels/discord.svg";
@@ -593,12 +594,12 @@ type TauriNamespace = {
 };
 
 const sidebarItems: SidebarItem[] = [
+  { id: "dashboard", label: "仪表盘" },
   { id: "chat", label: "聊天" },
   { id: "tasks", label: "任务管理" },
-  { id: "dashboard", label: "仪表盘" },
-  { id: "market", label: "商城" },
   { id: "recruitment", label: "数字员工" },
-  { id: "skills", label: "技能市场" }
+  { id: "skills", label: "技能市场" },
+  { id: "market", label: "商城" }
 ];
 const sidebarSettingsMenuGroups: SidebarSettingsMenuGroup[] = [
   { id: "general", label: "通用设置" },
@@ -11370,7 +11371,7 @@ watch(
           >
             <span class="sidebar-profile-panel__drag-handle" aria-hidden="true" />
             <button class="sidebar-profile-panel__close" type="button" aria-label="关闭头像设置" @click="closeSidebarProfilePopover">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7l-10 10" /></svg>
+              <ControlIcon name="close" />
             </button>
             <p class="sidebar-profile-panel__title">邀请成员</p>
             <span class="sidebar-profile-panel__avatar">
@@ -11386,7 +11387,7 @@ watch(
             <strong class="sidebar-profile-panel__name" :title="sidebarDisplayName">{{ sidebarDisplayName }}</strong>
             <button class="sidebar-profile-panel__lobster" type="button" @click="handleSidebarLobsterIdCopy">
               <span>龙虾号 {{ sidebarProfileLobsterId }}</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2zm-3-5h9a2 2 0 0 1 2 2v1h-2V5H5v9h1v2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /></svg>
+              <ControlIcon name="copy" />
             </button>
 
             <div class="sidebar-profile-panel__tabs" role="tablist" aria-label="头像分类">
@@ -11546,12 +11547,12 @@ watch(
               @click="handleSidebarSectionChange(item.id)"
             >
               <span class="nav-item__icon" aria-hidden="true">
-                <svg v-if="item.id === 'chat'" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
-                <svg v-else-if="item.id === 'dashboard'" viewBox="0 0 24 24"><path d="M3 13h8V3H3zm10 8h8V3h-8zm-10 0h8v-6H3z" /></svg>
-                <svg v-else-if="item.id === 'market'" viewBox="0 0 24 24"><path d="M4 7h16l-1.2 12H5.2zM9 7V5a3 3 0 0 1 6 0v2M9 11h.01M15 11h.01" /></svg>
-                <svg v-else-if="item.id === 'recruitment'" viewBox="0 0 24 24"><path d="M10 2a8 8 0 1 0 5.3 14l4.9 4.9 1.4-1.4-4.9-4.9A8 8 0 0 0 10 2zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6z" /></svg>
-                <svg v-else-if="item.id === 'skills'" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.8L3 18.5V21h2.5l6.4-6.3a4 4 0 0 0 2.8-8.4zM14 10a2 2 0 1 1 1.4-.6A2 2 0 0 1 14 10z" /></svg>
-                <svg v-else viewBox="0 0 24 24"><path d="M9 11H7v2h2zm4 0h-2v2h2zm4 0h-2v2h2zm2-8H5a2 2 0 0 0-2 2v14l4-4h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" /></svg>
+                <ControlIcon v-if="item.id === 'chat'" name="nav-chat" />
+                <ControlIcon v-else-if="item.id === 'dashboard'" name="nav-dashboard" />
+                <ControlIcon v-else-if="item.id === 'market'" name="nav-market" />
+                <ControlIcon v-else-if="item.id === 'recruitment'" name="nav-recruitment" />
+                <ControlIcon v-else-if="item.id === 'skills'" name="nav-skills" />
+                <ControlIcon v-else name="nav-tasks" />
               </span>
               <span class="nav-item__label">{{ item.label }}</span>
             </button>
@@ -11571,13 +11572,7 @@ watch(
                 @click.stop="toggleSidebarThemePopover"
               >
                 <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--theme" aria-hidden="true">
-                  <svg viewBox="0 0 24 24">
-                    <path
-                      class="sidebar-icon-tee__stroke"
-                      d="M8 4.9c1 .8 2.3 1.2 4 1.2s3-.4 4-1.2l3 2.8-2.2 2.1-1.6-1.4V19H8.8V8.4L7.2 9.8 5 7.7z"
-                    />
-                    <rect class="sidebar-icon-tee__tag" x="10.2" y="10" width="3.6" height="5.8" rx="0.8" />
-                  </svg>
+                  <ControlIcon name="theme" />
                 </span>
                 <span class="sidebar-quick-action__label">主题</span>
               </button>
@@ -11646,10 +11641,7 @@ watch(
               @click="openSidebarProxyConfig"
             >
               <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--proxy" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <rect x="4" y="7" width="16" height="12" rx="1.8" />
-                  <path d="M8 7V6.2A1.7 1.7 0 0 1 9.7 4.5h4.6A1.7 1.7 0 0 1 16 6.2V7M4 11.2h16M9 11.2v2.2M15 11.2v2.2" />
-                </svg>
+                <ControlIcon name="proxy" />
               </span>
               <span class="sidebar-quick-action__label">代理</span>
             </button>
@@ -11662,13 +11654,7 @@ watch(
               @click="openSidebarLogs"
             >
               <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--logs" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path class="sidebar-icon-file__stroke" d="M6 3.8h8.1L19.5 9v11.2a1.8 1.8 0 0 1-1.8 1.8H6.3a1.8 1.8 0 0 1-1.8-1.8V5.6A1.8 1.8 0 0 1 6 3.8z" />
-                  <path class="sidebar-icon-file__stroke" d="M14.1 3.8V9h5.4" />
-                  <rect class="sidebar-icon-file__card" x="7.4" y="11" width="8.8" height="6.4" rx="1.2" />
-                  <line class="sidebar-icon-file__line1" x1="9.1" y1="13.3" x2="14.8" y2="13.3" />
-                  <line class="sidebar-icon-file__line2" x1="9.1" y1="15.2" x2="13.7" y2="15.2" />
-                </svg>
+                <ControlIcon name="logs" />
               </span>
               <span class="sidebar-quick-action__label">日志</span>
             </button>
@@ -11681,10 +11667,7 @@ watch(
               @click="openSidebarSettings"
             >
               <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--settings" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M8 5.5h8l4 6.5-4 6.5H8L4 12z" />
-                  <circle cx="12" cy="12" r="2.8" />
-                </svg>
+                <ControlIcon name="settings" />
               </span>
               <span class="sidebar-quick-action__label">设置</span>
             </button>
@@ -11696,12 +11679,7 @@ watch(
               @click="openSidebarOpenClawWeb"
             >
               <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--web" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <rect x="4" y="4.5" width="16" height="15" rx="1.2" />
-                  <path d="M4 8.7h16" />
-                  <circle class="sidebar-icon-browser__dot" cx="7.2" cy="6.7" r="0.95" />
-                  <circle class="sidebar-icon-browser__dot" cx="10.2" cy="6.7" r="0.95" />
-                </svg>
+                <ControlIcon name="web" />
               </span>
               <span class="sidebar-quick-action__label">打开 OpenClaw 原站点</span>
             </button>
@@ -11882,7 +11860,7 @@ watch(
                           aria-label="复制当前内容"
                           @click="handleCopyRuntimeLogContent"
                         >
-                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                          <ControlIcon name="copy" />
                         </button>
                         <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
                       </div>
@@ -11943,7 +11921,7 @@ watch(
                           aria-label="复制当前内容"
                           @click="handleCopyRuntimeLogContent"
                         >
-                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                          <ControlIcon name="copy" />
                         </button>
                         <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
                       </div>
@@ -11959,7 +11937,7 @@ watch(
             <header class="chat-list__header" @mousedown.left="handleRegionMouseDown">
               <div class="search-row">
                 <label class="search-box" aria-label="搜索 Agent">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2a8 8 0 1 0 4.9 14.3l4.4 4.4 1.4-1.4-4.4-4.4A8 8 0 0 0 10 2zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6z" /></svg>
+                  <ControlIcon name="search" />
                   <input v-model="searchQuery" type="text" placeholder="搜索 Agent" />
                 </label>
                 <div ref="chatQuickCreateMenuRef" class="search-create-menu" data-no-window-drag>
@@ -11972,7 +11950,7 @@ watch(
                     :aria-expanded="isChatQuickCreateMenuOpen"
                     @click.stop="toggleChatQuickCreateMenu"
                   >
-                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v14M3 10h14" /></svg>
+                    <ControlIcon name="plus" />
                   </button>
                   <div v-if="isChatQuickCreateMenuOpen" class="search-create-menu__popover" role="menu" aria-label="快捷新建菜单">
                     <button type="button" class="search-create-menu__item" role="menuitem" @click="handleChatQuickCreateAction('role')">
@@ -12034,9 +12012,7 @@ watch(
                           aria-label="配置频道绑定"
                           @click.stop="handleChannelPaneChatItemConfigClick(item)"
                         >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm8 3.5-.94-.36a7.9 7.9 0 0 0-.42-1.01l.53-.85a1 1 0 0 0-.14-1.24l-1.23-1.23a1 1 0 0 0-1.24-.14l-.85.53c-.33-.16-.67-.3-1.02-.42L14 3.98A1 1 0 0 0 13.03 3h-2.06a1 1 0 0 0-.97.73l-.35 1.22c-.35.11-.69.25-1.02.42l-.85-.53a1 1 0 0 0-1.24.14L5.31 6.2a1 1 0 0 0-.14 1.24l.53.85c-.16.33-.3.67-.42 1.02L4.06 10a1 1 0 0 0-.73.97v2.06a1 1 0 0 0 .73.97l1.22.35c.11.35.25.69.42 1.02l-.53.85a1 1 0 0 0 .14 1.24l1.23 1.23a1 1 0 0 0 1.24.14l.85-.53c.33.16.67.3 1.02.42l.35 1.22a1 1 0 0 0 .97.73h2.06a1 1 0 0 0 .97-.73l.35-1.22c.35-.11.69-.25 1.02-.42l.85.53a1 1 0 0 0 1.24-.14l1.23-1.23a1 1 0 0 0 .14-1.24l-.53-.85c.16-.33.3-.67.42-1.02l1.22-.35a1 1 0 0 0 .73-.97v-2.06a1 1 0 0 0-.73-.97Z" />
-                          </svg>
+                          <ControlIcon name="settings" />
                         </button>
                         <i class="chat-channel-pane__chat-item-dot" :data-tone="item.statusTone" :title="item.statusLabel" />
                       </div>
@@ -12098,7 +12074,7 @@ watch(
                       aria-label="新建群聊"
                       @click="handleCreateChatUserGroup"
                     >
-                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+                      <ControlIcon name="plus" />
                     </button>
                   </div>
                   <section
@@ -12123,7 +12099,7 @@ watch(
                           :aria-label="isChatUserSectionCollapsed(section.id) ? `展开 ${section.title}` : `折叠 ${section.title}`"
                           @click="toggleChatUserSectionCollapsed(section.id)"
                         >
-                          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 8 5 5 5-5" /></svg>
+                          <ControlIcon name="chevron-down" />
                         </button>
                         <button
                           v-if="section.id !== CHAT_USER_PINNED_GROUP_ID && !section.isDefault"
@@ -12133,12 +12109,7 @@ watch(
                           :aria-label="`删除 ${section.title}`"
                           @click="handleDeleteChatUserGroup(section.id)"
                         >
-                          <svg viewBox="0 0 20 20" aria-hidden="true">
-                            <path d="M4.5 5.5h11" />
-                            <path d="M7.8 5.5V4.2a1 1 0 0 1 1-1h2.4a1 1 0 0 1 1 1v1.3" />
-                            <path d="M6 5.5 6.7 15a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-9.5" />
-                            <path d="M8.6 8v5.6M11.4 8v5.6" />
-                          </svg>
+                          <ControlIcon name="trash" />
                         </button>
                         <button
                           v-if="sectionIndex === 0"
@@ -12148,7 +12119,7 @@ watch(
                           aria-label="新建群聊"
                           @click="handleCreateChatUserGroup"
                         >
-                          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+                          <ControlIcon name="plus" />
                         </button>
                       </div>
                     </header>
@@ -12346,7 +12317,7 @@ watch(
                   aria-label="打开聊天记录"
                   @click="openUtilityModal('history')"
                 >
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 8v5l3 2" /></svg>
+                  <ControlIcon name="history" />
                 </button>
                 <button
                   type="button"
@@ -12356,7 +12327,7 @@ watch(
                   aria-label="打开运行日志"
                   @click="openSidebarLogs"
                 >
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8M8 4a2 2 0 0 0-2 2v1h12V6a2 2 0 0 0-2-2M6 7h12v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z" /><path d="m8 15 3-3 2 2 3-4" /></svg>
+                  <ControlIcon name="runtime" />
                 </button>
                 <button
                   type="button"
@@ -12366,10 +12337,7 @@ watch(
                   aria-label="打开会话设置"
                   @click="toggleAgentSettingsPanel"
                 >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <circle cx="12" cy="12" r="3.2" />
-                    <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.8 1.8 0 1 1-2.5 2.5l-.1-.1a1 1 0 0 0-1.1-.2h-.1a1 1 0 0 0-.6.9V20a1.8 1.8 0 0 1-3.6 0v-.1a1 1 0 0 0-.6-.9h-.1a1 1 0 0 0-1.1.2l-.1.1a1.8 1.8 0 0 1-2.5-2.5l.1-.1a1 1 0 0 0 .2-1.1v-.1a1 1 0 0 0-.9-.6H4a1.8 1.8 0 0 1 0-3.6h.1a1 1 0 0 0 .9-.6v-.1a1 1 0 0 0-.2-1.1l-.1-.1a1.8 1.8 0 1 1 2.5-2.5l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a1.8 1.8 0 0 1 3.6 0v.1a1 1 0 0 0 .6.9h.1a1 1 0 0 0 1.1-.2l.1-.1a1.8 1.8 0 1 1 2.5 2.5l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6H20a1.8 1.8 0 0 1 0 3.6h-.1a1 1 0 0 0-.9.6z" />
-                  </svg>
+                  <ControlIcon name="settings" />
                 </button>
                 </div>
               </div>
@@ -12391,7 +12359,7 @@ watch(
                   <div v-if="!activeAgentIsConversationGroup" class="chat-empty-state__actions">
                     <button class="chat-empty-action" type="button" :disabled="!activeAgent" @click="openRelatedResource('memory')">
                       <span class="chat-empty-action__icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" /><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.8 1.8 0 1 1-2.5 2.5l-.1-.1a1 1 0 0 0-1.1-.2h-.1a1 1 0 0 0-.6.9V20a1.8 1.8 0 0 1-3.6 0v-.1a1 1 0 0 0-.6-.9h-.1a1 1 0 0 0-1.1.2l-.1.1a1.8 1.8 0 0 1-2.5-2.5l.1-.1a1 1 0 0 0 .2-1.1v-.1a1 1 0 0 0-.9-.6H4a1.8 1.8 0 0 1 0-3.6h.1a1 1 0 0 0 .9-.6v-.1a1 1 0 0 0-.2-1.1l-.1-.1a1.8 1.8 0 1 1 2.5-2.5l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a1.8 1.8 0 0 1 3.6 0v.1a1 1 0 0 0 .6.9h.1a1 1 0 0 0 1.1-.2l.1-.1a1.8 1.8 0 1 1 2.5 2.5l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6H20a1.8 1.8 0 0 1 0 3.6h-.1a1 1 0 0 0-.9.6z" /></svg>
+                        <ControlIcon name="settings" />
                       </span>
                       <span class="chat-empty-action__content">
                         <strong>快速配置</strong>
@@ -12400,7 +12368,7 @@ watch(
                     </button>
                     <button class="chat-empty-action" type="button" :disabled="!activeAgent" @click="openRelatedResource('channel')">
                       <span class="chat-empty-action__icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24"><path d="M8 10h.01M12 10h.01M16 10h.01" /><path d="M4 5h16v10H7l-3 4z" /></svg>
+                        <ControlIcon name="chat" />
                       </span>
                       <span class="chat-empty-action__content">
                         <strong>聊天渠道设置</strong>
@@ -12423,24 +12391,18 @@ watch(
                   >
                     <template v-if="isRuntimeToolMessage(message)">
                       <div class="chat-tool-call__avatar" aria-hidden="true">
-                        <svg viewBox="0 0 20 20">
-                          <path d="M12.3 3.3a4 4 0 0 0 4.4 5.4l-3.1 3.1-1.8-1.8-5.6 5.6a1.6 1.6 0 1 1-2.3-2.3l5.6-5.6-1.8-1.8 3.1-3.1a4 4 0 0 0 1.5.5z" />
-                        </svg>
+                        <ControlIcon name="tool" />
                       </div>
                       <div class="chat-tool-call__body">
                         <button class="chat-tool-call__pill" type="button" @click="toggleRuntimeToolMessageExpanded(message.id)">
                           <span class="chat-tool-call__pill-main">
-                            <svg class="chat-tool-call__icon" viewBox="0 0 20 20" aria-hidden="true">
-                              <path d="M11.2 1.8 4.6 10h4.3L7.9 18.2 14.7 10h-4.2z" />
-                            </svg>
+                            <ControlIcon class="chat-tool-call__icon" name="bolt" />
                             <span class="chat-tool-call__name">{{ getRuntimeToolLabel(message) }}</span>
                             <span class="chat-tool-call__status" :class="getRuntimeToolStatusClass(message)">
                               {{ getRuntimeToolStatusLabel(message) }}
                             </span>
                           </span>
-                          <svg class="chat-tool-call__caret" :class="{ 'is-open': isRuntimeToolMessageExpanded(message.id) }" viewBox="0 0 20 20" aria-hidden="true">
-                            <path d="m5 7 5 6 5-6" />
-                          </svg>
+                          <ControlIcon class="chat-tool-call__caret" :class="{ 'is-open': isRuntimeToolMessageExpanded(message.id) }" name="chevron-down" />
                         </button>
                         <pre
                           v-if="isRuntimeToolMessageExpanded(message.id) && getRuntimeToolMessageDetail(message)"
@@ -12642,7 +12604,7 @@ watch(
                               aria-label="复制当前内容"
                               @click="handleCopyRuntimeLogContent"
                             >
-                              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                              <ControlIcon name="copy" />
                             </button>
                             <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
                           </div>
@@ -12703,7 +12665,7 @@ watch(
                               aria-label="复制当前内容"
                               @click="handleCopyRuntimeLogContent"
                             >
-                              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                              <ControlIcon name="copy" />
                             </button>
                             <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
                           </div>
@@ -12840,7 +12802,7 @@ watch(
                               aria-label="复制员工 Id"
                               @click="handleCopyActiveAgentId"
                             >
-                              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                              <ControlIcon name="copy" />
                             </button>
                           </div>
                         </dd>
@@ -12908,7 +12870,7 @@ watch(
                       :disabled="!activeAgent || isSending"
                       @click="triggerChatAttachmentPicker"
                     >
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+                      <ControlIcon name="plus" />
                     </button>
                     <button
                       class="composer-model-chip composer-model-chip--trigger"
@@ -12917,7 +12879,7 @@ watch(
                       @click="openRelatedResource('model')"
                     >
                       <span class="composer-model-chip__label">{{ activeAgent?.model || "DragonClaw" }}</span>
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+                      <ControlIcon name="chevron-down" />
                     </button>
                     <button
                       class="composer-archive-chip"
@@ -12935,7 +12897,7 @@ watch(
                       :disabled="!activeAgent || isSending || (!chatInput.trim() && chatAttachments.length === 0)"
                       @click="submitChat"
                     >
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6m0 0-4 4m4-4 4 4" /></svg>
+                      <ControlIcon name="send" />
                     </button>
                   </div>
                 </div>
@@ -13591,9 +13553,7 @@ watch(
           <div class="chat-user-group-modal__panes">
             <section class="chat-user-group-modal__pane">
               <label class="chat-user-group-modal__search">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M10 2a8 8 0 1 0 5 14.3l4.3 4.3 1.4-1.4-4.3-4.3A8 8 0 0 0 10 2zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6z" />
-                </svg>
+                <ControlIcon name="search" />
                 <input v-model="createChatUserGroupSearch" type="text" placeholder="搜索成员" />
               </label>
               <header class="chat-user-group-modal__members-head">
@@ -14936,7 +14896,7 @@ watch(
                       aria-label="复制当前内容"
                       @click="handleCopyRuntimeLogContent"
                     >
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                      <ControlIcon name="copy" />
                     </button>
                     <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
                   </div>
@@ -14997,7 +14957,7 @@ watch(
                       aria-label="复制当前内容"
                       @click="handleCopyRuntimeLogContent"
                     >
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H10V7h9z" /></svg>
+                      <ControlIcon name="copy" />
                     </button>
                     <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
                   </div>
@@ -17678,7 +17638,11 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .chat-channel-pane__chat-item-config svg {
   width: 14px;
   height: 14px;
-  fill: currentColor;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-channel-pane__chat-item-config:hover {
@@ -18420,7 +18384,11 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .chat-settings-copy-field__button svg {
   width: 14px;
   height: 14px;
-  fill: currentColor;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-settings-copy-field__button:hover {
@@ -21814,7 +21782,11 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .chat-user-group-modal__search svg {
   width: 15px;
   height: 15px;
-  fill: #6f7d95;
+  fill: none;
+  stroke: #6f7d95;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-user-group-modal__search input {
@@ -24462,7 +24434,11 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .utility-log-copy svg {
   width: 14px;
   height: 14px;
-  fill: currentColor;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .utility-log-copy:hover {
