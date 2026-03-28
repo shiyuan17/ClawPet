@@ -97,6 +97,14 @@ type RoleWorkflowModalBase = {
   divisionTitleZh: string;
   groupTitleZh: string | null;
 };
+type RecruitmentLinkedRoleAgent = {
+  roleId: string;
+  role: AgencyRosterRole;
+  divisionTitleZh: string;
+  groupTitleZh: string | null;
+  agentId: string;
+  displayName: string;
+};
 type RoleWorkflowDetailNotice = {
   tone: "success" | "error";
   text: string;
@@ -195,8 +203,15 @@ type ChatConversationGroup = {
   name: string;
   memberAgentIds: string[];
   ownerAgentId: string | null;
+  groupPolicy: ChatConversationGroupPolicy;
+  allowFrom: string[];
+  requireMention: boolean;
+  activationCommand: string;
+  historyLimit: number;
   createdAt: number;
 };
+
+type ChatConversationGroupPolicy = "allowlist" | "open";
 
 type ChatUserCustomAgentKind = "friend" | "staff";
 type ChatUserCustomAgentKnowledgeScope = "general" | "specific" | "document";
@@ -228,6 +243,11 @@ type ChatComposerAttachment = {
   name: string;
   size: number;
   type: string;
+};
+
+type ChatMentionCandidate = {
+  agentId: string;
+  displayName: string;
 };
 
 type AgentChatMessage = {
@@ -359,6 +379,14 @@ type OpenClawChannelMessageSendResult = {
   stdout: string;
   stderr: string;
   durationMs: number;
+};
+
+type OpenClawChannelMirrorFailureLogPayload = {
+  channelType: string;
+  accountId: string;
+  target: string;
+  messagePreview: string;
+  errorDetail: string;
 };
 
 type ChannelMessageMirrorTarget = {
@@ -542,6 +570,18 @@ type LobsterSnapshotResponse = {
   installWizardOpenEveryLaunch?: boolean;
 };
 
+type OpenClawRuntimeStatusResponse = {
+  installed: boolean;
+  healthy: boolean;
+  status: string;
+  command: string;
+  detail: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  gatewayPort: number | null;
+};
+
 type LobsterActionResult = {
   action: string;
   command: string;
@@ -573,6 +613,10 @@ type StartupInstallStep = {
   title: string;
   etaLabel: string;
   status: StartupInstallStepStatus;
+};
+
+type StartupOpenClawRunOptions = {
+  background?: boolean;
 };
 
 type DashboardHealthTone = "online" | "warn" | "offline" | "neutral";
@@ -943,6 +987,13 @@ const CHAT_USER_COLLAPSED_SECTIONS_STORAGE_KEY = "keai.desktop-pet.chat-user-col
 const CHAT_USER_CUSTOM_AGENTS_STORAGE_KEY = "keai.desktop-pet.chat-user-custom-agents";
 const CHAT_USER_PINNED_GROUP_ID = "builtin:pinned";
 const CHAT_CONVERSATION_GROUP_AGENT_PREFIX = "chat-group:";
+const CHAT_CONVERSATION_GROUP_DEFAULT_POLICY: ChatConversationGroupPolicy = "allowlist";
+const CHAT_CONVERSATION_GROUP_DEFAULT_ALLOW_FROM = ["local:*"] as const;
+const CHAT_CONVERSATION_GROUP_DEFAULT_REQUIRE_MENTION = true;
+const CHAT_CONVERSATION_GROUP_DEFAULT_ACTIVATION_COMMAND = "/activation";
+const CHAT_CONVERSATION_GROUP_MIN_HISTORY_LIMIT = 8;
+const CHAT_CONVERSATION_GROUP_MAX_HISTORY_LIMIT = 80;
+const CHAT_CONVERSATION_GROUP_DEFAULT_HISTORY_LIMIT = 40;
 const ROLE_WORKFLOW_OVERRIDES_STORAGE_KEY = "keai.desktop-pet.role-workflow-overrides";
 const RECRUITMENT_DIVISION_FILTER_ALL = "__all__";
 const CREATE_EMPLOYEE_IDENTITY_OPTIONS: CreateEmployeeIdentityOption[] = [
@@ -990,10 +1041,12 @@ const CREATE_EMPLOYEE_MAX_RULES = 12;
 const UTILITY_LOG_ROLE_FILTER_ACTIVE = "__active__";
 const UTILITY_LOG_ROLE_FILTER_ALL = "__all__";
 const ROLE_WORKFLOW_INSTALL_PROMPT_PREFIX = "请根据以下角色信息创建 agent:";
+const PROTECTED_STAFF_AGENT_IDS = new Set(["main"]);
+const MAIN_STAFF_DISPLAY_NAME = "超级管理者";
 const STARTUP_OPENCLAW_STEPS_BASE: Array<Omit<StartupInstallStep, "status">> = [
   { id: "env", title: "检测环境", etaLabel: "" },
   { id: "node", title: "准备 Node.js", etaLabel: "" },
-  { id: "install", title: "安装 openClaw", etaLabel: "~30秒" },
+  { id: "install", title: "安装/修复 openClaw", etaLabel: "~30秒" },
   { id: "model", title: "配置 AI 大模型", etaLabel: "~3秒" },
   { id: "gateway", title: "启动并连接服务", etaLabel: "~10秒" }
 ];
@@ -1077,10 +1130,14 @@ const chatAttachmentInputRef = ref<HTMLInputElement | null>(null);
 const chatAttachments = ref<ChatComposerAttachment[]>([]);
 const chatComposerError = ref("");
 const chatComposerInputRef = ref<HTMLTextAreaElement | null>(null);
+const chatMentionQuery = ref("");
+const chatMentionStartIndex = ref<number | null>(null);
+const chatMentionActiveIndex = ref(0);
 const CHAT_COMPOSER_MIN_ROWS = 3;
 const CHAT_COMPOSER_MAX_ROWS = 8;
 const CHAT_COMPOSER_MAX_ATTACHMENT_COUNT = 5;
 const CHAT_COMPOSER_MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+const CHAT_MENTION_MAX_CANDIDATES = 8;
 const isSending = ref(false);
 const agents = ref<AgentListItem[]>([]);
 const selectedAgentId = ref<string | null>(null);
@@ -1203,6 +1260,7 @@ const feishuQrExpiresAtMs = ref<number | null>(null);
 const feishuQrTickMs = ref(Date.now());
 const feishuOpenclawUserCode = ref("");
 let feishuQrCountdownTimer = 0;
+let feishuPluginPrepared = false;
 const isChannelConfigModalOpen = ref(false);
 const channelConfigCatalogId = ref("");
 const channelConfigBackendType = ref("");
@@ -1246,15 +1304,18 @@ const utilityRuntimeCategory = ref<UtilityLogCategory>("all");
 const utilityRuntimeRoleFilter = ref(UTILITY_LOG_ROLE_FILTER_ACTIVE);
 const utilityRuntimeScheduleFilter = ref<UtilityLogScheduleFilter>("all");
 const utilitySelectedLogId = ref<string | null>(null);
+const isSidebarLogDetailModalOpen = ref(false);
 const runtimeToolSyncWindowMs = 180000;
 const runtimeToolSyncPostResponseWindowMs = 4000;
 const runtimeToolSyncRetryDelayMs = 400;
 let runtimeToolSyncRetryTimer = 0;
 const RELATED_HISTORY_FILTER_ALL = "__all__";
+const RELATED_HISTORY_AGENT_DEFAULT_CHANNEL_PREFIX = "agent-default:";
 const relatedHistoryChannelFilter = ref<string>(RELATED_HISTORY_FILTER_ALL);
 const recruitmentKeyword = ref("");
 const recruitmentDivisionFilter = ref(RECRUITMENT_DIVISION_FILTER_ALL);
 const recruitmentDivisions = loadAgencyRosterZh();
+const recruitmentActionNotice = ref("");
 const roleWorkflowOverrides = ref<Record<string, RoleWorkflowOverride>>(loadRoleWorkflowOverrides());
 const roleWorkflowDetailRoleId = ref<string | null>(null);
 const roleWorkflowDetailDraft = ref({ contentZh: "" });
@@ -2062,6 +2123,41 @@ function normalizeChatUserGroupName(value: string) {
   return value.trim().replace(/\s+/g, " ").slice(0, 24);
 }
 
+function normalizeChatConversationGroupPolicy(raw: unknown): ChatConversationGroupPolicy {
+  return raw === "open" ? "open" : CHAT_CONVERSATION_GROUP_DEFAULT_POLICY;
+}
+
+function normalizeChatConversationGroupAllowFrom(raw: unknown) {
+  if (!Array.isArray(raw)) {
+    return [...CHAT_CONVERSATION_GROUP_DEFAULT_ALLOW_FROM];
+  }
+  const tokens = raw
+    .map((item) => (typeof item === "string" ? item.trim().toLowerCase() : ""))
+    .filter(Boolean);
+  const deduped = Array.from(new Set(tokens)).slice(0, 40);
+  return deduped.length > 0 ? deduped : [...CHAT_CONVERSATION_GROUP_DEFAULT_ALLOW_FROM];
+}
+
+function normalizeChatConversationGroupActivationCommand(raw: unknown) {
+  const fallback = CHAT_CONVERSATION_GROUP_DEFAULT_ACTIVATION_COMMAND;
+  if (typeof raw !== "string") {
+    return fallback;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) {
+    return fallback;
+  }
+  if (trimmed.startsWith("/")) {
+    return trimmed.slice(0, 32);
+  }
+  return `/${trimmed}`.slice(0, 32);
+}
+
+function normalizeChatConversationGroupHistoryLimit(raw: unknown) {
+  const parsed = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : CHAT_CONVERSATION_GROUP_DEFAULT_HISTORY_LIMIT;
+  return Math.max(CHAT_CONVERSATION_GROUP_MIN_HISTORY_LIMIT, Math.min(CHAT_CONVERSATION_GROUP_MAX_HISTORY_LIMIT, parsed));
+}
+
 function normalizeChatUserGroup(raw: unknown): ChatUserGroup | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -2101,6 +2197,16 @@ function normalizeChatConversationGroup(raw: unknown): ChatConversationGroup | n
   const dedupedMembers = Array.from(new Set(members)).slice(0, 30);
   const ownerCandidate = typeof candidate.ownerAgentId === "string" ? candidate.ownerAgentId.trim() : "";
   const ownerAgentId = ownerCandidate && dedupedMembers.includes(ownerCandidate) ? ownerCandidate : dedupedMembers[0] ?? null;
+  const groupPolicy = normalizeChatConversationGroupPolicy((candidate as { groupPolicy?: unknown }).groupPolicy);
+  const allowFrom = normalizeChatConversationGroupAllowFrom((candidate as { allowFrom?: unknown }).allowFrom);
+  const requireMention =
+    typeof (candidate as { requireMention?: unknown }).requireMention === "boolean"
+      ? Boolean((candidate as { requireMention?: unknown }).requireMention)
+      : CHAT_CONVERSATION_GROUP_DEFAULT_REQUIRE_MENTION;
+  const activationCommand = normalizeChatConversationGroupActivationCommand(
+    (candidate as { activationCommand?: unknown }).activationCommand
+  );
+  const historyLimit = normalizeChatConversationGroupHistoryLimit((candidate as { historyLimit?: unknown }).historyLimit);
   const createdAt =
     typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
       ? Math.max(0, Math.floor(candidate.createdAt))
@@ -2110,6 +2216,11 @@ function normalizeChatConversationGroup(raw: unknown): ChatConversationGroup | n
     name,
     memberAgentIds: dedupedMembers,
     ownerAgentId,
+    groupPolicy,
+    allowFrom,
+    requireMention,
+    activationCommand,
+    historyLimit,
     createdAt
   };
 }
@@ -2132,7 +2243,7 @@ function normalizeChatUserCustomAgent(raw: unknown): ChatUserCustomAgent | null 
   const candidate = raw as Partial<ChatUserCustomAgent>;
   const agentId = typeof candidate.agentId === "string" ? candidate.agentId.trim() : "";
   const displayName = typeof candidate.displayName === "string" ? normalizeChatUserGroupName(candidate.displayName) : "";
-  if (!agentId || !displayName) {
+  if (!agentId || !displayName || isProtectedStaffAgentId(agentId)) {
     return null;
   }
   const createdAt =
@@ -2423,6 +2534,11 @@ function createChatConversationGroup(name: string, memberAgentIds: string[], own
     name: normalizedName,
     memberAgentIds: dedupedMembers,
     ownerAgentId: normalizedOwnerAgentId,
+    groupPolicy: CHAT_CONVERSATION_GROUP_DEFAULT_POLICY,
+    allowFrom: [...CHAT_CONVERSATION_GROUP_DEFAULT_ALLOW_FROM],
+    requireMention: CHAT_CONVERSATION_GROUP_DEFAULT_REQUIRE_MENTION,
+    activationCommand: CHAT_CONVERSATION_GROUP_DEFAULT_ACTIVATION_COMMAND,
+    historyLimit: CHAT_CONVERSATION_GROUP_DEFAULT_HISTORY_LIMIT,
     createdAt: Date.now()
   };
   chatConversationGroups.value = [...chatConversationGroups.value, nextGroup]
@@ -3078,6 +3194,27 @@ async function waitForStartupGatewayOnline(invoke: TauriInvoke, maxAttempts = 18
   return lastSnapshot;
 }
 
+function appendStartupRuntimeStatusLogs(
+  append: (...entries: Array<string | undefined>) => void,
+  tag: string,
+  runtimeStatus: OpenClawRuntimeStatusResponse | null | undefined
+) {
+  if (!runtimeStatus) {
+    return;
+  }
+  append(
+    `[${tag}]`,
+    runtimeStatus.command,
+    runtimeStatus.detail,
+    runtimeStatus.stdout,
+    runtimeStatus.stderr
+  );
+}
+
+async function checkStartupOpenClawRuntimeStatus(invoke: TauriInvoke) {
+  return (await invoke("check_openclaw_runtime_status")) as OpenClawRuntimeStatusResponse;
+}
+
 async function applyLockedStartupProviderConfig(invoke: TauriInvoke) {
   await invoke("save_openclaw_provider_config", {
     config: {
@@ -3091,8 +3228,112 @@ async function applyLockedStartupProviderConfig(invoke: TauriInvoke) {
   });
 }
 
-async function runStartupOpenClawInstall(invoke: TauriInvoke) {
-  startupOpenClawOverlayVisible.value = true;
+async function runStartupOpenClawRepair(
+  invoke: TauriInvoke,
+  initialStatus: OpenClawRuntimeStatusResponse | null = null,
+  options: StartupOpenClawRunOptions = {}
+) {
+  const runInBackground = options.background === true;
+  startupOpenClawOverlayVisible.value = !runInBackground;
+  startupOpenClawInstalling.value = true;
+  startupOpenClawInstallError.value = "";
+  startupOpenClawRuntimeLogs.value = "";
+  startupOpenClawShowManualActions.value = false;
+  resetStartupOpenClawSteps();
+
+  const appendStartupOpenClawRuntimeLogs = (...entries: Array<string | undefined>) => {
+    startupOpenClawRuntimeLogs.value = [startupOpenClawRuntimeLogs.value, ...entries]
+      .filter((item) => Boolean(item && item.trim()))
+      .join("\n\n");
+  };
+
+  appendStartupRuntimeStatusLogs(appendStartupOpenClawRuntimeLogs, "status-check-before-repair", initialStatus);
+
+  try {
+    startupOpenClawStatusText.value = "正在检测环境...";
+    setStartupOpenClawStepInstalling(0);
+    markStartupOpenClawStepDone(0);
+
+    startupOpenClawStatusText.value = "正在准备 Node.js...";
+    setStartupOpenClawStepInstalling(1);
+    await sleepMs(180);
+    markStartupOpenClawStepDone(1);
+
+    startupOpenClawStatusText.value = "检测到状态异常，正在自动修复...";
+    setStartupOpenClawStepInstalling(2);
+    const autoFixResult = (await invoke("run_lobster_action", { action: "auto_fix" })) as LobsterActionResult;
+    appendStartupOpenClawRuntimeLogs(
+      "[auto-fix]",
+      autoFixResult.command,
+      autoFixResult.stdout,
+      autoFixResult.stderr
+    );
+    if (!autoFixResult.success) {
+      throw new Error(autoFixResult.detail || "OpenClaw 自动修复失败。");
+    }
+    markStartupOpenClawStepDone(2);
+
+    startupOpenClawStatusText.value = "正在配置 AI 大模型...";
+    setStartupOpenClawStepInstalling(3);
+    try {
+      await applyLockedStartupProviderConfig(invoke);
+    } catch {
+      // Keep repair flow running even if provider defaults cannot be updated.
+    }
+    markStartupOpenClawStepDone(3);
+
+    startupOpenClawStatusText.value = "正在重启并校验服务...";
+    setStartupOpenClawStepInstalling(4);
+    const restartResult = (await invoke("run_lobster_action", { action: "restart_gateway" })) as LobsterActionResult;
+    appendStartupOpenClawRuntimeLogs(
+      "[restart-gateway]",
+      restartResult.command,
+      restartResult.stdout,
+      restartResult.stderr
+    );
+    if (!restartResult.success) {
+      const startResult = (await invoke("run_lobster_action", { action: "start_gateway" })) as LobsterActionResult;
+      appendStartupOpenClawRuntimeLogs(
+        "[start-gateway]",
+        startResult.command,
+        startResult.stdout,
+        startResult.stderr
+      );
+      if (!startResult.success) {
+        throw new Error(startResult.detail || restartResult.detail || "OpenClaw 网关修复失败。");
+      }
+    }
+
+    const repairedStatus = await checkStartupOpenClawRuntimeStatus(invoke);
+    appendStartupRuntimeStatusLogs(appendStartupOpenClawRuntimeLogs, "status-check-after-repair", repairedStatus);
+    if (!repairedStatus.installed || !repairedStatus.healthy) {
+      throw new Error(repairedStatus.detail || "OpenClaw 修复后状态仍异常。");
+    }
+
+    const gateway = await waitForStartupGatewayOnline(invoke, 12, 600);
+    if (!gateway || gateway.status.trim().toLowerCase() !== "online") {
+      throw new Error(gateway?.detail?.trim() || "OpenClaw 网关未就绪。");
+    }
+    markStartupOpenClawStepDone(4);
+
+    startupOpenClawStatusText.value = "OpenClaw 状态已修复并连接完成。";
+    startupOpenClawOverlayVisible.value = false;
+  } catch (error) {
+    const activeStepIndex = startupOpenClawSteps.value.findIndex((step) => step.status === "installing");
+    if (activeStepIndex >= 0) {
+      markStartupOpenClawStepFailed(activeStepIndex);
+    }
+    startupOpenClawInstallError.value = error instanceof Error ? error.message : "OpenClaw 修复失败。";
+    startupOpenClawStatusText.value = "OpenClaw 自动修复失败，请重试。";
+    startupOpenClawOverlayVisible.value = true;
+  } finally {
+    startupOpenClawInstalling.value = false;
+  }
+}
+
+async function runStartupOpenClawInstall(invoke: TauriInvoke, options: StartupOpenClawRunOptions = {}) {
+  const runInBackground = options.background === true;
+  startupOpenClawOverlayVisible.value = !runInBackground;
   startupOpenClawInstalling.value = true;
   startupOpenClawInstallError.value = "";
   startupOpenClawRuntimeLogs.value = "";
@@ -3263,37 +3504,16 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke) {
   }
 }
 
-async function ensureStartupOpenClawReady() {
+async function ensureStartupOpenClawReady(options: StartupOpenClawRunOptions = {}) {
+  const runInBackground = options.background === true;
   const invoke = getTauriInvoke();
   if (!invoke) {
     return;
   }
 
+  let snapshot: LobsterSnapshotResponse;
   try {
-    const snapshot = (await invoke("load_lobster_snapshot")) as LobsterSnapshotResponse;
-    const openInstallUiEveryLaunch = snapshot.installWizardOpenEveryLaunch === true;
-    if (snapshot.openclawInstalled) {
-      try {
-        await applyLockedStartupProviderConfig(invoke);
-      } catch {
-        // Keep app usable even if default provider write fails.
-      }
-      if (openInstallUiEveryLaunch) {
-        const versionText = snapshot.openclawVersion?.trim() ? snapshot.openclawVersion.trim() : "未知";
-        startupOpenClawStatusText.value = "已启用每次启动显示安装界面。";
-        startupOpenClawInstallError.value = "";
-        startupOpenClawRuntimeLogs.value = [
-          `检测结果：OpenClaw 已安装（版本 ${versionText}）。`,
-          "你可以点击“重新安装”再次执行安装流程，或点击“继续使用”进入应用。"
-        ].join("\n");
-        startupOpenClawShowManualActions.value = true;
-        startupOpenClawOverlayVisible.value = true;
-        startupOpenClawInstalling.value = false;
-        markStartupOpenClawAllDone();
-      }
-      return;
-    }
-    startupOpenClawShowManualActions.value = false;
+    snapshot = (await invoke("load_lobster_snapshot")) as LobsterSnapshotResponse;
   } catch (error) {
     startupOpenClawInstallError.value = error instanceof Error ? error.message : "无法检测 OpenClaw 安装状态。";
     startupOpenClawStatusText.value = "OpenClaw 安装检测失败，请重试。";
@@ -3302,8 +3522,109 @@ async function ensureStartupOpenClawReady() {
     return;
   }
 
-  startupOpenClawStatusText.value = "检测到未安装 OpenClaw，正在自动安装...";
-  await runStartupOpenClawInstall(invoke);
+  const openInstallUiEveryLaunch = snapshot.installWizardOpenEveryLaunch === true;
+  if (!snapshot.openclawInstalled) {
+    startupOpenClawShowManualActions.value = false;
+    startupOpenClawStatusText.value = "检测到未安装 OpenClaw，正在自动安装...";
+    await runStartupOpenClawInstall(invoke, options);
+    return;
+  }
+
+  try {
+    await applyLockedStartupProviderConfig(invoke);
+  } catch {
+    // Keep app usable even if default provider write fails.
+  }
+
+  let runtimeStatus: OpenClawRuntimeStatusResponse | null = null;
+  try {
+    runtimeStatus = await checkStartupOpenClawRuntimeStatus(invoke);
+  } catch (error) {
+    runtimeStatus = {
+      installed: true,
+      healthy: false,
+      status: "status_command_failed",
+      command: "check_openclaw_runtime_status",
+      detail: error instanceof Error ? error.message : "无法获取 OpenClaw 运行状态。",
+      exitCode: null,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : "",
+      gatewayPort: null
+    };
+  }
+
+  if (runtimeStatus.installed && runtimeStatus.healthy) {
+    if (openInstallUiEveryLaunch && !runInBackground) {
+      const versionText = snapshot.openclawVersion?.trim() ? snapshot.openclawVersion.trim() : "未知";
+      startupOpenClawStatusText.value = "已启用每次启动显示安装界面。";
+      startupOpenClawInstallError.value = "";
+      startupOpenClawRuntimeLogs.value = [
+        `检测结果：OpenClaw 已安装（版本 ${versionText}）。`,
+        `运行状态：${runtimeStatus.detail}`,
+        runtimeStatus.command ? `状态命令：${runtimeStatus.command}` : "",
+        "你可以点击“重新安装”再次执行安装流程，或点击“继续使用”进入应用。"
+      ]
+        .filter((line) => Boolean(line && line.trim()))
+        .join("\n");
+      startupOpenClawShowManualActions.value = true;
+      startupOpenClawOverlayVisible.value = true;
+      startupOpenClawInstalling.value = false;
+      markStartupOpenClawAllDone();
+    }
+    return;
+  }
+
+  if (!runtimeStatus.installed) {
+    startupOpenClawShowManualActions.value = false;
+    startupOpenClawStatusText.value = "检测到未安装 OpenClaw，正在自动安装...";
+    await runStartupOpenClawInstall(invoke, options);
+    return;
+  }
+
+  startupOpenClawShowManualActions.value = false;
+  startupOpenClawStatusText.value = "检测到 OpenClaw 状态异常，正在自动修复...";
+  await runStartupOpenClawRepair(invoke, runtimeStatus, options);
+}
+
+function scheduleStartupOpenClawReadyCheck() {
+  const runCheck = () => {
+    void ensureStartupOpenClawReady({ background: true });
+  };
+  if (typeof window === "undefined") {
+    runCheck();
+    return;
+  }
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(() => {
+      window.setTimeout(runCheck, 0);
+    });
+    return;
+  }
+  window.setTimeout(runCheck, 0);
+}
+
+function scheduleInitialChatPageBootstrap() {
+  const runBootstrap = async () => {
+    await Promise.all([loadAgents(), refreshDashboardData(), loadSidebarSettingsAppVersion()]);
+    await scrollMessagesToBottom();
+    await nextTick();
+    resizeChatComposerInput();
+  };
+  if (typeof window === "undefined") {
+    void runBootstrap();
+    return;
+  }
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        void runBootstrap();
+      }, 0);
+    });
+    return;
+  }
+  window.setTimeout(() => {
+    void runBootstrap();
+  }, 0);
 }
 
 async function retryStartupOpenClawInstall() {
@@ -3311,7 +3632,11 @@ async function retryStartupOpenClawInstall() {
   if (!invoke || startupOpenClawInstalling.value) {
     return;
   }
-  await runStartupOpenClawInstall(invoke);
+  if (startupOpenClawInstallError.value.trim()) {
+    await ensureStartupOpenClawReady({ background: false });
+    return;
+  }
+  await runStartupOpenClawInstall(invoke, { background: false });
 }
 
 function dismissStartupOpenClawOverlay() {
@@ -3386,6 +3711,131 @@ function legacyChatArchiveStorageKeyForAgent(agentId: string) {
 
 function stripRoleLabel(name: string) {
   return name.replace(/[（(][^）)]*[）)]$/, "").trim();
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getChatMentionSearchText(agent: AgentListItem) {
+  return stripRoleLabel(agent.displayName).trim().toLowerCase();
+}
+
+function parseChatMentionContext(text: string, cursor: number) {
+  if (!Number.isFinite(cursor) || cursor < 0 || cursor > text.length) {
+    return null;
+  }
+  const beforeCursor = text.slice(0, cursor);
+  const atIndex = beforeCursor.lastIndexOf("@");
+  if (atIndex < 0) {
+    return null;
+  }
+  if (atIndex > 0) {
+    const prevChar = beforeCursor[atIndex - 1];
+    if (prevChar && /[A-Za-z0-9_]/.test(prevChar)) {
+      return null;
+    }
+  }
+  const rawKeyword = beforeCursor.slice(atIndex + 1);
+  if (/[\s\r\n\t]/.test(rawKeyword)) {
+    return null;
+  }
+  return {
+    startIndex: atIndex,
+    keyword: rawKeyword.trim()
+  };
+}
+
+function containsGroupMention(text: string, target: string) {
+  const normalizedTarget = target.trim();
+  if (!normalizedTarget) {
+    return false;
+  }
+  const pattern = new RegExp(
+    `(^|[^A-Za-z0-9_])@${escapeRegExp(normalizedTarget)}(?=$|[\\s,，。!！?？:：;；、)）\\]】}>》])`,
+    "i"
+  );
+  return pattern.test(text);
+}
+
+function resolveMentionedGroupMembers(text: string, members: AgentListItem[]) {
+  const content = text.trim();
+  if (!content.includes("@")) {
+    return [] as AgentListItem[];
+  }
+  const deduped = new Map<string, AgentListItem>();
+  for (const member of members) {
+    const displayName = stripRoleLabel(member.displayName);
+    const matched = containsGroupMention(content, displayName) || containsGroupMention(content, member.agentId);
+    if (!matched) {
+      continue;
+    }
+    if (!deduped.has(member.agentId)) {
+      deduped.set(member.agentId, member);
+    }
+  }
+  return Array.from(deduped.values());
+}
+
+function formatChatConversationGroupAllowFromInput(allowFrom: string[]) {
+  const deduped = Array.from(new Set(allowFrom.map((item) => item.trim().toLowerCase()).filter(Boolean)));
+  return deduped.length > 0 ? deduped.join(", ") : CHAT_CONVERSATION_GROUP_DEFAULT_ALLOW_FROM.join(", ");
+}
+
+function parseChatConversationGroupAllowFromInput(raw: string) {
+  const values = raw
+    .split(/[,\n]/g)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const deduped = Array.from(new Set(values)).slice(0, 40);
+  return deduped.length > 0 ? deduped : [...CHAT_CONVERSATION_GROUP_DEFAULT_ALLOW_FROM];
+}
+
+function matchesGroupAllowFromRule(source: string, rule: string) {
+  if (!rule || rule === "*") {
+    return true;
+  }
+  if (rule.endsWith("*")) {
+    const prefix = rule.slice(0, -1);
+    return prefix ? source.startsWith(prefix) : true;
+  }
+  return source === rule;
+}
+
+function isConversationGroupSourceAllowed(group: ChatConversationGroup, source: string) {
+  if (group.groupPolicy === "open") {
+    return true;
+  }
+  return group.allowFrom.some((rule) => matchesGroupAllowFromRule(source, rule));
+}
+
+function resolveGroupMessageSourceKey(channelSession: ChannelPaneChatItem | null) {
+  if (!channelSession) {
+    return "local:manual";
+  }
+  if (channelSession.channelType === VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE) {
+    const target = normalizeConversationKeyPart(channelSession.accountId || channelSession.id);
+    return `session:${target}`;
+  }
+  const channelType = normalizeConversationKeyPart(
+    normalizeChannelPaneType(channelSession.channelType) || channelSession.channelType || channelSession.catalogId
+  );
+  const accountId = normalizeConversationKeyPart(channelSession.accountId || "default");
+  return `channel:${channelType}:${accountId}`;
+}
+
+function isConversationGroupActivationCommand(text: string, group: ChatConversationGroup) {
+  const command = normalizeChatConversationGroupActivationCommand(group.activationCommand);
+  const normalizedText = text.trim().toLowerCase();
+  if (!normalizedText || !command) {
+    return false;
+  }
+  return normalizedText === command || normalizedText.startsWith(`${command} `);
+}
+
+function buildGroupMemberSessionKey(group: ChatConversationGroup, memberAgentId: string, sourceKey: string) {
+  const normalizedSource = normalizeConversationKeyPart(sourceKey.replace(/:/g, "-"));
+  return `group:${normalizedSource}:${normalizeConversationKeyPart(group.id)}:${normalizeConversationKeyPart(memberAgentId)}`;
 }
 
 function inferStatusTone(statusLabel: string): AgentStatusTone {
@@ -3777,9 +4227,12 @@ function refreshAgentMetaFromHistory(agentId: string, messages: AgentChatMessage
 
 function mapSnapshotMember(member: StaffMemberSnapshot): AgentListItem {
   const statusLabel = member.statusLabel || "在线";
+  const normalizedAgentId = member.agentId.trim().toLowerCase();
+  const displayName =
+    normalizedAgentId === "main" ? MAIN_STAFF_DISPLAY_NAME : member.displayName || member.agentId;
   return {
     agentId: member.agentId,
-    displayName: member.displayName || member.agentId,
+    displayName,
     roleLabel: member.roleLabel || "未标注角色",
     channel: member.channel || "main",
     model: member.model || "llm/petclaw-1.0",
@@ -3801,9 +4254,10 @@ function mapFallbackMember() {
 
   return fallbackMembers.map((member) => {
     const statusLabel = member.status === "busy" ? "忙碌" : member.status === "offline" ? "离线" : "在线";
+    const normalizedAgentId = member.id.trim().toLowerCase();
     return {
       agentId: member.id,
-      displayName: member.name,
+      displayName: normalizedAgentId === "main" ? MAIN_STAFF_DISPLAY_NAME : member.name,
       roleLabel: member.role,
       channel: "local",
       model: "llm/petclaw-1.0",
@@ -3916,7 +4370,7 @@ function mapChatConversationGroupAgent(group: ChatConversationGroup, memberPool:
     currentWorkLabel: "群成员",
     currentWork: memberSummary,
     recentOutput: "",
-    scheduledLabel: memberCount > 0 ? "可群聊" : "待添加成员",
+    scheduledLabel: memberCount > 0 ? (group.requireMention ? "仅@触发" : "全员可触发") : "待添加成员",
     groupKind: "group"
   };
 }
@@ -4201,6 +4655,7 @@ function switchAgent(agentId: string | null, options: SwitchAgentOptions = {}) {
   chatMessages.value = loadedHistory.length > 0 ? [...loadedHistory] : createWelcomeMessages(active);
   chatAttachments.value = [];
   chatComposerError.value = "";
+  resetChatMentionState();
 
   setAgentMeta(agentId, { unread: 0 });
   if (utilityModalType.value) {
@@ -4224,6 +4679,7 @@ function handleNewChat() {
   chatMessages.value = createWelcomeMessages(active);
   chatAttachments.value = [];
   chatComposerError.value = "";
+  resetChatMentionState();
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
@@ -4485,7 +4941,7 @@ function resolveChatAgentContextMenuTarget() {
   if (pinnedTarget && equalsIgnoreCase(pinnedTarget.agentId, targetAgentId)) {
     return pinnedTarget;
   }
-  return staffAgentsAll.value.find((agent) => equalsIgnoreCase(agent.agentId, targetAgentId)) ?? null;
+  return agents.value.find((agent) => equalsIgnoreCase(agent.agentId, targetAgentId)) ?? null;
 }
 
 function closeChatAgentContextMenu() {
@@ -4495,7 +4951,14 @@ function closeChatAgentContextMenu() {
 }
 
 function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent) {
-  if (activeAgentPaneTab.value !== "staff" || agent.groupKind !== "staff") {
+  const pane = activeAgentPaneTab.value;
+  if (pane !== "staff" && pane !== "group") {
+    return;
+  }
+  if (pane === "staff" && agent.groupKind !== "staff") {
+    return;
+  }
+  if (pane === "group" && agent.groupKind !== "group") {
     return;
   }
   event.preventDefault();
@@ -4655,6 +5118,13 @@ function openCreateChatUserGroupModal(options: OpenCreateChatUserGroupOptions = 
 }
 
 function findRecruitmentRoleMatchedAgentId(role: AgencyRosterRole) {
+  const installedRoleAgentId = buildInstallableRoleAgentId(role.sourcePath);
+  const exactInstalledMatch =
+    createChatUserGroupSelectableAgents.value.find((agent) => equalsIgnoreCase(agent.agentId, installedRoleAgentId)) ?? null;
+  if (exactInstalledMatch) {
+    return exactInstalledMatch.agentId;
+  }
+
   const roleZh = role.nameZh.trim();
   const roleEn = role.nameEn.trim().toLowerCase();
   const matched =
@@ -4739,6 +5209,106 @@ function handleConversationGroupRenameSubmit() {
   persistChatConversationGroups();
   remapChatConversationGroupAgents();
   closeConversationGroupRenameModal();
+}
+
+function updateConversationGroupById(groupId: string, updater: (group: ChatConversationGroup) => ChatConversationGroup) {
+  const normalizedGroupId = groupId.trim();
+  if (!normalizedGroupId) {
+    return;
+  }
+  let changed = false;
+  const nextGroups = chatConversationGroups.value.map((group) => {
+    if (group.id !== normalizedGroupId) {
+      return group;
+    }
+    const nextGroup = updater(group);
+    if (nextGroup !== group) {
+      changed = true;
+    }
+    return nextGroup;
+  });
+  if (!changed) {
+    return;
+  }
+  chatConversationGroups.value = nextGroups;
+  persistChatConversationGroups();
+  remapChatConversationGroupAgents();
+}
+
+function handleActiveConversationGroupPolicyChange(rawPolicy: string) {
+  const group = activeConversationGroup.value;
+  if (!group) {
+    return;
+  }
+  const nextPolicy = normalizeChatConversationGroupPolicy(rawPolicy);
+  if (group.groupPolicy === nextPolicy) {
+    return;
+  }
+  updateConversationGroupById(group.id, (target) => ({
+    ...target,
+    groupPolicy: nextPolicy
+  }));
+}
+
+function handleActiveConversationGroupRequireMentionChange(checked: boolean) {
+  const group = activeConversationGroup.value;
+  if (!group || group.requireMention === checked) {
+    return;
+  }
+  updateConversationGroupById(group.id, (target) => ({
+    ...target,
+    requireMention: checked
+  }));
+}
+
+function handleActiveConversationGroupAllowFromChange(rawValue: string) {
+  const group = activeConversationGroup.value;
+  if (!group) {
+    return;
+  }
+  const nextAllowFrom = parseChatConversationGroupAllowFromInput(rawValue);
+  const current = formatChatConversationGroupAllowFromInput(group.allowFrom);
+  const next = formatChatConversationGroupAllowFromInput(nextAllowFrom);
+  if (current === next) {
+    return;
+  }
+  updateConversationGroupById(group.id, (target) => ({
+    ...target,
+    allowFrom: nextAllowFrom
+  }));
+}
+
+function handleActiveConversationGroupActivationCommandChange(rawValue: string) {
+  const group = activeConversationGroup.value;
+  if (!group) {
+    return;
+  }
+  const nextCommand = normalizeChatConversationGroupActivationCommand(rawValue);
+  if (group.activationCommand === nextCommand) {
+    return;
+  }
+  updateConversationGroupById(group.id, (target) => ({
+    ...target,
+    activationCommand: nextCommand
+  }));
+}
+
+function handleActiveConversationGroupHistoryLimitChange(rawValue: string) {
+  const group = activeConversationGroup.value;
+  if (!group) {
+    return;
+  }
+  const numericValue = Number(rawValue);
+  const nextHistoryLimit = normalizeChatConversationGroupHistoryLimit(
+    Number.isFinite(numericValue) ? numericValue : group.historyLimit
+  );
+  if (group.historyLimit === nextHistoryLimit) {
+    return;
+  }
+  updateConversationGroupById(group.id, (target) => ({
+    ...target,
+    historyLimit: nextHistoryLimit
+  }));
 }
 
 function handleCreateChatUserGroupSubmit() {
@@ -4897,7 +5467,7 @@ function isChatUserCustomAgent(agentId: string) {
 
 function removeChatUserCustomAgent(agentId: string) {
   const normalizedAgentId = agentId.trim();
-  if (!normalizedAgentId) {
+  if (!normalizedAgentId || isProtectedStaffAgentId(normalizedAgentId)) {
     return false;
   }
 
@@ -4927,7 +5497,7 @@ function removeChatUserCustomAgent(agentId: string) {
 
 function removeFallbackStaffAgent(agentId: string) {
   const normalizedAgentId = agentId.trim();
-  if (!normalizedAgentId) {
+  if (!normalizedAgentId || isProtectedStaffAgentId(normalizedAgentId)) {
     return false;
   }
   const fallbackMembers = loadStaff();
@@ -4949,6 +5519,20 @@ function closeChatAgentDeleteConfirmModal() {
 function forceCloseChatAgentDeleteConfirmModal() {
   isChatAgentDeleteConfirmModalOpen.value = false;
   chatAgentDeleteConfirmTarget.value = null;
+}
+
+function removeChatConversationGroupByAgentId(agentId: string) {
+  const groupId = getChatConversationGroupIdFromAgentId(agentId);
+  if (!groupId) {
+    return null;
+  }
+  const targetGroup = chatConversationGroups.value.find((group) => group.id === groupId) ?? null;
+  if (!targetGroup) {
+    return null;
+  }
+  chatConversationGroups.value = chatConversationGroups.value.filter((group) => group.id !== groupId);
+  persistChatConversationGroups();
+  return targetGroup;
 }
 
 function clearChatAgentDeleteNoticeTimer() {
@@ -4977,8 +5561,15 @@ function handleChatAgentContextMenuDelete() {
   const target = resolveChatAgentContextMenuTarget();
   closeChatAgentContextMenu();
   if (!target) {
-    staffSourceDetail.value = "未找到可删除的数字员工，请重试。";
-    chatComposerError.value = "未找到可删除的数字员工，请重试。";
+    staffSourceDetail.value = "未找到可删除的目标，请重试。";
+    chatComposerError.value = "未找到可删除的目标，请重试。";
+    return;
+  }
+  if (isProtectedStaffAgentId(target.agentId)) {
+    const message = "主控员工 main 受保护，不能删除。";
+    staffSourceDetail.value = message;
+    chatComposerError.value = message;
+    showChatAgentDeleteNotice(message);
     return;
   }
   chatAgentDeleteConfirmTarget.value = target;
@@ -5003,37 +5594,47 @@ async function handleChatAgentDeleteConfirmSubmit() {
   let successMessage = "";
 
   try {
-    if (isChatUserCustomAgent(target.agentId)) {
-      const removed = removeChatUserCustomAgent(target.agentId);
-      if (!removed) {
-        throw new Error("未找到可删除的自定义员工。");
+    if (target.groupKind === "group") {
+      const removedGroup = removeChatConversationGroupByAgentId(target.agentId);
+      if (!removedGroup) {
+        throw new Error("未找到可删除的群聊。");
       }
-      successMessage = targetCustomKind === "staff" ? `已删除自定义员工「${displayName}」。` : `已删除虾友「${displayName}」。`;
+      successMessage = `已删除群聊「${displayName}」。`;
     } else {
-      const invoke = getTauriInvoke();
-      if (invoke) {
-        try {
-          const detail = (await invoke("remove_role_workflow_agent", {
-            agentId: target.agentId,
-            deleteFiles: true
-          })) as string;
-          successMessage = detail?.trim() || `已删除员工「${displayName}」。`;
-        } catch (runtimeError) {
+      if (isChatUserCustomAgent(target.agentId)) {
+        const removed = removeChatUserCustomAgent(target.agentId);
+        if (!removed) {
+          throw new Error("未找到可删除的自定义员工。");
+        }
+        successMessage = targetCustomKind === "staff" ? `已删除自定义员工「${displayName}」。` : `已删除虾友「${displayName}」。`;
+      } else {
+        const invoke = getTauriInvoke();
+        if (invoke) {
+          try {
+            const detail = (await invoke("remove_role_workflow_agent", {
+              agentId: target.agentId,
+              deleteFiles: true
+            })) as string;
+            successMessage = detail?.trim() || `已删除员工「${displayName}」。`;
+          } catch (runtimeError) {
+            const removedFallback = removeFallbackStaffAgent(target.agentId);
+            if (!removedFallback) {
+              throw runtimeError;
+            }
+            successMessage = `已删除本地员工「${displayName}」。`;
+          }
+        } else {
           const removedFallback = removeFallbackStaffAgent(target.agentId);
           if (!removedFallback) {
-            throw runtimeError;
+            throw new Error("当前环境不支持删除数字员工。");
           }
           successMessage = `已删除本地员工「${displayName}」。`;
         }
-      } else {
-        const removedFallback = removeFallbackStaffAgent(target.agentId);
-        if (!removedFallback) {
-          throw new Error("当前环境不支持删除数字员工。");
-        }
-        successMessage = `已删除本地员工「${displayName}」。`;
       }
     }
-    if (!successMessage) {
+    if (!successMessage && target.groupKind === "group") {
+      successMessage = `已删除群聊「${displayName}」。`;
+    } else if (!successMessage) {
       successMessage = `已删除员工「${displayName}」。`;
     }
     staffSourceDetail.value = successMessage;
@@ -5042,7 +5643,7 @@ async function handleChatAgentDeleteConfirmSubmit() {
     chatComposerError.value = "";
     forceCloseChatAgentDeleteConfirmModal();
   } catch (error) {
-    const message = error instanceof Error ? error.message : "删除数字员工失败。";
+    const message = error instanceof Error ? error.message : target.groupKind === "group" ? "删除群聊失败。" : "删除数字员工失败。";
     staffSourceDetail.value = message;
     chatComposerError.value = message;
   } finally {
@@ -5169,11 +5770,114 @@ function resizeChatComposerInput() {
   textarea.style.overflowY = textarea.scrollHeight > maxHeight + 1 ? "auto" : "hidden";
 }
 
+function resetChatMentionState() {
+  chatMentionStartIndex.value = null;
+  chatMentionQuery.value = "";
+  chatMentionActiveIndex.value = 0;
+}
+
+function syncChatMentionFromComposer() {
+  const textarea = chatComposerInputRef.value;
+  if (!textarea || !activeAgentIsConversationGroup.value) {
+    resetChatMentionState();
+    return;
+  }
+  const selectionStart = textarea.selectionStart ?? chatInput.value.length;
+  const selectionEnd = textarea.selectionEnd ?? selectionStart;
+  if (selectionStart !== selectionEnd) {
+    resetChatMentionState();
+    return;
+  }
+  const context = parseChatMentionContext(chatInput.value, selectionStart);
+  if (!context) {
+    resetChatMentionState();
+    return;
+  }
+  const changed = chatMentionStartIndex.value !== context.startIndex || chatMentionQuery.value !== context.keyword;
+  chatMentionStartIndex.value = context.startIndex;
+  chatMentionQuery.value = context.keyword;
+  if (changed) {
+    chatMentionActiveIndex.value = 0;
+  }
+}
+
+function moveChatMentionActiveIndex(offset: number) {
+  const total = chatMentionCandidates.value.length;
+  if (total <= 0) {
+    return;
+  }
+  chatMentionActiveIndex.value = (chatMentionActiveIndex.value + offset + total) % total;
+}
+
+function applyChatMentionCandidate(candidate: ChatMentionCandidate) {
+  const textarea = chatComposerInputRef.value;
+  if (!textarea || chatMentionStartIndex.value === null) {
+    return;
+  }
+  const cursor = textarea.selectionStart ?? chatInput.value.length;
+  const context = parseChatMentionContext(chatInput.value, cursor);
+  if (!context) {
+    resetChatMentionState();
+    return;
+  }
+  const before = chatInput.value.slice(0, context.startIndex);
+  const after = chatInput.value.slice(cursor);
+  const mentionText = `@${candidate.displayName}`;
+  const needsTrailingSpace = after.length === 0 || !/^[\s,，。!！?？:：;；、)）\]】}>》]/.test(after);
+  const spacer = needsTrailingSpace ? " " : "";
+  const nextValue = `${before}${mentionText}${spacer}${after}`;
+  const nextCursor = (before + mentionText + spacer).length;
+  chatInput.value = nextValue;
+  resetChatMentionState();
+  void nextTick(() => {
+    textarea.focus();
+    textarea.setSelectionRange(nextCursor, nextCursor);
+    resizeChatComposerInput();
+  });
+}
+
 function handleChatComposerInput() {
   resizeChatComposerInput();
+  syncChatMentionFromComposer();
+}
+
+function handleChatComposerCursorActivity() {
+  syncChatMentionFromComposer();
+}
+
+function handleChatComposerBlur() {
+  window.setTimeout(() => {
+    resetChatMentionState();
+  }, 0);
 }
 
 function handleChatComposerKeydown(event: KeyboardEvent) {
+  if (isChatMentionDropdownVisible.value) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveChatMentionActiveIndex(1);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveChatMentionActiveIndex(-1);
+      return;
+    }
+    if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.isComposing) {
+      const candidate = chatMentionCandidates.value[chatMentionActiveIndex.value] ?? chatMentionCandidates.value[0];
+      if (candidate) {
+        event.preventDefault();
+        applyChatMentionCandidate(candidate);
+        return;
+      }
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      resetChatMentionState();
+      return;
+    }
+  }
+
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
     return;
   }
@@ -5197,11 +5901,15 @@ function parseGroupSpeakerPrefix(text: string) {
   };
 }
 
-function buildGroupConversationTranscript(messages: AgentChatMessage[]) {
+function buildGroupConversationTranscript(messages: AgentChatMessage[], historyLimit = CHAT_CONVERSATION_GROUP_DEFAULT_HISTORY_LIMIT) {
+  const normalizedHistoryLimit = Math.max(
+    CHAT_CONVERSATION_GROUP_MIN_HISTORY_LIMIT,
+    Math.min(CHAT_CONVERSATION_GROUP_MAX_HISTORY_LIMIT, Math.floor(historyLimit))
+  );
   const stable = messages
     .filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item) && !isRuntimeToolMessage(item))
     .filter((item) => item.role === "assistant" || item.role === "user")
-    .slice(-40);
+    .slice(-normalizedHistoryLimit);
   if (stable.length === 0) {
     return "";
   }
@@ -5219,20 +5927,38 @@ function buildGroupConversationTranscript(messages: AgentChatMessage[]) {
     .join("\n");
 }
 
-function buildGroupMemberPromptMessages(group: ChatConversationGroup, member: AgentListItem, messages: AgentChatMessage[]): OpenClawMessage[] {
+function buildGroupMemberPromptMessages(
+  group: ChatConversationGroup,
+  member: AgentListItem,
+  messages: AgentChatMessage[],
+  options: { wasMentioned: boolean; sourceKey: string; sessionKey: string }
+): OpenClawMessage[] {
   const memberName = stripRoleLabel(member.displayName);
   const memberNames = getChatConversationGroupMembers(group)
     .map((item) => stripRoleLabel(item.displayName))
     .filter(Boolean);
-  const transcript = buildGroupConversationTranscript(messages);
+  const transcript = buildGroupConversationTranscript(messages, group.historyLimit);
   const memberScopeText = memberNames.length > 0 ? memberNames.join("、") : "暂无";
+  const context = {
+    chatType: "group",
+    groupName: group.name,
+    groupId: group.id,
+    groupMembers: memberNames,
+    groupPolicy: group.groupPolicy,
+    requireMention: group.requireMention,
+    wasMentioned: options.wasMentioned,
+    source: options.sourceKey,
+    activationCommand: group.activationCommand,
+    sessionKey: options.sessionKey
+  };
   return [
     {
       role: "system",
       content:
         `你是群聊「${group.name}」中的成员「${memberName}」。` +
         `群成员有：${memberScopeText}。` +
-        "请只代表你自己发言，不要代替其他成员回复，语气自然简洁。"
+        "请只代表你自己发言，不要代替其他成员回复，语气自然简洁。\n\n" +
+        `群上下文(JSON)：${JSON.stringify(context)}`
     },
     {
       role: "user",
@@ -5262,6 +5988,21 @@ async function submitChat() {
       chatComposerError.value = "该团队暂无可用成员，请先重新创建团队。";
       return;
     }
+    const groupSourceKey = resolveGroupMessageSourceKey(activeChannelChatSession.value);
+    if (!isConversationGroupSourceAllowed(activeConversationGroup, groupSourceKey)) {
+      chatComposerError.value = `当前群策略拒绝来源「${groupSourceKey}」，请在群设置 allowFrom 中放行。`;
+      return;
+    }
+    const mentionedMembers = resolveMentionedGroupMembers(text, groupMembers);
+    const activationTriggered = isConversationGroupActivationCommand(text, activeConversationGroup);
+    const replyMembers =
+      mentionedMembers.length > 0
+        ? mentionedMembers
+        : activeConversationGroup.requireMention
+          ? activationTriggered
+            ? groupMembers
+            : []
+          : groupMembers;
 
     chatMessages.value.push({
       id: createMessageId("user"),
@@ -5273,7 +6014,35 @@ async function submitChat() {
     });
     void dispatchChannelMessageMirror(conversationScopeKey, userContent, activeChannelChatSession.value);
 
-    const pendingRows = groupMembers.map((member) => {
+    if (replyMembers.length === 0) {
+      const noticeAt = Date.now();
+      const activationCommand = normalizeChatConversationGroupActivationCommand(activeConversationGroup.activationCommand);
+      chatMessages.value.push({
+        id: createMessageId("assistant"),
+        role: "assistant",
+        text: `群组当前为「仅@触发」。请先 @目标成员，或输入 ${activationCommand} 触发全员响应。`,
+        status: "done",
+        createdAt: noticeAt
+      });
+      chatInput.value = "";
+      chatAttachments.value = [];
+      chatComposerError.value = "";
+      resetChatMentionState();
+      void nextTick(() => {
+        resizeChatComposerInput();
+      });
+      setAgentMeta(activeAgent.agentId, {
+        preview: "已发送（等待 @ 或激活命令）",
+        timeLabel: formatTimeLabel(noticeAt),
+        unread: 0
+      });
+      persistChatHistory(conversationScopeKey);
+      agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+      void scrollMessagesToBottom();
+      return;
+    }
+
+    const pendingRows = replyMembers.map((member) => {
       const pendingId = createMessageId("assistant");
       chatMessages.value.push({
         id: pendingId,
@@ -5294,6 +6063,7 @@ async function submitChat() {
     chatInput.value = "";
     chatAttachments.value = [];
     chatComposerError.value = "";
+    resetChatMentionState();
     void nextTick(() => {
       resizeChatComposerInput();
     });
@@ -5316,9 +6086,18 @@ async function submitChat() {
     let hasSuccess = false;
     try {
       for (const row of pendingRows) {
-        const promptMessages = buildGroupMemberPromptMessages(activeConversationGroup, row.member, chatMessages.value);
+        const wasMentioned = mentionedMembers.some((member) => member.agentId === row.member.agentId);
+        const sessionKey = buildGroupMemberSessionKey(activeConversationGroup, row.member.agentId, groupSourceKey);
+        const promptMessages = buildGroupMemberPromptMessages(activeConversationGroup, row.member, chatMessages.value, {
+          wasMentioned: wasMentioned || activationTriggered,
+          sourceKey: groupSourceKey,
+          sessionKey
+        });
         try {
-          const response = await sendOpenClawChat(promptMessages, { agentId: row.member.agentId });
+          const response = await sendOpenClawChat(promptMessages, {
+            agentId: row.member.agentId,
+            sessionKey
+          });
           const doneAt = Date.now();
           const pendingMessage = chatMessages.value.find((item) => item.id === row.pendingId);
           const prefixedText = `【${stripRoleLabel(row.member.displayName)}】${response.text}`;
@@ -5396,6 +6175,7 @@ async function submitChat() {
   chatInput.value = "";
   chatAttachments.value = [];
   chatComposerError.value = "";
+  resetChatMentionState();
   void nextTick(() => {
     resizeChatComposerInput();
   });
@@ -6198,6 +6978,36 @@ function equalsIgnoreCase(left: string | null | undefined, right: string | null 
   return (left ?? "").trim().toLowerCase() === (right ?? "").trim().toLowerCase();
 }
 
+function isProtectedStaffAgentId(agentId: string | null | undefined) {
+  return PROTECTED_STAFF_AGENT_IDS.has((agentId ?? "").trim().toLowerCase());
+}
+
+function resolveAgentChannelDisplayLabel(
+  agent: Pick<AgentListItem, "agentId" | "channel"> | null | undefined,
+  fallback = ""
+) {
+  if (!agent) {
+    return fallback;
+  }
+  const normalizedAgentId = (agent.agentId ?? "").trim().toLowerCase();
+  const rawChannel = (agent.channel ?? "").trim();
+  if (!rawChannel) {
+    return normalizedAgentId === "main" ? "main" : "默认会话";
+  }
+  if (normalizedAgentId !== "main" && rawChannel.toLowerCase() === "main") {
+    return "默认会话";
+  }
+  return rawChannel;
+}
+
+function shouldShowAgentChannelTag(agent: Pick<AgentListItem, "agentId" | "channel" | "groupKind"> | null | undefined) {
+  if (!agent || agent.groupKind === "group") {
+    return false;
+  }
+  const channelLabel = resolveAgentChannelDisplayLabel(agent, "").trim().toLowerCase();
+  return Boolean(channelLabel && channelLabel !== "默认会话" && channelLabel !== "main" && channelLabel !== "群聊");
+}
+
 function normalizeChannelPaneType(value: string | null | undefined) {
   const normalized = (value ?? "").trim().toLowerCase();
   if (!normalized) {
@@ -6638,7 +7448,7 @@ function resolveOpenClawRuntimeSessionKey(conversationScopeKey: string) {
   if (!agentId) {
     return null;
   }
-  const sessionTarget = normalizeConversationKeyPart(targetParts.join(":") || "main");
+  const sessionTarget = normalizeConversationKeyPart(targetParts.join(":") || agentId);
   return `agent:${agentId}:${sessionTarget}`;
 }
 
@@ -6686,8 +7496,10 @@ function resolveConversationScopeLabel(scopeKey: string) {
     return "默认会话";
   }
   if (parsed.kind === "agent") {
-    if (parsed.sessionTarget && parsed.sessionTarget !== "main") {
-      return parsed.sessionTarget;
+    const sessionTarget = parsed.sessionTarget?.trim().toLowerCase() || "";
+    const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase();
+    if (sessionTarget && sessionTarget !== "main" && sessionTarget !== ownerAgentId) {
+      return parsed.sessionTarget?.trim() || "默认会话";
     }
     return "默认会话";
   }
@@ -6695,6 +7507,19 @@ function resolveConversationScopeLabel(scopeKey: string) {
   const channelName = catalog?.name?.trim() || parsed.channelType || "频道";
   const accountId = parsed.accountId.trim();
   return accountId ? `${channelName} / ${accountId}` : channelName;
+}
+
+function buildRelatedHistoryDefaultChannelId(ownerAgentId: string) {
+  const normalizedOwnerAgentId = normalizeConversationKeyPart(ownerAgentId || "main");
+  return `${RELATED_HISTORY_AGENT_DEFAULT_CHANNEL_PREFIX}${normalizedOwnerAgentId}`;
+}
+
+function parseRelatedHistoryDefaultChannelOwner(channelId: string) {
+  const normalized = channelId.trim().toLowerCase();
+  if (!normalized.startsWith(RELATED_HISTORY_AGENT_DEFAULT_CHANNEL_PREFIX)) {
+    return "";
+  }
+  return normalized.slice(RELATED_HISTORY_AGENT_DEFAULT_CHANNEL_PREFIX.length);
 }
 
 function resolveRelatedHistoryRecordChannelId(record: ChatRelatedHistoryRecord) {
@@ -6706,20 +7531,25 @@ function resolveRelatedHistoryRecordChannelId(record: ChatRelatedHistoryRecord) 
     return normalizeChannelPaneType(parsed.channelType) || "main";
   }
   const target = parsed.sessionTarget?.trim().toLowerCase() || "";
-  if (!target || target === "main") {
-    return "main";
+  const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase();
+  if (!target || target === "main" || target === ownerAgentId) {
+    return buildRelatedHistoryDefaultChannelId(ownerAgentId || "main");
   }
   const channelCandidate = target.split(":").find((segment) => segment.trim().length > 0)?.trim() || "";
-  if (!channelCandidate || channelCandidate === "main") {
-    return "main";
+  if (!channelCandidate || channelCandidate === "main" || channelCandidate === ownerAgentId) {
+    return buildRelatedHistoryDefaultChannelId(ownerAgentId || "main");
   }
   return normalizeChannelPaneType(channelCandidate) || channelCandidate;
 }
 
 function resolveRelatedHistoryChannelLabel(channelId: string) {
+  const defaultOwnerAgentId = parseRelatedHistoryDefaultChannelOwner(channelId);
+  if (defaultOwnerAgentId) {
+    return defaultOwnerAgentId === "main" ? `${MAIN_STAFF_DISPLAY_NAME} 默认会话` : "默认会话";
+  }
   const normalized = normalizeChannelPaneType(channelId) || channelId.trim().toLowerCase();
   if (!normalized || normalized === "main") {
-    return "Main";
+    return "默认会话";
   }
   const catalog = resolveChannelConfigCatalog(normalized);
   return catalog?.name?.trim() || channelId;
@@ -6816,7 +7646,9 @@ function resolveChannelMessageMirrorTarget(
 
   if (parsed.kind === "agent") {
     const sessionTarget = parsed.sessionTarget?.trim() || "";
-    if (!sessionTarget || sessionTarget.toLowerCase() === "main") {
+    const normalizedTarget = sessionTarget.toLowerCase();
+    const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase();
+    if (!sessionTarget || normalizedTarget === "main" || normalizedTarget === ownerAgentId) {
       return null;
     }
 
@@ -6866,6 +7698,33 @@ function buildChannelMessageMirrorContent(text: string, attachments: ChatCompose
   return `${header}\n\n${attachmentSummary}`;
 }
 
+function buildChannelMirrorFailureMessagePreview(message: string) {
+  const compact = message.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "(empty)";
+  }
+  if (compact.length > 260) {
+    return `${compact.slice(0, 260)}...`;
+  }
+  return compact;
+}
+
+async function appendChannelMirrorFailureLog(
+  invoke: TauriInvoke,
+  payload: OpenClawChannelMirrorFailureLogPayload
+) {
+  try {
+    const result = await invoke("append_openclaw_channel_mirror_failure_log", { payload });
+    return typeof result === "string" && result.trim() ? result.trim() : null;
+  } catch (error) {
+    console.warn("[channel-mirror] append_openclaw_channel_mirror_failure_log failed", {
+      payload,
+      error
+    });
+    return null;
+  }
+}
+
 async function dispatchChannelMessageMirror(
   conversationScopeKey: string,
   message: string,
@@ -6902,12 +7761,20 @@ async function dispatchChannelMessageMirror(
         : typeof error === "string" && error.trim()
           ? error
           : "未知错误";
-    const compactError = errorText.replace(/\s+/g, " ").trim();
-    const visibleError = compactError.length > 220 ? `${compactError.slice(0, 220)}...` : compactError;
     const channelLabel = target.channelType === FEISHU_CHANNEL_ID ? "飞书" : target.channelType;
-    chatComposerError.value = `消息已发送，但转发到${channelLabel}失败：${visibleError || "未知错误"}`;
+    const localLogPath = await appendChannelMirrorFailureLog(invoke, {
+      channelType: target.channelType,
+      accountId: target.accountId,
+      target: target.target,
+      messagePreview: buildChannelMirrorFailureMessagePreview(payload),
+      errorDetail: errorText
+    });
+    chatComposerError.value = localLogPath
+      ? `消息已发送，但转发到${channelLabel}失败。详细日志已写入本地文件。`
+      : `消息已发送，但转发到${channelLabel}失败。`;
     console.warn("[channel-mirror] send_openclaw_channel_message failed", {
       payload: commandPayload,
+      localLogPath,
       error
     });
   }
@@ -6946,10 +7813,14 @@ function shouldUseLegacyAgentStorage(scopeKey: string, agentId: string) {
   return normalizedScopeKey === buildAgentConversationScopeKey(agentId);
 }
 
-function formatOpenClawSessionScopeLabel(item: OpenClawAgentSessionSnapshotItem) {
-  const base = item.sessionTarget?.trim() || "main";
+function formatOpenClawSessionScopeLabel(item: OpenClawAgentSessionSnapshotItem, ownerAgentId: string) {
+  const normalizedOwnerAgentId = ownerAgentId.trim().toLowerCase();
+  const base = item.sessionTarget?.trim() || normalizedOwnerAgentId || "main";
+  const normalizedBase = base.toLowerCase();
+  const baseLabel =
+    !normalizedBase || normalizedBase === "main" || normalizedBase === normalizedOwnerAgentId ? "默认会话" : base;
   const channel = item.lastChannel?.trim() || "";
-  return channel ? `${base} · ${channel}` : base;
+  return channel ? `${baseLabel} · ${channel}` : baseLabel;
 }
 
 async function loadOpenClawRelatedHistoryRecords(agent: AgentListItem, activeScopeKey: string | null) {
@@ -6968,8 +7839,8 @@ async function loadOpenClawRelatedHistoryRecords(agent: AgentListItem, activeSco
         scopeKey: item.sessionKey,
         scopeLabel:
           activeScopeKey && normalizeStoredConversationScopeKey(item.sessionKey) === activeScopeKey
-            ? `${formatOpenClawSessionScopeLabel(item)}（当前）`
-            : formatOpenClawSessionScopeLabel(item),
+            ? `${formatOpenClawSessionScopeLabel(item, agent.agentId)}（当前）`
+            : formatOpenClawSessionScopeLabel(item, agent.agentId),
         updatedAt: typeof item.updatedAtMs === "number" && Number.isFinite(item.updatedAtMs) ? item.updatedAtMs : Date.now(),
         messageCount: typeof item.messageCount === "number" && Number.isFinite(item.messageCount) ? Math.max(0, item.messageCount) : 0,
         preview: item.preview?.trim() || "暂无消息",
@@ -7266,10 +8137,12 @@ const relatedHistoryChannelFilterOptions = computed(() => {
   });
   const channelOptions = Array.from(channelMap.entries())
     .sort((left, right) => {
-      if (left[0] === "main" && right[0] !== "main") {
+      const leftIsDefault = Boolean(parseRelatedHistoryDefaultChannelOwner(left[0])) || left[0] === "main";
+      const rightIsDefault = Boolean(parseRelatedHistoryDefaultChannelOwner(right[0])) || right[0] === "main";
+      if (leftIsDefault && !rightIsDefault) {
         return -1;
       }
-      if (right[0] === "main" && left[0] !== "main") {
+      if (rightIsDefault && !leftIsDefault) {
         return 1;
       }
       return left[1].firstIndex - right[1].firstIndex;
@@ -8424,7 +9297,15 @@ async function openFeishuConnectModal() {
   try {
     await loadFeishuChannelFormValues();
     const group = getFeishuChannelGroup(dashboardChannelSnapshot.value);
-    if (group?.accounts.some((account) => account.configured)) {
+    const hasConfiguredFeishuAccount = Boolean(group?.accounts.some((account) => account.configured));
+    const hasRunningFeishuAccount = Boolean(
+      group?.accounts.some((account) => {
+        const normalizedStatus = (account.status ?? "").trim().toLowerCase();
+        return account.configured && (normalizedStatus === "connected" || normalizedStatus === "online");
+      })
+    );
+    feishuPluginPrepared = hasRunningFeishuAccount;
+    if (hasConfiguredFeishuAccount) {
       feishuConnectNotice.value = "已检测到飞书账号配置。你可以重新扫码创建新机器人，或直接更新 App ID / App Secret。";
     }
   } catch (error) {
@@ -8495,6 +9376,24 @@ async function saveFeishuCredentials(
   if (!invoke) {
     throw new Error("当前环境不支持写入飞书配置。");
   }
+
+  if (!feishuPluginPrepared) {
+    const pluginInstallResult = (await invoke("install_openclaw_channel_plugin", {
+      channelType: FEISHU_CHANNEL_ID
+    })) as OpenClawChannelPluginInstallResult;
+    if (!pluginInstallResult.success) {
+      throw new Error(pluginInstallResult.detail || "安装飞书插件失败。");
+    }
+    const restartResult = (await invoke("run_lobster_action", {
+      action: "restart_gateway"
+    })) as LobsterActionResult;
+    if (!restartResult.success) {
+      feishuPluginPrepared = false;
+      throw new Error(`飞书插件已安装，但网关重启失败：${restartResult.detail}`);
+    }
+    feishuPluginPrepared = true;
+  }
+
   await invoke("save_openclaw_channel_config", {
     payload: {
       channelType: FEISHU_CHANNEL_ID,
@@ -8505,6 +9404,13 @@ async function saveFeishuCredentials(
         domain
       }
     }
+  });
+
+  const bindingAgentId = resolveMainStaffAgent()?.agentId?.trim() || "main";
+  await invoke("save_openclaw_channel_binding", {
+    channelType: FEISHU_CHANNEL_ID,
+    accountId: FEISHU_DEFAULT_ACCOUNT_ID,
+    agentId: bindingAgentId
   });
 }
 
@@ -9616,6 +10522,13 @@ async function installRoleWorkflowRole() {
   }
 
   const agentId = buildInstallableRoleAgentId(found.role.sourcePath);
+  if (isProtectedStaffAgentId(agentId)) {
+    roleWorkflowDetailNotice.value = {
+      tone: "error",
+      text: "主控员工 main 受保护，不能被替换。请更换角色 ID。"
+    };
+    return null;
+  }
   const markdown = roleWorkflowDetailDraft.value.contentZh.trim();
   if (!markdown) {
     roleWorkflowDetailNotice.value = {
@@ -9906,18 +10819,62 @@ function handleRecruitmentOpenRoleDetail(role: AgencyRosterRole) {
   void openRoleWorkflowEditor(role);
 }
 
+async function installRecruitmentRoleWithoutDialog(role: AgencyRosterRole) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    throw new Error("当前环境不支持添加数字员工（仅桌面端可用）。");
+  }
+
+  const override = roleWorkflowOverrides.value[role.id];
+  const roleName = override?.nameZh?.trim() || role.nameZh || role.nameEn || "未命名角色";
+  const agentId = buildInstallableRoleAgentId(role.sourcePath);
+  if (isProtectedStaffAgentId(agentId)) {
+    throw new Error("主控员工 main 受保护，不能被替换。请更换角色 ID。");
+  }
+
+  let markdown = override?.detailContentZh?.trim() ?? "";
+  if (!markdown) {
+    const detailSnapshot = await loadAgentDetailMarkdownZh(role.sourcePath);
+    markdown = detailSnapshot.contentZh.trim();
+  }
+  if (!markdown) {
+    throw new Error(`角色「${roleName}」详情为空，无法添加。`);
+  }
+
+  const result = (await invoke("install_role_workflow_agent", {
+    agentId,
+    displayName: roleName,
+    content: markdown,
+    sourcePath: role.sourcePath
+  })) as string;
+  const workspaceDir = resolveInstalledRoleWorkspaceDir(result ?? "", agentId);
+  upsertOptimisticRoleWorkflowAgent(agentId, roleName, workspaceDir);
+
+  try {
+    await loadAgents();
+  } catch {
+    // Keep optimistic state when snapshot reload fails.
+  }
+
+  return roleName;
+}
+
 function handleRecruitRole(role: AgencyRosterRole) {
   void (async () => {
-    await openRoleWorkflowEditor(role);
-    if (roleWorkflowDetailRoleId.value !== role.id) {
+    recruitmentActionNotice.value = "";
+    if (isRoleWorkflowInstalling.value) {
+      recruitmentActionNotice.value = "正在添加数字员工，请稍候...";
       return;
     }
-    const installedAgentId = await installRoleWorkflowRole();
-    if (!installedAgentId) {
-      return;
+    isRoleWorkflowInstalling.value = true;
+    try {
+      const roleName = await installRecruitmentRoleWithoutDialog(role);
+      showChatAgentDeleteNotice(`${roleName} 数字员工已添加成功。`);
+    } catch (error) {
+      recruitmentActionNotice.value = error instanceof Error ? error.message : "添加数字员工失败，请稍后重试。";
+    } finally {
+      isRoleWorkflowInstalling.value = false;
     }
-    activeSection.value = "chat";
-    chatInput.value = `请以「${roleWorkflowNameZhDraft.value.trim() || role.nameZh}」的身份协助我，目标是：`;
   })();
 }
 
@@ -10029,6 +10986,14 @@ function validateCreateEmployeeStep(step: CreateEmployeeModalStep) {
     const normalizedName = normalizeChatUserGroupName(createEmployeeNameDraft.value);
     if (!normalizedName) {
       createEmployeeError.value = "请先填写员工名称。";
+      selectCreateEmployeeStep(1);
+      void nextTick(() => {
+        createEmployeeNameInputRef.value?.focus();
+      });
+      return false;
+    }
+    if (isProtectedStaffAgentId(normalizedName)) {
+      createEmployeeError.value = "员工名称不能使用 main（系统主控员工保留）。";
       selectCreateEmployeeStep(1);
       void nextTick(() => {
         createEmployeeNameInputRef.value?.focus();
@@ -10181,6 +11146,11 @@ function handleCreateEmployeeSubmit() {
   const normalizedName = normalizeChatUserGroupName(createEmployeeNameDraft.value);
   if (!normalizedName) {
     createEmployeeError.value = "请先填写员工名称。";
+    return;
+  }
+  if (isProtectedStaffAgentId(normalizedName)) {
+    createEmployeeError.value = "员工名称不能使用 main（系统主控员工保留）。";
+    selectCreateEmployeeStep(1);
     return;
   }
 
@@ -10572,6 +11542,7 @@ function resetUtilityLogViewState() {
   utilityRuntimeRoleFilter.value = UTILITY_LOG_ROLE_FILTER_ACTIVE;
   utilityRuntimeScheduleFilter.value = "all";
   utilitySelectedLogId.value = null;
+  isSidebarLogDetailModalOpen.value = false;
 }
 
 function clearUtilityViewStatus() {
@@ -10584,6 +11555,7 @@ function closeSidebarLogsPanel() {
   if (!isSidebarLogsOpen.value && !closeSidebarUtilityView) {
     return;
   }
+  isSidebarLogDetailModalOpen.value = false;
   isSidebarLogsOpen.value = false;
   if (closeSidebarUtilityView) {
     isAgentSettingsOpen.value = false;
@@ -10798,6 +11770,9 @@ function handleUtilityRuntimeScheduleFilterChange() {
 
 function handleUtilityLogSelect(log: OpenClawMessageLogItem) {
   selectUtilityLog(log);
+  if (isLogsPanelActive.value) {
+    isSidebarLogDetailModalOpen.value = true;
+  }
 }
 
 function handleUtilityErrorSummarySelect(summaryKey: string) {
@@ -10806,10 +11781,24 @@ function handleUtilityErrorSummarySelect(summaryKey: string) {
     return;
   }
   selectUtilityLog(target, "raw");
+  if (isLogsPanelActive.value) {
+    isSidebarLogDetailModalOpen.value = true;
+  }
 }
 
 function handleUtilityLogDetailTabSelect(tab: UtilityLogDetailTab) {
   utilityLogDetailTab.value = tab;
+}
+
+function closeSidebarLogDetailModal() {
+  isSidebarLogDetailModalOpen.value = false;
+}
+
+function handleChatWindowMessagesMouseDown() {
+  if (!isAgentSettingsOpen.value) {
+    return;
+  }
+  closeAgentSettingsPanel();
 }
 
 async function copyTextToClipboard(text: string, successText: string) {
@@ -11315,6 +12304,33 @@ const activeConversationGroupOwner = computed(() => {
   }
   return activeConversationGroupMembers.value.find((member) => member.agentId === ownerAgentId) ?? null;
 });
+const activeConversationGroupAllowFromText = computed(() =>
+  activeConversationGroup.value
+    ? formatChatConversationGroupAllowFromInput(activeConversationGroup.value.allowFrom)
+    : CHAT_CONVERSATION_GROUP_DEFAULT_ALLOW_FROM.join(", ")
+);
+const chatMentionCandidates = computed<ChatMentionCandidate[]>(() => {
+  if (!activeAgentIsConversationGroup.value || chatMentionStartIndex.value === null) {
+    return [];
+  }
+  const keyword = chatMentionQuery.value.trim().toLowerCase();
+  const source = activeConversationGroupMembers.value;
+  const filtered = !keyword
+    ? source
+    : source.filter((member) => {
+        const name = getChatMentionSearchText(member);
+        const agentId = member.agentId.trim().toLowerCase();
+        const role = member.roleLabel.trim().toLowerCase();
+        return name.includes(keyword) || agentId.includes(keyword) || role.includes(keyword);
+      });
+  return filtered.slice(0, CHAT_MENTION_MAX_CANDIDATES).map((member) => ({
+    agentId: member.agentId,
+    displayName: stripRoleLabel(member.displayName)
+  }));
+});
+const isChatMentionDropdownVisible = computed(
+  () => activeAgentIsConversationGroup.value && chatMentionStartIndex.value !== null && Boolean(activeAgent.value)
+);
 const isLogsPanelActive = computed(() => isAgentSettingsOpen.value && chatSettingsPanelMode.value === "logs");
 const isHistoryPanelActive = computed(() => isAgentSettingsOpen.value && chatSettingsPanelMode.value === "history");
 const isAgentProfilePanelActive = computed(() => isAgentSettingsOpen.value && chatSettingsPanelMode.value === "agent");
@@ -11374,6 +12390,8 @@ const staffAgents = computed(() => filteredAgents.value.filter((agent) => agent.
 const groupAgents = computed(() => filteredAgents.value.filter((agent) => agent.groupKind === "group"));
 const staffAgentsAll = computed(() => agents.value.filter((agent) => agent.groupKind === "staff"));
 const groupAgentsAll = computed(() => agents.value.filter((agent) => agent.groupKind === "group"));
+const isChatAgentContextMenuGroupTarget = computed(() => chatAgentContextMenuTarget.value?.groupKind === "group");
+const isChatAgentDeleteConfirmGroupTarget = computed(() => chatAgentDeleteConfirmTarget.value?.groupKind === "group");
 const channelBindingCandidateAgents = computed(() => agents.value.filter((agent) => agent.groupKind === "staff"));
 const channelBindingModalSubtitle = computed(() => {
   const item = channelBindingModalItem.value;
@@ -11735,7 +12753,12 @@ const activeChannelSessionLabel = computed(() => {
   const accountId = session.accountId?.trim();
   return accountId ? `${channelName} / ${accountId}` : channelName;
 });
-const activeConversationChannelLabel = computed(() => activeChannelSessionLabel.value || activeAgent.value?.channel || "");
+const activeConversationChannelLabel = computed(() => {
+  if (activeChannelSessionLabel.value) {
+    return activeChannelSessionLabel.value;
+  }
+  return resolveAgentChannelDisplayLabel(activeAgent.value);
+});
 const sidebarDisplayName = computed(() => (activeAgent.value ? stripRoleLabel(activeAgent.value.displayName) : "DragonClaw"));
 const chatComposerPlaceholder = computed(() => {
   const agent = activeAgent.value;
@@ -12550,6 +13573,44 @@ const recruitmentRoleIndex = computed(() => {
   }
   return index;
 });
+const recruitmentLinkedRoleAgents = computed<RecruitmentLinkedRoleAgent[]>(() => {
+  const roleByAgentId = new Map<string, RoleWorkflowModalBase>();
+  for (const [roleId, item] of recruitmentRoleIndex.value.entries()) {
+    const installedAgentId = buildInstallableRoleAgentId(item.role.sourcePath).trim();
+    if (!installedAgentId) {
+      continue;
+    }
+    const normalizedAgentId = installedAgentId.toLowerCase();
+    if (roleByAgentId.has(normalizedAgentId)) {
+      continue;
+    }
+    roleByAgentId.set(normalizedAgentId, {
+      ...item,
+      role: {
+        ...item.role,
+        id: roleId
+      }
+    });
+  }
+
+  const orderedStaffAgents = sortAgentsByChatUserOrder(staffAgentsAll.value);
+  return orderedStaffAgents
+    .map((agent) => {
+      const matchedRole = roleByAgentId.get(agent.agentId.toLowerCase());
+      if (!matchedRole) {
+        return null;
+      }
+      return {
+        roleId: matchedRole.role.id,
+        role: matchedRole.role,
+        divisionTitleZh: matchedRole.divisionTitleZh,
+        groupTitleZh: matchedRole.groupTitleZh,
+        agentId: agent.agentId,
+        displayName: agent.displayName
+      };
+    })
+    .filter((item): item is RecruitmentLinkedRoleAgent => Boolean(item));
+});
 const activeRoleWorkflowBase = computed(() => {
   const activeRoleId = roleWorkflowDetailRoleId.value;
   if (!activeRoleId) {
@@ -12859,7 +13920,7 @@ const taskProjectCards = computed<TaskProjectCard[]>(() =>
   })
 );
 
-onMounted(async () => {
+onMounted(() => {
   if (typeof document !== "undefined") {
     document.addEventListener("mousedown", handleChatQuickCreateMenuDocumentMouseDown);
     document.addEventListener("keydown", handleChatQuickCreateMenuDocumentKeyDown);
@@ -12875,11 +13936,8 @@ onMounted(async () => {
   taskProjectNames.value = loadTaskProjectsFromStorage();
   syncTaskProjectNamesFromTasks();
   startTaskReminderMonitor();
-  await ensureStartupOpenClawReady();
-  await Promise.all([loadAgents(), refreshDashboardData(), loadSidebarSettingsAppVersion()]);
-  await scrollMessagesToBottom();
-  await nextTick();
-  resizeChatComposerInput();
+  scheduleStartupOpenClawReadyCheck();
+  scheduleInitialChatPageBootstrap();
 });
 
 onBeforeUnmount(() => {
@@ -12904,7 +13962,7 @@ onBeforeUnmount(() => {
 watch(
   () => [activeSection.value, activeAgentPaneTab.value],
   ([section, pane]) => {
-    if (section === "chat" && pane === "staff") {
+    if (section === "chat" && (pane === "staff" || pane === "group")) {
       return;
     }
     closeChatAgentContextMenu();
@@ -12932,6 +13990,29 @@ watch(
     sidebarAvatarUploadError.value = "";
     sidebarProfileNotice.value = "";
     sidebarAvatarPresetCategory.value = "pixel";
+    resetChatMentionState();
+  }
+);
+
+watch(
+  () => isChatMentionDropdownVisible.value,
+  (visible) => {
+    if (!visible) {
+      resetChatMentionState();
+    }
+  }
+);
+
+watch(
+  () => chatMentionCandidates.value.length,
+  (length) => {
+    if (length <= 0) {
+      chatMentionActiveIndex.value = 0;
+      return;
+    }
+    if (chatMentionActiveIndex.value >= length) {
+      chatMentionActiveIndex.value = length - 1;
+    }
   }
 );
 
@@ -12948,7 +14029,7 @@ watch(
 <template>
   <div class="chat-page" :class="{ 'is-sidebar-profile-panel-open': isSidebarProfilePopoverOpen }">
     <div v-if="startupOpenClawOverlayVisible" class="startup-openclaw-overlay" aria-live="polite">
-      <section class="startup-openclaw-card" role="dialog" aria-modal="true" aria-label="安装 OpenClaw">
+      <section class="startup-openclaw-card" role="dialog" aria-modal="true" aria-label="初始化 OpenClaw">
         <div class="startup-openclaw-orbit" :class="{ 'is-spinning': startupOpenClawInstalling }" aria-hidden="true">
           <span class="startup-openclaw-orbit__arc startup-openclaw-orbit__arc--outer" />
           <span class="startup-openclaw-orbit__arc startup-openclaw-orbit__arc--inner" />
@@ -12956,7 +14037,7 @@ watch(
             <img class="startup-openclaw-orbit__logo" :src="appLogoUrl" alt="DragonClaw Logo" />
           </span>
         </div>
-        <h2>安装 OpenClaw</h2>
+        <h2>初始化 OpenClaw</h2>
         <p class="startup-openclaw-status">{{ startupOpenClawStatusText }}</p>
 
         <div class="startup-openclaw-step-list">
@@ -12983,7 +14064,7 @@ watch(
 
         <div v-if="startupOpenClawShowActions" class="startup-openclaw-actions">
           <button type="button" @click="retryStartupOpenClawInstall">
-            {{ startupOpenClawInstallError ? "重试安装" : "重新安装" }}
+            {{ startupOpenClawInstallError ? "重试处理" : "重新安装" }}
           </button>
           <button type="button" class="is-ghost" @click="dismissStartupOpenClawOverlay">
             {{ startupOpenClawInstallError ? "稍后再说" : "继续使用" }}
@@ -13845,7 +14926,7 @@ watch(
                         @dragover.prevent="!isConversationGroupPaneActive && handleChatUserAgentDragOver(section.id, agent.agentId, $event)"
                         @drop.prevent="!isConversationGroupPaneActive && handleChatUserAgentDrop(section.id, agent.agentId)"
                         @dragend="!isConversationGroupPaneActive && handleChatUserAgentDragEnd()"
-                        @contextmenu.prevent="activeAgentPaneTab === 'staff' && handleChatAgentItemContextMenu(agent, $event)"
+                        @contextmenu.prevent="handleChatAgentItemContextMenu(agent, $event)"
                       >
                         <div class="agent-avatar" :class="{ 'agent-avatar--group': agent.groupKind === 'group' }">
                           <span
@@ -13883,7 +14964,7 @@ watch(
                         <div class="agent-content">
                           <div class="agent-top-line">
                             <strong>{{ stripRoleLabel(agent.displayName) }}</strong>
-                            <span class="agent-channel">{{ agent.channel }}</span>
+                            <span v-if="shouldShowAgentChannelTag(agent)" class="agent-channel">{{ resolveAgentChannelDisplayLabel(agent) }}</span>
                           </div>
                           <p class="agent-preview">{{ getAgentMeta(agent.agentId).preview }}</p>
                           <small class="agent-status">{{ getAgentStatusLabel(agent) }}</small>
@@ -13904,7 +14985,7 @@ watch(
             ref="chatAgentContextMenuRef"
             class="agent-context-menu"
             role="menu"
-            aria-label="数字员工操作菜单"
+            :aria-label="isChatAgentContextMenuGroupTarget ? '群聊操作菜单' : '数字员工操作菜单'"
             data-no-window-drag
             :style="{
               left: `${chatAgentContextMenuPosition.x}px`,
@@ -13913,6 +14994,7 @@ watch(
             @mousedown.stop
           >
             <button
+              v-if="!isChatAgentContextMenuGroupTarget"
               type="button"
               class="agent-context-menu__item"
               role="menuitem"
@@ -13923,6 +15005,7 @@ watch(
               详情
             </button>
             <button
+              v-if="!isChatAgentContextMenuGroupTarget"
               type="button"
               class="agent-context-menu__item"
               role="menuitem"
@@ -13936,6 +15019,7 @@ watch(
               type="button"
               class="agent-context-menu__item agent-context-menu__item--danger"
               role="menuitem"
+              :disabled="Boolean(chatAgentContextMenuTarget && isProtectedStaffAgentId(chatAgentContextMenuTarget.agentId))"
               @mousedown.left.stop.prevent="handleChatAgentContextMenuDelete"
               @keydown.enter.stop.prevent="handleChatAgentContextMenuDelete"
               @keydown.space.stop.prevent="handleChatAgentContextMenuDelete"
@@ -13949,7 +15033,12 @@ watch(
             class="related-resource-modal-backdrop"
             @click.self="closeChatAgentDeleteConfirmModal"
           >
-            <section class="related-resource-modal chat-agent-delete-modal" role="dialog" aria-modal="true" aria-label="确认删除员工">
+            <section
+              class="related-resource-modal chat-agent-delete-modal"
+              role="dialog"
+              aria-modal="true"
+              :aria-label="isChatAgentDeleteConfirmGroupTarget ? '确认删除群聊' : '确认删除员工'"
+            >
               <header class="related-resource-modal__header chat-agent-delete-modal__header">
                 <div class="chat-agent-delete-modal__title">
                   <span class="chat-agent-delete-modal__icon" aria-hidden="true">
@@ -13964,10 +15053,14 @@ watch(
               <div class="related-resource-modal__body chat-agent-delete-modal__body">
                 <div class="chat-agent-delete-modal__risk">
                   <p>
-                    即将删除
+                    即将删除{{ isChatAgentDeleteConfirmGroupTarget ? "群聊" : "员工" }}
                     <strong>「{{ stripRoleLabel(chatAgentDeleteConfirmTarget.displayName) || chatAgentDeleteConfirmTarget.agentId }}」</strong>。
                   </p>
-                  <small>删除后该员工将从列表移除，且可能同时删除本地配置文件。</small>
+                  <small>{{
+                    isChatAgentDeleteConfirmGroupTarget
+                      ? "删除后该群聊将从团队列表移除。"
+                      : "删除后该员工将从列表移除，且可能同时删除本地配置文件。"
+                  }}</small>
                 </div>
                 <div class="chat-agent-delete-modal__actions">
                   <button
@@ -14111,7 +15204,12 @@ watch(
                 'chat-window__content--settings-open': isAgentSettingsOpen
               }"
             >
-              <div ref="messageScroller" class="chat-window__messages" :class="{ 'chat-window__messages--empty': isConversationEmpty }">
+              <div
+                ref="messageScroller"
+                class="chat-window__messages"
+                :class="{ 'chat-window__messages--empty': isConversationEmpty }"
+                @mousedown.left="handleChatWindowMessagesMouseDown"
+              >
                 <div v-if="isConversationEmpty" class="chat-empty-state">
                   <div class="chat-empty-state__logo" aria-hidden="true">
                     <img :src="appLogoUrl" alt="DragonClaw logo" />
@@ -14198,18 +15296,8 @@ watch(
                 </template>
               </div>
 
-              <aside v-if="isAgentSettingsOpen" class="chat-settings-sidebar" data-no-window-drag @mousedown.left.stop>
-                <header v-if="isLogsPanelActive || isHistoryPanelActive" class="chat-settings-sidebar__header chat-settings-sidebar__header--plain">
-                  <button
-                    type="button"
-                    class="chat-settings-sidebar__close"
-                    :aria-label="isLogsPanelActive ? '关闭日志' : '关闭聊天记录'"
-                    @click="closeAgentSettingsPanel"
-                  >
-                    ×
-                  </button>
-                </header>
-
+              <transition name="chat-settings-sidebar-slide">
+                <aside v-if="isAgentSettingsOpen" class="chat-settings-sidebar" data-no-window-drag @mousedown.left.stop>
                 <div v-if="isLogsPanelActive" class="chat-settings-sidebar__body chat-settings-sidebar__body--logs">
                   <div class="chat-settings-logs-head">
                     <strong>运行日志</strong>
@@ -14299,78 +15387,6 @@ watch(
                             <small>{{ formatDateTime(log.createdAt) }} · 耗时 {{ formatDurationLabel(log.duration) }}</small>
                           </button>
                         </div>
-
-                        <section v-if="selectedRuntimeLog && activeRuntimeLogDetailSection" class="utility-log-detail">
-                          <div class="utility-log-detail__head">
-                            <header class="utility-log-detail__header">
-                              <div class="utility-log-detail__title-wrap">
-                                <div class="utility-log-detail__route">
-                                  <span class="utility-log-detail__method">{{ selectedRuntimeLog.method }}</span>
-                                  <strong>{{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</strong>
-                                </div>
-                                <p>{{ getLogRequestUrl(selectedRuntimeLog) }}</p>
-                                <div class="utility-log-detail__meta">
-                                  <span class="utility-log-detail__meta-item">{{ selectedRuntimeLog.platformName }}</span>
-                                  <span class="utility-log-detail__meta-item">{{ formatDateTime(selectedRuntimeLog.createdAt) }}</span>
-                                  <span class="utility-log-kind" :data-kind="getRuntimeLogCategory(selectedRuntimeLog)">
-                                    {{ getRuntimeLogCategoryLabel(selectedRuntimeLog) }}
-                                  </span>
-                                </div>
-                              </div>
-                              <div class="utility-log-detail__header-side">
-                                <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
-                                  selectedRuntimeLog.responseStatus
-                                }}</span>
-                              </div>
-                            </header>
-                            <div class="utility-log-detail__stats">
-                              <span class="utility-log-detail__stat">
-                                <small>耗时</small>
-                                <strong>{{ formatDurationLabel(selectedRuntimeLog.duration) }}</strong>
-                              </span>
-                              <span v-if="typeof selectedRuntimeLog.firstTokenTime === 'number'" class="utility-log-detail__stat">
-                                <small>首 Token</small>
-                                <strong>{{ formatDurationLabel(selectedRuntimeLog.firstTokenTime) }}</strong>
-                              </span>
-                              <span
-                                v-if="
-                                  typeof selectedRuntimeLog.totalTokens === 'number' ||
-                                  typeof selectedRuntimeLog.promptTokens === 'number' ||
-                                  typeof selectedRuntimeLog.completionTokens === 'number' ||
-                                  typeof selectedRuntimeLog.cacheReadInputTokens === 'number'
-                                "
-                                class="utility-log-detail__stat"
-                              >
-                                <small>总 Token</small>
-                                <strong>{{ getEffectiveLogTotalTokens(selectedRuntimeLog) }}</strong>
-                              </span>
-                            </div>
-                            <div class="utility-log-detail-tabs" role="tablist" aria-label="日志详情分栏">
-                              <button
-                                v-for="section in runtimeLogDetailSections"
-                                :key="section.id"
-                                type="button"
-                                class="utility-log-detail-tab"
-                                :class="{ 'is-active': activeRuntimeLogDetailSection.id === section.id }"
-                                @click="handleUtilityLogDetailTabSelect(section.id)"
-                              >
-                                {{ section.label }}
-                              </button>
-                            </div>
-                          </div>
-                          <div class="utility-log-detail__content-wrap">
-                            <button
-                              type="button"
-                              class="utility-log-copy"
-                              title="复制当前内容"
-                              aria-label="复制当前内容"
-                              @click="handleCopyRuntimeLogContent"
-                            >
-                              <ControlIcon name="copy" />
-                            </button>
-                            <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
-                          </div>
-                        </section>
                       </div>
                     </template>
 
@@ -14394,44 +15410,6 @@ watch(
                             <small>最近 {{ formatDateTime(summary.latestAt) }}</small>
                           </button>
                         </div>
-
-                        <section v-if="selectedRuntimeLog && activeRuntimeLogDetailSection" class="utility-log-detail">
-                          <div class="utility-log-detail__head">
-                            <header class="utility-log-detail__header">
-                              <div>
-                                <strong>错误详情</strong>
-                                <p>{{ selectedRuntimeLog.method }} {{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</p>
-                              </div>
-                              <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
-                                selectedRuntimeLog.responseStatus
-                              }}</span>
-                            </header>
-                            <div class="utility-log-detail-tabs" role="tablist" aria-label="错误详情分栏">
-                              <button
-                                v-for="section in runtimeLogDetailSections"
-                                :key="section.id"
-                                type="button"
-                                class="utility-log-detail-tab"
-                                :class="{ 'is-active': activeRuntimeLogDetailSection.id === section.id }"
-                                @click="handleUtilityLogDetailTabSelect(section.id)"
-                              >
-                                {{ section.label }}
-                              </button>
-                            </div>
-                          </div>
-                          <div class="utility-log-detail__content-wrap">
-                            <button
-                              type="button"
-                              class="utility-log-copy"
-                              title="复制当前内容"
-                              aria-label="复制当前内容"
-                              @click="handleCopyRuntimeLogContent"
-                            >
-                              <ControlIcon name="copy" />
-                            </button>
-                            <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
-                          </div>
-                        </section>
                       </div>
                     </template>
                   </template>
@@ -14559,6 +15537,64 @@ watch(
                       </p>
                     </section>
 
+                    <section v-if="activeConversationGroup" class="chat-group-info-card__section">
+                      <h5>群组策略</h5>
+                      <div class="chat-group-policy-grid">
+                        <label class="chat-group-policy-field">
+                          <span>groupPolicy</span>
+                          <select
+                            :value="activeConversationGroup.groupPolicy"
+                            @change="handleActiveConversationGroupPolicyChange(($event.target as HTMLSelectElement).value)"
+                          >
+                            <option value="allowlist">allowlist（按 allowFrom 放行）</option>
+                            <option value="open">open（全部来源可触发）</option>
+                          </select>
+                        </label>
+
+                        <label class="chat-group-policy-check">
+                          <input
+                            type="checkbox"
+                            :checked="activeConversationGroup.requireMention"
+                            @change="handleActiveConversationGroupRequireMentionChange(($event.target as HTMLInputElement).checked)"
+                          />
+                          <span>requireMention：仅 @成员 或 activation 命令触发回复</span>
+                        </label>
+
+                        <label class="chat-group-policy-field">
+                          <span>allowFrom（逗号分隔，支持 `*` 与前缀 `*`）</span>
+                          <input
+                            type="text"
+                            :value="activeConversationGroupAllowFromText"
+                            placeholder="例如：*, channel:feishu:*"
+                            @change="handleActiveConversationGroupAllowFromChange(($event.target as HTMLInputElement).value)"
+                          />
+                        </label>
+
+                        <div class="chat-group-policy-inline">
+                          <label class="chat-group-policy-field">
+                            <span>activation 命令</span>
+                            <input
+                              type="text"
+                              maxlength="32"
+                              :value="activeConversationGroup.activationCommand"
+                              placeholder="/activation"
+                              @change="handleActiveConversationGroupActivationCommandChange(($event.target as HTMLInputElement).value)"
+                            />
+                          </label>
+                          <label class="chat-group-policy-field">
+                            <span>historyLimit（条）</span>
+                            <input
+                              type="number"
+                              :min="CHAT_CONVERSATION_GROUP_MIN_HISTORY_LIMIT"
+                              :max="CHAT_CONVERSATION_GROUP_MAX_HISTORY_LIMIT"
+                              :value="activeConversationGroup.historyLimit"
+                              @change="handleActiveConversationGroupHistoryLimitChange(($event.target as HTMLInputElement).value)"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    </section>
+
                     <section class="chat-group-info-card__section">
                       <h5>群成员</h5>
                       <div v-if="activeConversationGroupMembers.length > 0" class="chat-group-info-member-grid">
@@ -14581,7 +15617,7 @@ watch(
                             </span>
                           </div>
                           <strong :title="stripRoleLabel(member.displayName)">{{ stripRoleLabel(member.displayName) }}</strong>
-                          <small>{{ member.channel || "main" }}</small>
+                          <small>{{ resolveAgentChannelDisplayLabel(member) }}</small>
                         </article>
                       </div>
                       <p v-else class="chat-group-info-card__empty">该群聊暂无成员。</p>
@@ -14640,7 +15676,7 @@ watch(
                         <button class="chat-settings-resource-action" type="button" @click="openRelatedResource('channel')">
                           <span class="chat-settings-resource-action__icon">频</span>
                           <span class="chat-settings-resource-action__content">
-                            <span class="chat-settings-resource-action__main">频道 {{ activeAgent.channel || "main" }}</span>
+                            <span class="chat-settings-resource-action__main">频道 {{ resolveAgentChannelDisplayLabel(activeAgent) }}</span>
                             <span class="chat-settings-resource-action__sub">管理渠道账号绑定</span>
                           </span>
                           <span class="chat-settings-resource-action__arrow">›</span>
@@ -14693,7 +15729,7 @@ watch(
                       </div>
                       <div class="chat-settings-list__row">
                         <dt>所属渠道</dt>
-                        <dd>{{ activeAgent.channel || "—" }}</dd>
+                        <dd>{{ resolveAgentChannelDisplayLabel(activeAgent, "—") }}</dd>
                       </div>
                       <div class="chat-settings-list__row">
                         <dt>{{ getAgentCurrentWorkLabel(activeAgent) }}</dt>
@@ -14734,8 +15770,9 @@ watch(
                   </div>
                 </div>
 
-                <div v-else class="chat-settings-sidebar__empty">请选择员工后打开设置。</div>
-              </aside>
+                  <div v-else class="chat-settings-sidebar__empty">请选择员工后打开设置。</div>
+                </aside>
+              </transition>
 
             </div>
 
@@ -14749,8 +15786,27 @@ watch(
                     :placeholder="chatComposerPlaceholder"
                     :disabled="!activeAgent"
                     @input="handleChatComposerInput"
+                    @click="handleChatComposerCursorActivity"
+                    @keyup="handleChatComposerCursorActivity"
+                    @blur="handleChatComposerBlur"
                     @keydown="handleChatComposerKeydown"
                   />
+                  <div v-if="isChatMentionDropdownVisible" class="composer-mention-panel" data-no-window-drag>
+                    <div v-if="chatMentionCandidates.length === 0" class="composer-mention-empty">没有匹配成员</div>
+                    <button
+                      v-for="(candidate, index) in chatMentionCandidates"
+                      :key="`composer-mention-${candidate.agentId}`"
+                      class="composer-mention-item"
+                      :class="{ 'is-active': index === chatMentionActiveIndex }"
+                      type="button"
+                      @mouseenter="chatMentionActiveIndex = index"
+                      @mousedown.prevent="applyChatMentionCandidate(candidate)"
+                    >
+                      <span class="composer-mention-item__main">
+                        <strong>{{ candidate.displayName }}</strong>
+                      </span>
+                    </button>
+                  </div>
                 </div>
                 <div v-if="chatAttachments.length > 0" class="composer-attachments">
                   <span v-for="attachment in chatAttachments" :key="attachment.id" class="composer-attachment-chip" :title="attachment.name">
@@ -14921,29 +15977,57 @@ watch(
 
             <template v-if="activeSection === 'recruitment'">
               <section class="module-surface recruitment-surface">
-                <div class="module-surface__toolbar recruitment-surface__toolbar">
-                  <input
-                    v-model="recruitmentKeyword"
-                    class="module-surface__search"
-                    type="search"
-                    placeholder="搜索角色 / 分组 / 领域"
-                  />
-                </div>
-                <div class="recruitment-division-filter" role="tablist" aria-label="角色分类筛选">
-                  <button
-                    v-for="option in recruitmentDivisionFilterOptions"
-                    :key="option.id"
-                    class="recruitment-division-filter__item"
-                    :class="{ active: recruitmentDivisionFilter === option.id }"
-                    :title="`${option.visibleCount} / ${option.totalCount} 个角色`"
-                    role="tab"
-                    :aria-selected="recruitmentDivisionFilter === option.id"
-                    type="button"
-                    @click="selectRecruitmentDivisionFilter(option.id)"
-                  >
-                    {{ option.label }}
-                  </button>
-                </div>
+                <section class="recruitment-surface__top" aria-label="角色筛选区">
+                  <div class="recruitment-division-filter" role="tablist" aria-label="角色分类筛选">
+                    <button
+                      v-for="option in recruitmentDivisionFilterOptions"
+                      :key="option.id"
+                      class="recruitment-division-filter__item"
+                      :class="{ active: recruitmentDivisionFilter === option.id }"
+                      :title="`${option.visibleCount} / ${option.totalCount} 个角色`"
+                      role="tab"
+                      :aria-selected="recruitmentDivisionFilter === option.id"
+                      type="button"
+                      @click="selectRecruitmentDivisionFilter(option.id)"
+                    >
+                      {{ option.label }}
+                    </button>
+                    <input
+                      v-model="recruitmentKeyword"
+                      class="module-surface__search recruitment-division-filter__search"
+                      type="search"
+                      placeholder="搜索角色 / 分组 / 领域"
+                    />
+                  </div>
+                </section>
+                <p v-if="recruitmentActionNotice" class="module-surface__hint module-surface__hint--notice">{{ recruitmentActionNotice }}</p>
+                <section class="recruitment-linked-strip" aria-label="已加入聊天列表">
+                  <header class="recruitment-linked-strip__header">
+                    <strong>已加入聊天列表</strong>
+                    <div class="recruitment-linked-strip__meta">
+                      <small v-if="recruitmentLinkedRoleAgents.length > 0">{{ recruitmentLinkedRoleAgents.length }} 个</small>
+                      <small v-else>点击角色卡片「+ 对话」后会自动出现在这里</small>
+                    </div>
+                  </header>
+                  <p v-if="recruitmentLinkedRoleAgents.length === 0" class="recruitment-linked-strip__empty">
+                    还没有从角色库添加数字员工。点击任意角色卡片的「+ 对话」后，会自动加入左侧聊天列表，并在这里展示。
+                  </p>
+                  <div v-else class="recruitment-linked-strip__list">
+                    <article
+                      v-for="item in recruitmentLinkedRoleAgents"
+                      :key="`recruitment-linked-${item.agentId}`"
+                      class="recruitment-linked-chip"
+                    >
+                      <span class="recruitment-linked-chip__avatar" :style="getRecruitmentRoleAvatarStyle(item.role)">
+                        {{ getRecruitmentRoleAvatarLabel(item.role) }}
+                      </span>
+                      <span class="recruitment-linked-chip__text">
+                        <strong>{{ stripRoleLabel(item.displayName) }}</strong>
+                        <small>{{ item.groupTitleZh || item.divisionTitleZh }}</small>
+                      </span>
+                    </article>
+                  </div>
+                </section>
                 <section class="recruitment-create-division" aria-label="新增员工入口">
                   <header class="recruitment-create-division__header">
                     <strong>新增员工</strong>
@@ -17011,6 +18095,98 @@ watch(
               </div>
             </template>
           </template>
+        </div>
+      </section>
+    </div>
+
+    <div
+      v-if="isLogsPanelActive && isSidebarLogDetailModalOpen && selectedRuntimeLog && activeRuntimeLogDetailSection"
+      class="utility-modal-backdrop"
+      @click.self="closeSidebarLogDetailModal"
+    >
+      <section class="utility-modal chat-settings-log-detail-modal" role="dialog" aria-modal="true" :aria-label="utilityLogTab === 'errorAnalysis' ? '错误日志详情' : '运行日志详情'">
+        <header class="utility-modal__header">
+          <div>
+            <strong>{{ utilityLogTab === "errorAnalysis" ? "错误日志详情" : "运行日志详情" }}</strong>
+            <p>{{ selectedRuntimeLog.method }} {{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</p>
+          </div>
+          <div class="utility-modal__actions">
+            <button class="utility-modal__refresh" type="button" @click="handleCopyRuntimeLogContent">复制详情</button>
+            <button class="utility-modal__close" type="button" aria-label="关闭日志详情" @click="closeSidebarLogDetailModal">×</button>
+          </div>
+        </header>
+        <div class="utility-modal__body utility-modal__body--logs">
+          <section class="utility-log-detail utility-log-detail--modal">
+            <div class="utility-log-detail__head">
+              <header class="utility-log-detail__header">
+                <div class="utility-log-detail__title-wrap">
+                  <div class="utility-log-detail__route">
+                    <span class="utility-log-detail__method">{{ selectedRuntimeLog.method }}</span>
+                    <strong>{{ selectedRuntimeLog.path || selectedRuntimeLog.endpoint || "/" }}</strong>
+                  </div>
+                  <p>{{ getLogRequestUrl(selectedRuntimeLog) }}</p>
+                  <div class="utility-log-detail__meta">
+                    <span class="utility-log-detail__meta-item">{{ selectedRuntimeLog.platformName }}</span>
+                    <span class="utility-log-detail__meta-item">{{ formatDateTime(selectedRuntimeLog.createdAt) }}</span>
+                    <span class="utility-log-kind" :data-kind="getRuntimeLogCategory(selectedRuntimeLog)">
+                      {{ getRuntimeLogCategoryLabel(selectedRuntimeLog) }}
+                    </span>
+                  </div>
+                </div>
+                <div class="utility-log-detail__header-side">
+                  <span class="utility-log-status" :data-tone="getLogStatusTone(selectedRuntimeLog.responseStatus)">{{
+                    selectedRuntimeLog.responseStatus
+                  }}</span>
+                </div>
+              </header>
+              <div class="utility-log-detail__stats">
+                <span class="utility-log-detail__stat">
+                  <small>耗时</small>
+                  <strong>{{ formatDurationLabel(selectedRuntimeLog.duration) }}</strong>
+                </span>
+                <span v-if="typeof selectedRuntimeLog.firstTokenTime === 'number'" class="utility-log-detail__stat">
+                  <small>首 Token</small>
+                  <strong>{{ formatDurationLabel(selectedRuntimeLog.firstTokenTime) }}</strong>
+                </span>
+                <span
+                  v-if="
+                    typeof selectedRuntimeLog.totalTokens === 'number' ||
+                    typeof selectedRuntimeLog.promptTokens === 'number' ||
+                    typeof selectedRuntimeLog.completionTokens === 'number' ||
+                    typeof selectedRuntimeLog.cacheReadInputTokens === 'number'
+                  "
+                  class="utility-log-detail__stat"
+                >
+                  <small>总 Token</small>
+                  <strong>{{ getEffectiveLogTotalTokens(selectedRuntimeLog) }}</strong>
+                </span>
+              </div>
+              <div class="utility-log-detail-tabs" role="tablist" aria-label="日志详情分栏">
+                <button
+                  v-for="section in runtimeLogDetailSections"
+                  :key="section.id"
+                  type="button"
+                  class="utility-log-detail-tab"
+                  :class="{ 'is-active': activeRuntimeLogDetailSection.id === section.id }"
+                  @click="handleUtilityLogDetailTabSelect(section.id)"
+                >
+                  {{ section.label }}
+                </button>
+              </div>
+            </div>
+            <div class="utility-log-detail__content-wrap">
+              <button
+                type="button"
+                class="utility-log-copy"
+                title="复制当前内容"
+                aria-label="复制当前内容"
+                @click="handleCopyRuntimeLogContent"
+              >
+                <ControlIcon name="copy" />
+              </button>
+              <pre class="utility-log-detail__content" tabindex="0">{{ activeRuntimeLogDetailSection.text }}</pre>
+            </div>
+          </section>
         </div>
       </section>
     </div>
@@ -20163,9 +21339,10 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .chat-window__content {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 0;
   position: relative;
   background: #ffffff;
+  transition: grid-template-columns 220ms ease;
 }
 
 .chat-window__content--settings-open {
@@ -20177,11 +21354,22 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   grid-row: 1;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   border-left: 1px solid #e7edf7;
   background: linear-gradient(180deg, #fbfdff 0%, #f7fbff 100%);
   display: flex;
   flex-direction: column;
+}
+
+.chat-settings-sidebar-slide-enter-active,
+.chat-settings-sidebar-slide-leave-active {
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.chat-settings-sidebar-slide-enter-from,
+.chat-settings-sidebar-slide-leave-to {
+  opacity: 0;
+  transform: translateX(14px);
 }
 
 .chat-settings-sidebar__header {
@@ -20218,6 +21406,9 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 
 .chat-settings-sidebar__body {
   padding: 8px 12px 12px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -20231,6 +21422,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   padding: 8px 12px 12px;
   gap: 8px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .chat-settings-sidebar__body--history {
@@ -20296,12 +21488,15 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .chat-settings-sidebar__body--logs .utility-log-layout {
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+  min-height: 0;
+  flex: 1;
 }
 
 .chat-settings-sidebar__body--logs .utility-log-list,
 .chat-settings-sidebar__body--logs .utility-error-list {
-  max-height: 240px;
-  height: auto;
+  max-height: none;
+  height: 100%;
+  flex: 1;
 }
 
 .chat-group-info-card {
@@ -20506,6 +21701,66 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   padding: 12px;
   color: #7d8fa8;
   font-size: 13px;
+}
+
+.chat-group-policy-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-group-policy-inline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.chat-group-policy-field {
+  display: grid;
+  gap: 6px;
+}
+
+.chat-group-policy-field span {
+  font-size: 12px;
+  color: #7a8ca8;
+}
+
+.chat-group-policy-field input,
+.chat-group-policy-field select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #d5deec;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #2a3e5a;
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 7px 10px;
+}
+
+.chat-group-policy-field input:focus,
+.chat-group-policy-field select:focus {
+  outline: none;
+  border-color: #9ab7e9;
+  box-shadow: 0 0 0 2px rgba(77, 126, 203, 0.18);
+}
+
+.chat-group-policy-check {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #425f83;
+}
+
+.chat-group-policy-check input {
+  margin-top: 2px;
+}
+
+@media (max-width: 760px) {
+  .chat-group-policy-inline {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .conversation-group-rename-modal {
@@ -21359,6 +22614,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .composer-input-shell {
+  position: relative;
   min-width: 0;
 }
 
@@ -21390,6 +22646,71 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 
 .chat-window__composer textarea::placeholder {
   color: #9c9c9c;
+}
+
+.composer-mention-panel {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 32;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-height: 180px;
+  width: fit-content;
+  max-width: min(100%, 320px);
+  overflow-y: auto;
+  border: 1px solid #d7dee9;
+  border-radius: 12px;
+  background: #fafcff;
+  padding: 6px;
+}
+
+.composer-mention-empty {
+  color: #7b8ea9;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 6px;
+}
+
+.composer-mention-item {
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: auto;
+  max-width: 100%;
+  text-align: left;
+  padding: 7px 8px;
+  cursor: pointer;
+  color: #324a6a;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.composer-mention-item:hover,
+.composer-mention-item.is-active {
+  background: #e9f1ff;
+  color: #254267;
+}
+
+.composer-mention-item__main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.composer-mention-item__main strong {
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
 }
 
 .composer-attachments {
@@ -22089,22 +23410,12 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86), 0 16px 30px rgba(39, 44, 56, 0.08);
 }
 
-.recruitment-surface__toolbar {
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.recruitment-surface__toolbar .module-surface__search {
-  flex: 0 1 clamp(240px, 36vw, 320px);
-  margin-left: auto;
-  border-color: #d7dbe4;
-  background: #ffffff;
-  color: #2e3137;
-}
-
-.recruitment-surface__toolbar .module-surface__search:focus {
-  border-color: #b9c0ce;
-  box-shadow: 0 0 0 3px rgba(116, 126, 148, 0.18);
+.recruitment-surface__top {
+  border: 1px solid #dde2ea;
+  border-radius: 14px;
+  padding: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 249, 252, 0.68));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
 }
 
 .skill-market-surface {
@@ -22377,7 +23688,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .recruitment-division-filter {
-  margin-top: 12px;
+  margin-top: 10px;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -22417,11 +23728,134 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   box-shadow: 0 0 0 3px rgba(124, 131, 146, 0.22);
 }
 
+.recruitment-division-filter__search {
+  flex: 1 1 240px;
+  min-width: 180px;
+  max-width: 100%;
+  height: 30px;
+  margin-left: 0;
+  border-color: #d7dbe4;
+  background: #ffffff;
+  color: #2e3137;
+}
+
+.recruitment-division-filter__search:focus {
+  border-color: #b9c0ce;
+  box-shadow: 0 0 0 3px rgba(116, 126, 148, 0.18);
+}
+
+.recruitment-linked-strip {
+  margin-top: 10px;
+  border: 1px solid #dde2ea;
+  border-radius: 14px;
+  padding: 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(248, 250, 253, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.recruitment-linked-strip__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.recruitment-linked-strip__header strong {
+  font-size: 12px;
+  color: #424955;
+  letter-spacing: 0.01em;
+}
+
+.recruitment-linked-strip__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.recruitment-linked-strip__meta small {
+  color: #6d7481;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.recruitment-linked-strip__empty {
+  margin: 8px 0 0;
+  border: 1px dashed #d5dae3;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #69717e;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 8px 10px;
+}
+
+.recruitment-linked-strip__list {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recruitment-linked-chip {
+  flex: 0 0 220px;
+  max-width: 100%;
+  border: 1px solid #d8dde6;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #363d49;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  text-align: left;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.recruitment-linked-chip__avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.recruitment-linked-chip__text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.recruitment-linked-chip__text strong {
+  color: #2f3641;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recruitment-linked-chip__text small {
+  color: #77808d;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .recruitment-create-division {
   margin-top: 12px;
   border: 1px solid #dde2ea;
   border-radius: 16px;
-  padding: 12px;
+  padding: 10px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(252, 252, 253, 0.52));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
@@ -22484,7 +23918,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .recruitment-role-grid--create {
-  grid-template-columns: minmax(188px, 220px);
+  grid-template-columns: minmax(156px, 176px);
 }
 
 .recruitment-agent-card {
@@ -22517,7 +23951,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .recruitment-agent-card--new-standalone {
-  min-height: 214px;
+  min-height: 156px;
 }
 
 .recruitment-agent-card__new-button {
@@ -22536,13 +23970,13 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .recruitment-agent-card__new-plus {
-  width: 44px;
-  height: 44px;
+  width: 34px;
+  height: 34px;
   border-radius: 999px;
   border: 1px solid #d6dae3;
   background: #ffffff;
   color: #9ca2af;
-  font-size: 30px;
+  font-size: 22px;
   font-weight: 500;
   line-height: 1;
   display: inline-flex;
@@ -22552,14 +23986,14 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 
 .recruitment-agent-card__new-title {
   color: #5f6672;
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: 0.01em;
 }
 
 .recruitment-agent-card__new-hint {
   margin: 0;
   color: #89909b;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -26613,6 +28047,19 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   flex-direction: column;
 }
 
+.chat-settings-log-detail-modal {
+  width: min(760px, calc(100vw - 40px));
+}
+
+.chat-settings-log-detail-modal .utility-modal__body {
+  padding: 12px;
+}
+
+.utility-log-detail--modal {
+  height: 100%;
+  min-height: 0;
+}
+
 .utility-modal__detail {
   margin: 0 0 12px;
   color: #6f83a3;
@@ -27748,6 +29195,24 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   background: var(--cp-surface-elevated);
 }
 
+.chat-group-policy-field span,
+.chat-group-policy-check {
+  color: var(--cp-text-muted);
+}
+
+.chat-group-policy-field input,
+.chat-group-policy-field select {
+  border-color: var(--cp-border);
+  background: var(--cp-surface);
+  color: var(--cp-text);
+}
+
+.chat-group-policy-field input:focus,
+.chat-group-policy-field select:focus {
+  border-color: var(--cp-border-strong);
+  box-shadow: var(--cp-focus-ring);
+}
+
 .conversation-group-rename-modal__field span {
   color: var(--cp-text-muted);
 }
@@ -27850,6 +29315,25 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .chat-window__composer textarea:disabled,
 .chat-window__composer textarea::placeholder {
   color: var(--cp-text-muted);
+}
+
+.composer-mention-panel {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.composer-mention-empty {
+  color: var(--cp-text-muted);
+}
+
+.composer-mention-item {
+  color: var(--cp-text);
+}
+
+.composer-mention-item:hover,
+.composer-mention-item.is-active {
+  background: var(--cp-hover-bg);
+  color: var(--cp-text-strong);
 }
 
 .composer-attachment-chip {
@@ -28913,15 +30397,6 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
     white-space: normal;
   }
 
-  .recruitment-surface__toolbar {
-    align-items: stretch;
-  }
-
-  .recruitment-surface__toolbar .module-surface__search {
-    flex: 1 1 auto;
-    max-width: none;
-  }
-
   .recruitment-division-filter {
     width: 100%;
     gap: 6px;
@@ -28929,6 +30404,24 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
 
   .recruitment-division-filter__item {
     padding: 5px 11px;
+  }
+
+  .recruitment-division-filter__search {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .recruitment-linked-strip__header {
+    align-items: flex-start;
+  }
+
+  .recruitment-linked-strip__list {
+    gap: 7px;
+  }
+
+  .recruitment-linked-chip {
+    flex: 1 1 184px;
+    min-width: 0;
   }
 
   .module-surface__select,
