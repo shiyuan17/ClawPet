@@ -10,6 +10,7 @@ import channelQqIcon from "../images/channels/qq.svg";
 import channelTelegramIcon from "../images/channels/telegram.svg";
 import channelWecomIcon from "../images/channels/wecom.svg";
 import channelWeixinIcon from "../images/channels/weixin.svg";
+import QRCode from "qrcode";
 import packageJson from "../../package.json";
 import {
   DEFAULT_TASK_PROJECT_NAME,
@@ -672,6 +673,7 @@ type ChatRelatedHistoryRecord = {
   messageCount: number;
   preview: string;
   isActiveScope: boolean;
+  sessionId?: string;
 };
 
 type ChatRelatedArchiveRecord = {
@@ -766,7 +768,7 @@ const sidebarSettingsShortcutItems: Array<{ id: string; label: string; value: st
   { id: "open-chat", label: "打开聊天窗口", value: "Alt+1", note: "快速回到主聊天界面。" }
 ];
 const sidebarSettingsTips: string[] = [
-  "在聊天页点击头像可快速查看员工状态与排班信息。",
+  "在聊天页右键会话，点击“信息”可查看员工状态与排班信息。",
   "日志页支持复制请求/响应详情，便于排查问题。",
   "技能市场可按分类和评分筛选，优先启用高分技能。"
 ];
@@ -1129,7 +1131,6 @@ const isSidebarThemePopoverOpen = ref(false);
 const sidebarThemeQuickActionRef = ref<HTMLElement | null>(null);
 const isSidebarProfilePopoverOpen = ref(false);
 const sidebarProfilePanelRef = ref<HTMLElement | null>(null);
-const sidebarProfileTriggerRef = ref<HTMLElement | null>(null);
 const sidebarAvatarUploadInputRef = ref<HTMLInputElement | null>(null);
 const sidebarAvatarUploadError = ref("");
 const sidebarProfileNotice = ref("");
@@ -1293,6 +1294,9 @@ const channelQrBindingStarting = ref(false);
 const channelQrBindingSessionId = ref("");
 const channelQrBindingChannelType = ref("");
 const channelQrBindingSnapshot = ref<OpenClawChannelQrBindingSessionSnapshot | null>(null);
+const channelQrBindingImageUrl = ref("");
+const channelQrBindingImageError = ref("");
+let channelQrBindingImageRenderToken = 0;
 let channelQrBindingPollTimer = 0;
 const isChannelBindingModalOpen = ref(false);
 const channelBindingModalItem = ref<ChannelPaneChatItem | null>(null);
@@ -1303,6 +1307,7 @@ const utilityModalType = ref<UtilityModalType | null>(null);
 const utilityModalLoading = ref(false);
 const utilityModalError = ref("");
 const utilityModalNotice = ref("");
+let utilityModalRefreshToken = 0;
 const chatHistoryArchives = ref<ChatArchiveRecord[]>([]);
 const chatRelatedHistoryRecords = ref<ChatRelatedHistoryRecord[]>([]);
 const chatRelatedArchiveRecords = ref<ChatRelatedArchiveRecord[]>([]);
@@ -4223,6 +4228,18 @@ function loadSessionId(conversationScopeKey: string, options: ConversationStorag
   return next;
 }
 
+function peekSessionId(conversationScopeKey: string, options: ConversationStorageReadOptions = {}) {
+  const existing = safeStorageGet(sessionStorageKeyFor(conversationScopeKey));
+  if (existing && existing.trim()) {
+    return existing.trim();
+  }
+  const legacyExisting = options.legacyAgentId ? safeStorageGet(legacySessionStorageKeyForAgent(options.legacyAgentId)) : null;
+  if (legacyExisting && legacyExisting.trim()) {
+    return legacyExisting.trim();
+  }
+  return "";
+}
+
 function persistChatHistory(conversationScopeKey: string) {
   const stableMessages = chatMessages.value.filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item));
   safeStorageSet(chatStorageKeyFor(conversationScopeKey), JSON.stringify(stableMessages));
@@ -4706,6 +4723,10 @@ type SwitchAgentOptions = {
   force?: boolean;
 };
 
+type RefreshUtilityModalOptions = {
+  keepContentVisible?: boolean;
+};
+
 function switchAgent(agentId: string | null, options: SwitchAgentOptions = {}) {
   if (!agentId) {
     return;
@@ -4753,7 +4774,7 @@ function switchAgent(agentId: string | null, options: SwitchAgentOptions = {}) {
   if (utilityModalType.value) {
     void refreshUtilityModalData(utilityModalType.value);
   } else if (isHistoryPanelActive.value) {
-    void refreshUtilityModalData("history");
+    void refreshUtilityModalData("history", { keepContentVisible: true });
   } else if (isLogsPanelActive.value || isSidebarLogsOpen.value) {
     void refreshUtilityModalData("logs");
   }
@@ -4786,11 +4807,7 @@ function closeSidebarProfilePopover() {
   sidebarProfileNotice.value = "";
 }
 
-function toggleSidebarProfilePopover() {
-  if (isSidebarProfilePopoverOpen.value) {
-    closeSidebarProfilePopover();
-    return;
-  }
+function openSidebarProfilePopover() {
   closeSidebarThemePopover();
   isSidebarProfilePopoverOpen.value = true;
   sidebarAvatarUploadError.value = "";
@@ -4926,7 +4943,7 @@ function handleSidebarProfilePopoverDocumentMouseDown(event: MouseEvent) {
     closeSidebarProfilePopover();
     return;
   }
-  if (sidebarProfilePanelRef.value?.contains(target) || sidebarProfileTriggerRef.value?.contains(target)) {
+  if (sidebarProfilePanelRef.value?.contains(target)) {
     return;
   }
   closeSidebarProfilePopover();
@@ -5075,7 +5092,7 @@ function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent)
   closeChatQuickCreateMenu();
   closeChannelPaneItemContextMenu();
   const menuWidth = 152;
-  const menuHeight = 128;
+  const menuHeight = agent.groupKind === "group" ? 84 : 128;
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
   const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
   const fallbackX = Math.max(8, event.clientX);
@@ -5263,21 +5280,14 @@ async function handleChannelPaneDeleteConfirmSubmit() {
   }
 }
 
-function openAgentSettingsPanelForAgent(agentId: string) {
-  switchAgent(agentId);
-  closeSidebarSettingsModal();
-  closeSidebarLogsPanel();
-  chatSettingsPanelMode.value = "agent";
-  isAgentSettingsOpen.value = true;
-}
-
-function handleChatAgentContextMenuDetail() {
+function handleChatAgentContextMenuInfo() {
   const target = resolveChatAgentContextMenuTarget();
   closeChatAgentContextMenu();
   if (!target) {
     return;
   }
-  openAgentSettingsPanelForAgent(target.agentId);
+  switchAgent(target.agentId, { force: true });
+  openSidebarProfilePopover();
 }
 
 function handleChatAgentContextMenuPin() {
@@ -5958,6 +5968,13 @@ function triggerChatAttachmentPicker() {
   chatAttachmentInputRef.value?.click();
 }
 
+function handleVoiceSendClick() {
+  if (!activeAgent.value || isSending.value) {
+    return;
+  }
+  chatComposerError.value = "语音发送功能开发中，敬请期待。";
+}
+
 function removeChatAttachment(attachmentId: string) {
   chatAttachments.value = chatAttachments.value.filter((attachment) => attachment.id !== attachmentId);
 }
@@ -6584,6 +6601,47 @@ async function handleWindowExpand() {
   }
 }
 
+async function handleWindowMaximizeToggle() {
+  const tauriWindow = getTauriWindow();
+  if (tauriWindow) {
+    try {
+      if (tauriWindow.toggleMaximize) {
+        await tauriWindow.toggleMaximize();
+        return true;
+      }
+
+      if (tauriWindow.isMaximized && tauriWindow.unmaximize && tauriWindow.maximize) {
+        const isMaximized = await tauriWindow.isMaximized();
+        if (isMaximized) {
+          await tauriWindow.unmaximize();
+        } else {
+          await tauriWindow.maximize();
+        }
+        return true;
+      }
+
+      if (tauriWindow.maximize) {
+        await tauriWindow.maximize();
+        return true;
+      }
+    } catch {
+      // Keep fallback path.
+    }
+  }
+
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return false;
+  }
+  try {
+    await invoke("toggle_main_window_maximize");
+    return true;
+  } catch {
+    // Ignore runtime maximize errors.
+  }
+  return false;
+}
+
 async function handleWindowDragStart() {
   const invoke = getTauriInvoke();
   if (!invoke) {
@@ -6607,15 +6665,78 @@ function isInteractiveDragTarget(target: EventTarget | null) {
   );
 }
 
+const SIDEBAR_DRAG_START_DISTANCE_PX = 4;
+let pendingSidebarRegionMoveListener: ((event: MouseEvent) => void) | null = null;
+let pendingSidebarRegionUpListener: ((event: MouseEvent) => void) | null = null;
+
+function clearPendingSidebarRegionDragListeners() {
+  if (typeof window === "undefined") {
+    pendingSidebarRegionMoveListener = null;
+    pendingSidebarRegionUpListener = null;
+    return;
+  }
+  if (pendingSidebarRegionMoveListener) {
+    window.removeEventListener("mousemove", pendingSidebarRegionMoveListener);
+    pendingSidebarRegionMoveListener = null;
+  }
+  if (pendingSidebarRegionUpListener) {
+    window.removeEventListener("mouseup", pendingSidebarRegionUpListener);
+    pendingSidebarRegionUpListener = null;
+  }
+}
+
 function handleRegionMouseDown(event: MouseEvent) {
   if (event.button !== 0) {
     return;
   }
   if (isInteractiveDragTarget(event.target)) {
+    clearPendingSidebarRegionDragListeners();
     return;
   }
+
   event.preventDefault();
-  void handleWindowDragStart();
+  clearPendingSidebarRegionDragListeners();
+
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const startX = event.clientX;
+  const startY = event.clientY;
+  let dragStarted = false;
+
+  pendingSidebarRegionMoveListener = (moveEvent: MouseEvent) => {
+    if (dragStarted) {
+      return;
+    }
+    const dx = Math.abs(moveEvent.clientX - startX);
+    const dy = Math.abs(moveEvent.clientY - startY);
+    if (dx < SIDEBAR_DRAG_START_DISTANCE_PX && dy < SIDEBAR_DRAG_START_DISTANCE_PX) {
+      return;
+    }
+    dragStarted = true;
+    clearPendingSidebarRegionDragListeners();
+    void handleWindowDragStart();
+  };
+
+  pendingSidebarRegionUpListener = () => {
+    clearPendingSidebarRegionDragListeners();
+  };
+
+  window.addEventListener("mousemove", pendingSidebarRegionMoveListener);
+  window.addEventListener("mouseup", pendingSidebarRegionUpListener, { once: true });
+}
+
+function handleSidebarDoubleClick(event: MouseEvent) {
+  if (isInteractiveDragTarget(event.target)) {
+    return;
+  }
+  void (async () => {
+    const handled = await handleWindowMaximizeToggle();
+    if (!handled) {
+      await handleWindowExpand();
+    }
+  })();
 }
 
 function getMessageTimeLabel(message: AgentChatMessage) {
@@ -8337,7 +8458,8 @@ async function loadOpenClawRelatedHistoryRecords(agent: AgentListItem, activeSco
         updatedAt: typeof item.updatedAtMs === "number" && Number.isFinite(item.updatedAtMs) ? item.updatedAtMs : Date.now(),
         messageCount: typeof item.messageCount === "number" && Number.isFinite(item.messageCount) ? Math.max(0, item.messageCount) : 0,
         preview: item.preview?.trim() || "暂无消息",
-        isActiveScope: Boolean(activeScopeKey && normalizeStoredConversationScopeKey(item.sessionKey) === activeScopeKey)
+        isActiveScope: Boolean(activeScopeKey && normalizeStoredConversationScopeKey(item.sessionKey) === activeScopeKey),
+        sessionId: item.sessionId?.trim() || undefined
       }))
       .sort((left, right) => right.updatedAt - left.updatedAt);
   } catch {
@@ -8350,10 +8472,12 @@ async function loadOpenClawSessionHistory(agent: AgentListItem, scopeKey: string
   if (!invoke) {
     return [] as AgentChatMessage[];
   }
+  const normalizedScopeKey = normalizeStoredConversationScopeKey(scopeKey);
+  const runtimeScopeKey = normalizedScopeKey ? resolveOpenClawRuntimeSessionKey(normalizedScopeKey) ?? normalizedScopeKey : scopeKey;
   try {
     const response = (await invoke("load_openclaw_agent_session_history", {
       agentId: agent.agentId,
-      sessionKey: scopeKey
+      sessionKey: runtimeScopeKey
     })) as OpenClawAgentSessionHistoryResponse;
     const messages = Array.isArray(response.messages) ? response.messages : [];
     return messages
@@ -8407,6 +8531,44 @@ function areChatHistoriesEquivalent(left: AgentChatMessage[], right: AgentChatMe
   return true;
 }
 
+function buildOpenClawHistoryMessageFingerprint(message: AgentChatMessage) {
+  const createdAt = typeof message.createdAt === "number" && Number.isFinite(message.createdAt) ? message.createdAt : 0;
+  return `${message.role}|${createdAt}|${message.text}`;
+}
+
+function mergeOpenClawHistoryWithLocal(local: AgentChatMessage[], remote: AgentChatMessage[]) {
+  if (local.length === 0) {
+    return remote.map((message) => ({ ...message }));
+  }
+  if (remote.length === 0) {
+    return local.map((message) => ({ ...message }));
+  }
+
+  const merged = local.map((message) => ({ ...message }));
+  const seenIds = new Set(merged.map((message) => message.id.trim()).filter(Boolean));
+  const seenFingerprints = new Set(
+    merged
+      .filter((message) => message.role === "assistant" || message.role === "user")
+      .map((message) => buildOpenClawHistoryMessageFingerprint(message))
+  );
+
+  for (const message of remote) {
+    const id = message.id.trim();
+    const fingerprint = buildOpenClawHistoryMessageFingerprint(message);
+    if ((id && seenIds.has(id)) || seenFingerprints.has(fingerprint)) {
+      continue;
+    }
+    const clonedMessage = { ...message };
+    merged.push(clonedMessage);
+    if (id) {
+      seenIds.add(id);
+    }
+    seenFingerprints.add(fingerprint);
+  }
+
+  return merged;
+}
+
 async function syncOpenClawSessionHistoryToLocal(
   agent: AgentListItem,
   scopeKey: string,
@@ -8423,23 +8585,24 @@ async function syncOpenClawSessionHistoryToLocal(
   }
 
   const localCachedHistory = agentHistories.value[normalizedScopeKey] ?? loadChatHistory(normalizedScopeKey);
-  if (!areChatHistoriesEquivalent(localCachedHistory, latestHistory)) {
-    agentHistories.value[normalizedScopeKey] = [...latestHistory];
-    safeStorageSet(chatStorageKeyFor(normalizedScopeKey), JSON.stringify(latestHistory));
+  const mergedHistory = mergeOpenClawHistoryWithLocal(localCachedHistory, latestHistory);
+  if (!areChatHistoriesEquivalent(localCachedHistory, mergedHistory)) {
+    agentHistories.value[normalizedScopeKey] = mergedHistory.map((message) => ({ ...message }));
+    safeStorageSet(chatStorageKeyFor(normalizedScopeKey), JSON.stringify(mergedHistory));
   }
 
   if (options.applyToActiveConversation && activeConversationScopeKey.value === normalizedScopeKey) {
     const hasPendingMessage = chatMessages.value.some((message) => message.status === "pending");
-    if (!hasPendingMessage && !areChatHistoriesEquivalent(chatMessages.value, latestHistory)) {
-      chatMessages.value = latestHistory.map((message) => ({ ...message }));
+    if (!hasPendingMessage && !areChatHistoriesEquivalent(chatMessages.value, mergedHistory)) {
+      chatMessages.value = mergedHistory.map((message) => ({ ...message }));
       chatAttachments.value = [];
       chatComposerError.value = "";
-      refreshAgentMetaFromHistory(agent.agentId, latestHistory, agent.currentWork);
+      refreshAgentMetaFromHistory(agent.agentId, mergedHistory, agent.currentWork);
       void scrollMessagesToBottom();
     }
   }
 
-  return latestHistory;
+  return mergedHistory;
 }
 
 function stopOpenClawSessionSyncMonitor() {
@@ -8522,6 +8685,9 @@ async function handleRelatedHistoryRecordSelect(record: ChatRelatedHistoryRecord
   if (!normalizedScopeKey) {
     return;
   }
+  if (activeConversationScopeKey.value === normalizedScopeKey) {
+    return;
+  }
 
   const loadOptions: ConversationStorageReadOptions = shouldUseLegacyAgentStorage(normalizedScopeKey, agent.agentId)
     ? { legacyAgentId: agent.agentId }
@@ -8588,10 +8754,10 @@ function collectRelatedHistoryRecords(agent: AgentListItem) {
   const records: ChatRelatedHistoryRecord[] = [];
 
   for (const scopeKey of scopeKeys) {
-    const parsed = parseConversationScope(scopeKey);
     const loadOptions: ConversationStorageReadOptions = shouldUseLegacyAgentStorage(scopeKey, agent.agentId)
       ? { legacyAgentId: agent.agentId }
       : {};
+    const sessionId = peekSessionId(scopeKey, loadOptions);
     let messages = getRelatedMessageItems(loadChatHistory(scopeKey, loadOptions));
     if (normalizedActiveScopeKey && scopeKey === normalizedActiveScopeKey) {
       const activeMessages = getRelatedMessageItems(chatMessages.value);
@@ -8608,7 +8774,8 @@ function collectRelatedHistoryRecords(agent: AgentListItem) {
           updatedAt: Date.now(),
           messageCount: 0,
           preview: "当前会话暂无消息",
-          isActiveScope: true
+          isActiveScope: true,
+          sessionId: sessionId || undefined
         });
       }
       continue;
@@ -8621,7 +8788,8 @@ function collectRelatedHistoryRecords(agent: AgentListItem) {
       updatedAt: latest?.createdAt ?? Date.now(),
       messageCount: messages.length,
       preview: getRelatedHistoryPreviewText(messages),
-      isActiveScope: Boolean(normalizedActiveScopeKey && scopeKey === normalizedActiveScopeKey)
+      isActiveScope: Boolean(normalizedActiveScopeKey && scopeKey === normalizedActiveScopeKey),
+      sessionId: sessionId || undefined
     });
   }
 
@@ -8679,6 +8847,11 @@ function resolveRelatedHistoryConversationId(record: ChatRelatedHistoryRecord) {
     return target;
   };
 
+  const explicitSessionId = (record.sessionId ?? "").trim();
+  if (explicitSessionId) {
+    return explicitSessionId;
+  }
+
   const parsed = parseConversationScope(record.scopeKey);
   if (!parsed) {
     return extractConversationId(record.scopeKey) || "unknown";
@@ -8688,7 +8861,7 @@ function resolveRelatedHistoryConversationId(record: ChatRelatedHistoryRecord) {
     const target = parsed.sessionTarget?.trim() || "";
     const normalizedTarget = target.toLowerCase();
     if (!target || normalizedTarget === "main" || normalizedTarget === ownerAgentId) {
-      return ownerAgentId;
+      return "unknown";
     }
     return extractConversationId(target) || target;
   }
@@ -10215,6 +10388,59 @@ function applyChannelQrBindingSnapshot(snapshot: OpenClawChannelQrBindingSession
   channelQrBindingChannelType.value = channelType;
 }
 
+function countConfiguredChannelAccountsInSnapshot(
+  channelTypeRaw: string,
+  snapshot: OpenClawChannelAccountsSnapshotResponse | null | undefined = dashboardChannelSnapshot.value
+) {
+  const normalizedType = normalizeChannelPaneType(channelTypeRaw);
+  if (!snapshot || !normalizedType) {
+    return 0;
+  }
+  let configuredCount = 0;
+  for (const group of snapshot.channels ?? []) {
+    if (normalizeChannelPaneType(group.channelType) !== normalizedType) {
+      continue;
+    }
+    for (const account of group.accounts ?? []) {
+      if (account.configured) {
+        configuredCount += 1;
+      }
+    }
+  }
+  return configuredCount;
+}
+
+async function refreshDashboardAfterQrBindingSuccess(channelTypeRaw: string) {
+  const normalizedType = normalizeChannelPaneType(channelTypeRaw);
+  await refreshDashboardData();
+  if (!normalizedType) {
+    return true;
+  }
+  if (countConfiguredChannelAccountsInSnapshot(normalizedType) > 0) {
+    return true;
+  }
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return false;
+  }
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await sleepMs(1200);
+    try {
+      const snapshot = (await invoke("load_openclaw_channel_accounts_snapshot")) as OpenClawChannelAccountsSnapshotResponse;
+      dashboardChannelSnapshot.value = snapshot;
+      if (relatedResourceModalTarget.value === "channel") {
+        relatedChannelSnapshot.value = snapshot;
+      }
+      if (countConfiguredChannelAccountsInSnapshot(normalizedType, snapshot) > 0) {
+        return true;
+      }
+    } catch {
+      // Ignore transient polling failures after QR binding succeeds.
+    }
+  }
+  return false;
+}
+
 async function pollChannelQrBindingSession(sessionId: string) {
   const invoke = getTauriInvoke();
   const normalizedSessionId = sessionId.trim();
@@ -10231,11 +10457,16 @@ async function pollChannelQrBindingSession(sessionId: string) {
       stopChannelQrBindingPolling();
       channelConfigNotice.value = "二维码绑定成功。";
       channelConfigError.value = "";
-      await refreshDashboardData();
+      const synced = await refreshDashboardAfterQrBindingSuccess(snapshot.channelType || channelQrBindingChannelType.value);
+      if (!synced) {
+        channelConfigNotice.value = "二维码绑定成功，频道列表正在同步中，请稍后点击刷新。";
+      }
       return;
     }
     if (normalizedStatus === "error") {
       stopChannelQrBindingPolling();
+      channelConfigNotice.value = "";
+      channelConfigError.value = (snapshot.detail ?? "").trim() || "二维码绑定失败，请重试。";
     }
   } catch (error) {
     stopChannelQrBindingPolling();
@@ -10288,7 +10519,12 @@ async function handleStartChannelQrBinding() {
     applyChannelQrBindingSnapshot(snapshot, backendType);
     const normalizedStatus = (snapshot.status ?? "").trim().toLowerCase();
     if (normalizedStatus === "success") {
-      await refreshDashboardData();
+      const synced = await refreshDashboardAfterQrBindingSuccess(snapshot.channelType || backendType);
+      channelConfigNotice.value = synced ? "二维码绑定成功。" : "二维码绑定成功，频道列表正在同步中，请稍后点击刷新。";
+      channelConfigError.value = "";
+    } else if (normalizedStatus === "error") {
+      channelConfigNotice.value = "";
+      channelConfigError.value = (snapshot.detail ?? "").trim() || "二维码绑定失败，请重试。";
     } else if (!isChannelQrBindingTerminalStatus(normalizedStatus)) {
       startChannelQrBindingPolling(snapshot.sessionId ?? "");
     }
@@ -10485,6 +10721,14 @@ async function handleOpenChannelConfigDocs() {
     return;
   }
   await openExternalUrl(url);
+}
+
+async function handleOpenChannelQrBindingLink() {
+  const targetUrl = channelQrBindingRawUrl.value.trim();
+  if (!targetUrl) {
+    return;
+  }
+  await openExternalUrl(targetUrl);
 }
 
 async function loadActiveChannelConfigFormValues() {
@@ -12288,15 +12532,26 @@ function closeUtilityModal() {
   resetUtilityLogViewState();
 }
 
-async function refreshUtilityModalData(type: UtilityModalType) {
+async function refreshUtilityModalData(type: UtilityModalType, options: RefreshUtilityModalOptions = {}) {
   const agent = activeAgent.value;
-  utilityModalLoading.value = true;
+  const refreshToken = ++utilityModalRefreshToken;
+  const keepHistoryVisible =
+    type === "history" &&
+    Boolean(options.keepContentVisible) &&
+    chatRelatedHistoryRecords.value.length > 0 &&
+    Boolean(agent);
+  if (!keepHistoryVisible) {
+    utilityModalLoading.value = true;
+  }
   utilityModalError.value = "";
 
   try {
     if (type === "history") {
       const conversationScopeKey = resolveConversationScopeKey(agent?.agentId ?? null, activeChannelChatSession.value);
       if (!agent || !conversationScopeKey) {
+        if (refreshToken !== utilityModalRefreshToken) {
+          return;
+        }
         chatHistoryArchives.value = [];
         chatRelatedHistoryRecords.value = [];
         chatRelatedArchiveRecords.value = [];
@@ -12306,16 +12561,21 @@ async function refreshUtilityModalData(type: UtilityModalType) {
       if (normalizedConversationScopeKey && isOpenClawAgentSessionScope(normalizedConversationScopeKey, agent.agentId)) {
         await syncOpenClawSessionHistoryToLocal(agent, normalizedConversationScopeKey, { applyToActiveConversation: true });
       }
+      if (refreshToken !== utilityModalRefreshToken) {
+        return;
+      }
       const readOptions: ConversationStorageReadOptions = activeChannelChatSession.value ? {} : { legacyAgentId: agent.agentId };
-      chatHistoryArchives.value = loadChatArchives(conversationScopeKey, readOptions);
+      const nextHistoryArchives = loadChatArchives(conversationScopeKey, readOptions);
       const localRelatedRecords = collectRelatedHistoryRecords(agent);
       const openclawRelatedRecords = await loadOpenClawRelatedHistoryRecords(
         agent,
         normalizeStoredConversationScopeKey(conversationScopeKey)
       );
-      if (openclawRelatedRecords.length === 0) {
-        chatRelatedHistoryRecords.value = localRelatedRecords;
-      } else {
+      if (refreshToken !== utilityModalRefreshToken) {
+        return;
+      }
+      let nextRelatedRecords = localRelatedRecords;
+      if (openclawRelatedRecords.length > 0) {
         const mergedMap = new Map<string, ChatRelatedHistoryRecord>();
         for (const record of openclawRelatedRecords) {
           mergedMap.set(record.scopeKey, record);
@@ -12325,19 +12585,20 @@ async function refreshUtilityModalData(type: UtilityModalType) {
             mergedMap.set(record.scopeKey, record);
           }
         }
-        chatRelatedHistoryRecords.value = Array.from(mergedMap.values()).sort((left, right) => {
-          if (left.isActiveScope !== right.isActiveScope) {
-            return left.isActiveScope ? -1 : 1;
-          }
-          return right.updatedAt - left.updatedAt;
-        });
+        nextRelatedRecords = Array.from(mergedMap.values()).sort((left, right) => right.updatedAt - left.updatedAt);
       }
-      chatRelatedArchiveRecords.value = collectRelatedArchiveRecords(agent);
+      const nextRelatedArchiveRecords = collectRelatedArchiveRecords(agent);
+      chatHistoryArchives.value = nextHistoryArchives;
+      chatRelatedHistoryRecords.value = nextRelatedRecords;
+      chatRelatedArchiveRecords.value = nextRelatedArchiveRecords;
       return;
     }
 
     const invoke = getTauriInvoke();
     if (!invoke) {
+      if (refreshToken !== utilityModalRefreshToken) {
+        return;
+      }
       chatRuntimeLogs.value = {
         detail: "当前环境不支持读取运行日志。",
         logs: []
@@ -12345,7 +12606,11 @@ async function refreshUtilityModalData(type: UtilityModalType) {
       utilitySelectedLogId.value = null;
       return;
     }
-    chatRuntimeLogs.value = (await invoke("load_openclaw_message_logs")) as OpenClawMessageLogResponse;
+    const nextRuntimeLogs = (await invoke("load_openclaw_message_logs")) as OpenClawMessageLogResponse;
+    if (refreshToken !== utilityModalRefreshToken) {
+      return;
+    }
+    chatRuntimeLogs.value = nextRuntimeLogs;
     const filteredLogs = runtimeLogItems.value;
     const categorizedLogs = runtimeCategoryLogItems.value;
     const selected = pickLogForDetail(utilitySelectedLogId.value, categorizedLogs);
@@ -12358,9 +12623,14 @@ async function refreshUtilityModalData(type: UtilityModalType) {
       selectUtilityLog(selected);
     }
   } catch (error) {
+    if (refreshToken !== utilityModalRefreshToken) {
+      return;
+    }
     utilityModalError.value = error instanceof Error ? error.message : "加载数据失败。";
   } finally {
-    utilityModalLoading.value = false;
+    if (refreshToken === utilityModalRefreshToken) {
+      utilityModalLoading.value = false;
+    }
   }
 }
 
@@ -13197,7 +13467,7 @@ const currentPaneAgentSections = computed<ChatUserListSection[]>(() => {
     if (sectionAgents.length === 0 && normalizedQuery.value) {
       continue;
     }
-    if (sectionAgents.length > 0 || group.id === CHAT_USER_PINNED_GROUP_ID) {
+    if (sectionAgents.length > 0) {
       sections.push({
         id: group.id,
         title: group.name,
@@ -13448,24 +13718,52 @@ const channelQrBindingConnectSubtitle = computed(() => {
   }
   return "点击按钮会展示微信登录二维码，用手机微信扫码即可完成连接。";
 });
-const channelQrBindingImageUrl = computed(() => {
-  const qrUrl = (channelQrBindingSnapshot.value?.qrUrl ?? "").trim();
-  if (!qrUrl) {
-    return "";
+const channelQrBindingRawUrl = computed(() => (channelQrBindingSnapshot.value?.qrUrl ?? "").trim());
+async function renderChannelQrBindingImage(rawUrl: string) {
+  const targetUrl = rawUrl.trim();
+  channelQrBindingImageRenderToken += 1;
+  const ticket = channelQrBindingImageRenderToken;
+  channelQrBindingImageError.value = "";
+
+  if (!targetUrl) {
+    channelQrBindingImageUrl.value = "";
+    return;
   }
-  const cacheBuster = channelQrBindingSnapshot.value?.updatedAtMs ?? Date.now();
-  return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=${encodeURIComponent(qrUrl)}&t=${cacheBuster}`;
-});
+
+  try {
+    const dataUrl = await QRCode.toDataURL(targetUrl, {
+      width: 260,
+      margin: 0
+    });
+    if (ticket !== channelQrBindingImageRenderToken) {
+      return;
+    }
+    channelQrBindingImageUrl.value = dataUrl;
+  } catch (error) {
+    if (ticket !== channelQrBindingImageRenderToken) {
+      return;
+    }
+    channelQrBindingImageUrl.value = "";
+    channelQrBindingImageError.value = error instanceof Error ? error.message : "二维码渲染失败。";
+  }
+}
+watch(
+  () => [channelQrBindingRawUrl.value, channelQrBindingSnapshot.value?.updatedAtMs ?? 0] as const,
+  ([rawUrl]) => {
+    void renderChannelQrBindingImage(rawUrl);
+  },
+  { immediate: true }
+);
 const channelQrBindingConnecting = computed(() => {
   const normalizedStatus = (channelQrBindingSnapshot.value?.status ?? "").trim().toLowerCase();
-  const hasQrImage = Boolean(channelQrBindingImageUrl.value);
-  return channelQrBindingStarting.value || ((normalizedStatus === "running" || normalizedStatus === "waiting_scan") && !hasQrImage);
+  const hasQrPayload = Boolean(channelQrBindingRawUrl.value);
+  return channelQrBindingStarting.value || ((normalizedStatus === "running" || normalizedStatus === "waiting_scan") && !hasQrPayload);
 });
 const channelQrBindingStartButtonLabel = computed(() => {
   if (channelQrBindingConnecting.value) {
     return "正在连接中...";
   }
-  if (channelQrBindingImageUrl.value) {
+  if (channelQrBindingRawUrl.value) {
     return "重新获取二维码";
   }
   const channelName = activeChannelConfigMeta.value?.name?.trim() || "频道";
@@ -15011,6 +15309,7 @@ watch(
           :class="{ 'is-profile-popover-open': isSidebarProfilePopoverOpen }"
           aria-label="功能模块"
           @mousedown.left="handleRegionMouseDown"
+          @dblclick="handleSidebarDoubleClick"
         >
           <div class="sidebar-top">
             <div class="window-controls-row">
@@ -15034,62 +15333,13 @@ watch(
                   @click="handleWindowExpand"
                 />
               </div>
-              <div class="window-version-chip" aria-label="当前版本">
-                <span class="window-version-chip__version">{{ sidebarSettingsAppVersion }}</span>
-                <span class="window-version-chip__beta" aria-hidden="true">beta</span>
-              </div>
             </div>
-            <div
-              ref="sidebarProfileTriggerRef"
-              class="sidebar-profile"
-              :class="{ 'is-open': isSidebarProfilePopoverOpen }"
-              data-no-window-drag
-              role="button"
-              tabindex="0"
-              aria-label="打开头像设置"
-              :aria-expanded="isSidebarProfilePopoverOpen"
-              aria-haspopup="dialog"
-              @click.stop="toggleSidebarProfilePopover"
-              @keydown.enter.prevent="toggleSidebarProfilePopover"
-              @keydown.space.prevent="toggleSidebarProfilePopover"
-            >
-              <span class="sidebar-profile__avatar" :class="{ 'is-group': activeAgentIsConversationGroup }">
-                <span
-                  v-if="activeAgentIsConversationGroup && activeConversationGroupPreviewMembers.length > 0"
-                  class="group-avatar-stack group-avatar-stack--lg"
-                  aria-hidden="true"
-                >
-                  <span
-                    v-for="member in activeConversationGroupPreviewMembers"
-                    :key="`sidebar-group-avatar-${member.agentId}`"
-                    class="group-avatar-stack__item"
-                  >
-                    <img
-                      v-if="getAgentAvatarUrl(member)"
-                      class="group-avatar-stack__image"
-                      :src="getAgentAvatarUrl(member) ?? undefined"
-                      :alt="`${stripRoleLabel(member.displayName)} 头像`"
-                      loading="lazy"
-                      decoding="async"
-                    />
-                    <span v-else>{{ getAgentInitial(member) }}</span>
-                  </span>
-                </span>
-                <img
-                  v-else-if="activeAgentAvatarUrl"
-                  class="sidebar-profile__avatar-image"
-                  :src="activeAgentAvatarUrl"
-                  :alt="`${sidebarDisplayName} 头像`"
-                  loading="lazy"
-                  decoding="async"
-                />
-                <span v-else>{{ activeAgent ? getAgentInitial(activeAgent) : "M" }}</span>
+            <div class="sidebar-brand" data-no-window-drag aria-label="PetClaw AI">
+              <span class="sidebar-brand__logo-wrap" aria-hidden="true">
+                <img class="sidebar-brand__logo" :src="appLogoUrl" alt="PetClaw logo" />
               </span>
-              <i class="sidebar-profile__status" aria-hidden="true" />
-              <div class="sidebar-profile__meta">
-                <small>在线中</small>
-                <strong>{{ sidebarDisplayName }}</strong>
-              </div>
+              <strong class="sidebar-brand__name">PetClaw AI</strong>
+              <span class="sidebar-brand__beta">Beta</span>
             </div>
           </div>
 
@@ -15258,7 +15508,11 @@ watch(
 
         <template v-if="activeSection === 'chat'">
           <main v-if="isSidebarLogsOpen" class="module-board module-board--utility-logs">
-            <header class="module-board__header module-board__header--utility-logs" @mousedown.left="handleRegionMouseDown">
+            <header
+              class="module-board__header module-board__header--utility-logs"
+              @mousedown.left="handleRegionMouseDown"
+              @dblclick="handleSidebarDoubleClick"
+            >
               <div>
                 <h2>运行日志</h2>
                 <p>{{ utilityModalSubtitle }}</p>
@@ -15504,7 +15758,7 @@ watch(
 
           <template v-else>
             <section class="chat-list">
-            <header class="chat-list__header" @mousedown.left="handleRegionMouseDown">
+            <header class="chat-list__header" @mousedown.left="handleRegionMouseDown" @dblclick="handleSidebarDoubleClick">
               <div class="search-row">
                 <label class="search-box" aria-label="搜索 Agent">
                   <ControlIcon name="search" />
@@ -15867,15 +16121,14 @@ watch(
             @mousedown.stop
           >
             <button
-              v-if="!isChatAgentContextMenuGroupTarget"
               type="button"
               class="agent-context-menu__item"
               role="menuitem"
-              @mousedown.left.stop.prevent="handleChatAgentContextMenuDetail"
-              @keydown.enter.stop.prevent="handleChatAgentContextMenuDetail"
-              @keydown.space.stop.prevent="handleChatAgentContextMenuDetail"
+              @mousedown.left.stop.prevent="handleChatAgentContextMenuInfo"
+              @keydown.enter.stop.prevent="handleChatAgentContextMenuInfo"
+              @keydown.space.stop.prevent="handleChatAgentContextMenuInfo"
             >
-              详情
+              信息
             </button>
             <button
               v-if="!isChatAgentContextMenuGroupTarget"
@@ -15958,7 +16211,7 @@ watch(
           </div>
 
           <section class="chat-window" :class="{ 'chat-window--settings-open': isAgentSettingsOpen }">
-            <header class="chat-window__header" @mousedown.left="handleRegionMouseDown">
+            <header class="chat-window__header" @mousedown.left="handleRegionMouseDown" @dblclick="handleSidebarDoubleClick">
               <div class="chat-agent-header">
                 <div
                   class="chat-agent-header__avatar"
@@ -16295,10 +16548,10 @@ watch(
                   <div v-if="utilityModalLoading" class="utility-modal__empty">正在加载数据...</div>
                   <div v-else-if="!activeAgent" class="utility-modal__empty">请选择用户后查看聊天记录。</div>
                   <template v-else>
-                    <p class="chat-settings-history-section-title">关联记录</p>
+                    <p class="chat-settings-history-section-title">对话记录</p>
                     <div v-if="chatRelatedHistoryRecords.length === 0" class="utility-modal__empty">当前 Agent 暂无关联会话记录。</div>
                     <div v-else>
-                      <div class="utility-history-filter related-schedule-filter" role="tablist" aria-label="关联记录渠道筛选">
+                      <div class="utility-history-filter related-schedule-filter" role="tablist" aria-label="对话记录渠道筛选">
                         <button
                           v-for="option in relatedHistoryChannelFilterOptions"
                           :key="`related-history-channel-filter-${option.id}`"
@@ -16325,7 +16578,7 @@ watch(
                           @keydown.space.prevent="handleRelatedHistoryRecordSelect(record)"
                         >
                           <div class="utility-history-card__head">
-                            <strong>{{ resolveRelatedHistoryScopeLabel(record) }}{{ record.isActiveScope ? "（当前）" : "" }}</strong>
+                            <strong>{{ resolveRelatedHistoryScopeLabel(record) }}{{ isRelatedHistoryRecordActive(record) ? "（当前）" : "" }}</strong>
                             <small>{{ formatDateTime(record.updatedAt) }}</small>
                           </div>
                           <p>{{ record.preview }}</p>
@@ -16686,6 +16939,27 @@ watch(
                   </div>
                   <div class="composer-meta__right">
                     <button
+                      class="composer-new-chat"
+                      type="button"
+                      title="新建聊天"
+                      aria-label="新建聊天"
+                      :disabled="!activeAgent || isSending"
+                      @click="handleNewChat"
+                    >
+                      <ControlIcon name="chat-plus" />
+                      <span>新建聊天</span>
+                    </button>
+                    <button
+                      class="composer-input-action composer-voice-action"
+                      type="button"
+                      title="语音发送（开发中）"
+                      aria-label="语音发送（开发中）"
+                      :disabled="!activeAgent || isSending"
+                      @click="handleVoiceSendClick"
+                    >
+                      <ControlIcon name="mic" />
+                    </button>
+                    <button
                       class="composer-send"
                       type="button"
                       :disabled="!activeAgent || isSending || (!chatInput.trim() && chatAttachments.length === 0)"
@@ -16710,7 +16984,11 @@ watch(
 
         <main v-else class="module-board" :class="{ 'module-board--dashboard': activeSection === 'dashboard' }">
           <template v-if="activeSection === 'dashboard'">
-            <header class="module-board__header module-board__header--dashboard" @mousedown.left="handleRegionMouseDown">
+            <header
+              class="module-board__header module-board__header--dashboard"
+              @mousedown.left="handleRegionMouseDown"
+              @dblclick="handleSidebarDoubleClick"
+            >
               <div>
                 <h2>仪表盘</h2>
                 <p>OpenClaw 运行状态总览 · 最近刷新 {{ formatDateTime(dashboardLastRefreshedAt) }}</p>
@@ -16779,7 +17057,7 @@ watch(
           </template>
 
           <template v-else>
-            <header class="module-board__header" @mousedown.left="handleRegionMouseDown">
+            <header class="module-board__header" @mousedown.left="handleRegionMouseDown" @dblclick="handleSidebarDoubleClick">
               <h2>{{ getModuleTitle(activeSection) }}</h2>
               <p>{{ missionStatement }}</p>
             </header>
@@ -17791,7 +18069,13 @@ watch(
     </div>
 
     <div v-if="isChannelConfigModalOpen && activeChannelConfigMeta" class="related-resource-modal-backdrop" @click.self="closeChannelConfigModal">
-      <section class="related-resource-modal channel-pane-config-modal" role="dialog" aria-modal="true" :aria-label="channelConfigModalTitle">
+      <section
+        class="related-resource-modal channel-pane-config-modal"
+        :class="{ 'channel-pane-config-modal--qr': activeChannelConfigIsQrMode }"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="channelConfigModalTitle"
+      >
         <header class="related-resource-modal__header">
           <div class="channel-pane-config-modal__title-wrap" :class="{ 'is-guided': !activeChannelConfigIsQrMode && isChannelConfigGuidedLayout }">
             <img
@@ -17836,16 +18120,22 @@ watch(
               </button>
               <p v-if="channelQrBindingConnecting" class="channel-qr-bind__connecting">正在连接中，请稍候...</p>
 
-              <div v-if="channelQrBindingImageUrl" class="channel-qr-bind__panel">
+              <div v-if="channelQrBindingRawUrl" class="channel-qr-bind__panel">
                 <div class="channel-qr-bind__image-shell">
-                  <img :src="channelQrBindingImageUrl" :alt="`${activeChannelConfigMeta.name} 绑定二维码`" loading="lazy" decoding="async" />
+                  <img
+                    v-if="channelQrBindingImageUrl"
+                    :src="channelQrBindingImageUrl"
+                    :alt="`${activeChannelConfigMeta.name} 绑定二维码`"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <p v-else class="channel-qr-bind__connecting">二维码渲染中，请稍候...</p>
                 </div>
+                <button class="related-resource-modal__refresh" type="button" @click="handleOpenChannelQrBindingLink">打开扫码链接</button>
               </div>
+              <p v-if="channelQrBindingImageError" class="channel-config-modal__error">二维码渲染失败，可点击“打开扫码链接”完成绑定。</p>
             </section>
 
-            <div class="related-model-form__actions channel-pane-config-form__actions">
-              <button class="related-resource-modal__refresh" type="button" @click="closeChannelConfigModal">关闭</button>
-            </div>
           </template>
 
           <form
@@ -18678,7 +18968,7 @@ watch(
           <div v-if="utilityModalLoading" class="utility-modal__empty">正在加载数据...</div>
 
           <template v-else-if="utilityModalType === 'history'">
-            <div class="utility-modal__empty">归档功能已移除，请在聊天记录面板查看关联记录。</div>
+            <div class="utility-modal__empty">归档功能已移除，请在聊天记录面板查看对话记录。</div>
           </template>
 
           <template v-else>
@@ -19780,7 +20070,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-p
   padding: 10px 12px 10px;
   border-right: 1px solid #eceff4;
   background: rgba(244, 249, 255, 0.85);
-  cursor: move;
+  cursor: default;
 }
 
 .sidebar-icons.is-profile-popover-open {
@@ -19792,8 +20082,110 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-p
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
   padding: 0 0 10px;
+}
+
+.sidebar-brand {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 11px;
+  border: 1px solid rgba(188, 202, 228, 0.82);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.sidebar-brand__logo-wrap {
+  width: 22px;
+  height: 22px;
+  border-radius: 0;
+  overflow: visible;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.sidebar-brand__logo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.sidebar-brand__name {
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  color: #161f33;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-brand__beta {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: #4a5a78;
+  border: 1px solid rgba(178, 194, 222, 0.86);
+  border-radius: 999px;
+  background: rgba(239, 243, 250, 0.9);
+  padding: 2px 6px;
+}
+
+.sidebar-top__new-chat {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid rgba(187, 202, 228, 0.86);
+  border-radius: 11px;
+  background: rgba(252, 253, 255, 0.94);
+  color: #4a5872;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 180ms ease, box-shadow 180ms ease, color 180ms ease;
+}
+
+.sidebar-top__new-chat svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-top__new-chat:hover:not(:disabled) {
+  color: #315ba6;
+  border-color: rgba(128, 161, 218, 0.88);
+  box-shadow: 0 8px 16px rgba(101, 130, 179, 0.2);
+  transform: translateY(-1px);
+}
+
+.sidebar-top__new-chat:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.sidebar-top__new-chat:focus-visible {
+  outline: none;
+  box-shadow: var(--cp-focus-ring);
 }
 
 .sidebar-profile {
@@ -20819,7 +21211,7 @@ html[data-app-theme-resolved="dark"] .window-version-chip__beta {
   padding: 16px 14px 10px;
   border-bottom: 1px solid #e8ebf1;
   background: #fdfdfd;
-  cursor: move;
+  cursor: default;
 }
 
 html[data-app-theme-preset="frosted"] .window-shell {
@@ -20876,7 +21268,8 @@ html[data-app-theme-preset="frosted"] .chat-list__header {
   background: rgba(255, 255, 255, 0.54);
 }
 
-html[data-app-theme-preset="frosted"] .sidebar-profile,
+html[data-app-theme-preset="frosted"] .sidebar-brand,
+html[data-app-theme-preset="frosted"] .sidebar-top__new-chat,
 html[data-app-theme-preset="frosted"] .sidebar-theme-switcher,
 html[data-app-theme-preset="frosted"] .chat-window__header,
 html[data-app-theme-preset="frosted"] .chat-window__composer,
@@ -22001,7 +22394,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   gap: 12px;
   border-bottom: 1px solid #eceff4;
   background: #ffffff;
-  cursor: move;
+  cursor: default;
 }
 
 .chat-agent-header {
@@ -23663,6 +24056,72 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   opacity: 0.8;
 }
 
+.composer-new-chat {
+  height: 28px;
+  border: 1px solid #c8d4e8;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #eef4ff, #e2ecff);
+  color: #2a57bb;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.composer-new-chat svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  --control-icon-accent: #3e7dff;
+}
+
+.composer-new-chat:hover:not(:disabled) {
+  border-color: #b5c8ea;
+  background: linear-gradient(145deg, #e8f0ff, #dce8ff);
+  color: #214ca8;
+  box-shadow: 0 6px 14px rgba(83, 113, 173, 0.16);
+}
+
+.composer-new-chat:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.composer-new-chat:focus-visible {
+  outline: none;
+  box-shadow: var(--cp-focus-ring);
+}
+
+.composer-voice-action {
+  border: 1px solid #d4dbe7;
+  border-radius: 999px;
+  background: #f4f6fa;
+}
+
+.composer-voice-action svg,
+.composer-send svg {
+  width: 14px;
+  height: 14px;
+}
+
+.composer-voice-action svg {
+  stroke-width: 2.1;
+}
+
+.composer-send svg {
+  stroke-width: 2.2;
+}
+
 .composer-meta {
   display: flex;
   align-items: center;
@@ -23785,7 +24244,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .module-board__header {
-  cursor: move;
+  cursor: default;
 }
 
 .module-board__header--dashboard {
@@ -27634,6 +28093,81 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   width: min(760px, calc(100vw - 40px));
 }
 
+.channel-pane-config-modal.channel-pane-config-modal--qr {
+  width: min(500px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  border-radius: 16px;
+  border-color: #e6e9f1;
+  box-shadow: 0 22px 52px rgba(20, 27, 42, 0.3);
+}
+
+.channel-pane-config-modal--qr .related-resource-modal__header {
+  padding: 20px 16px 12px;
+  border-bottom-color: #e9edf4;
+}
+
+.channel-pane-config-modal--qr .related-resource-modal__header strong {
+  color: #1f2937;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.22;
+}
+
+.channel-pane-config-modal--qr .related-resource-modal__header p {
+  margin-top: 8px;
+  color: #7b7f8a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.channel-pane-config-modal--qr .related-resource-modal__close {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #d7dfe9;
+  border-radius: 10px;
+  background: #f1f5fc;
+  color: #64748b;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.channel-pane-config-modal--qr .related-resource-modal__close:hover:not(:disabled) {
+  border-color: #c8d3e2;
+  background: #e9eff8;
+  color: #4e5f78;
+}
+
+.channel-pane-config-modal--qr .related-resource-modal__body {
+  padding: 0 16px 16px;
+}
+
+.channel-pane-config-modal--qr .channel-qr-bind {
+  gap: 12px;
+}
+
+.channel-pane-config-modal--qr .channel-qr-bind__start {
+  min-height: 48px;
+  border-radius: 10px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.channel-pane-config-modal--qr .channel-qr-bind__panel {
+  padding: 12px;
+  border-color: #e1e7f1;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.channel-pane-config-modal--qr .channel-qr-bind__image-shell {
+  width: min(230px, 100%);
+  padding: 8px;
+  border-color: #e8edf5;
+  border-radius: 12px;
+}
+
 .channel-pane-config-modal__title-wrap {
   min-width: 0;
 }
@@ -29556,6 +30090,33 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   background: var(--cp-sidebar-bg);
 }
 
+.sidebar-brand {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.sidebar-brand__name {
+  color: var(--cp-text-strong);
+}
+
+.sidebar-brand__beta {
+  color: var(--cp-soft-accent-text-strong);
+  border-color: var(--cp-border);
+  background: var(--cp-soft-accent-bg);
+}
+
+.sidebar-top__new-chat {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+  color: var(--cp-text);
+}
+
+.sidebar-top__new-chat:hover:not(:disabled) {
+  color: var(--cp-accent-dark);
+  border-color: var(--cp-border-strong);
+  box-shadow: 0 8px 16px var(--cp-shadow);
+}
+
 .sidebar-profile {
   background: var(--cp-surface-elevated);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.84);
@@ -30190,6 +30751,11 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   color: var(--cp-text-muted);
 }
 
+.composer-voice-action {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
 .composer-attachment-chip button:hover,
 .composer-input-action:hover,
 .composer-model-chip--trigger:hover:not(:disabled),
@@ -30209,6 +30775,17 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .composer-send:disabled {
   background: #c5cfdf;
   color: #eff3fa;
+}
+
+.composer-new-chat {
+  border-color: var(--cp-border);
+  background: var(--cp-hover-bg);
+  color: var(--cp-accent-dark);
+}
+
+.composer-new-chat:hover:not(:disabled) {
+  border-color: var(--cp-border-strong);
+  background: var(--cp-active-bg);
 }
 
 .utility-log-filter span {
@@ -30507,6 +31084,10 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   box-shadow: var(--cp-focus-ring);
 }
 
+html[data-app-theme-resolved="dark"] .sidebar-brand {
+  box-shadow: inset 0 1px 0 rgba(173, 191, 226, 0.12);
+}
+
 html[data-app-theme-resolved="dark"] .sidebar-profile {
   box-shadow: inset 0 1px 0 rgba(173, 191, 226, 0.12);
 }
@@ -30651,6 +31232,16 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
 
   .sidebar-icons {
     padding: 8px 8px 10px;
+  }
+
+  .sidebar-top {
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+
+  .sidebar-brand,
+  .sidebar-top__new-chat {
+    display: none;
   }
 
   .sidebar-profile {
@@ -30957,6 +31548,28 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
     height: 30px;
     border-radius: 8px;
     padding: 4px;
+  }
+
+  .channel-pane-config-modal.channel-pane-config-modal--qr {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .channel-pane-config-modal--qr .related-resource-modal__header {
+    padding: 16px 14px 10px;
+  }
+
+  .channel-pane-config-modal--qr .related-resource-modal__header strong {
+    font-size: 18px;
+  }
+
+  .channel-pane-config-modal--qr .related-resource-modal__body {
+    padding: 0 14px 14px;
+  }
+
+  .channel-pane-config-modal--qr .channel-qr-bind__start {
+    min-height: 44px;
+    font-size: 18px;
   }
 
   .channel-pane-guide__install-actions {

@@ -15,6 +15,7 @@ export type ControlIconName =
   | "web"
   | "search"
   | "plus"
+  | "chat-plus"
   | "chevron-down"
   | "expand"
   | "trash"
@@ -25,6 +26,7 @@ export type ControlIconName =
   | "edit"
   | "bolt"
   | "send"
+  | "mic"
   | "eye"
   | "eye-off";
 
@@ -130,6 +132,11 @@ withDefaults(
       <path d="M12 5v14M5 12h14" />
     </g>
 
+    <g v-else-if="name === 'chat-plus'">
+      <path d="M7.2 5.2h9.6A2.8 2.8 0 0 1 19.6 8v5A2.8 2.8 0 0 1 16.8 15.8h-4.9l-3.7 3v-3H7.2A2.8 2.8 0 0 1 4.4 13V8a2.8 2.8 0 0 1 2.8-2.8Z" />
+      <path class="accent-stroke" d="M13.8 7.6v3.2M12.2 9.2h3.2" />
+    </g>
+
     <g v-else-if="name === 'chevron-down'">
       <path d="m7 10 5 5 5-5" />
     </g>
@@ -185,6 +192,13 @@ withDefaults(
       <path d="M12 19V5" />
       <path d="m7 10 5-5 5 5" />
       <path class="accent-stroke" d="M12 19h.01" />
+    </g>
+
+    <g v-else-if="name === 'mic'">
+      <rect x="9" y="4" width="6" height="11" rx="3" />
+      <path d="M6.8 11.2a5.2 5.2 0 1 0 10.4 0" />
+      <path d="M12 16.4V20" />
+      <path d="M9.5 20h5" />
     </g>
 
     <g v-else-if="name === 'eye'">
