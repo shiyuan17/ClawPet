@@ -1117,6 +1117,9 @@ const isChannelPaneItemContextMenuOpen = ref(false);
 const channelPaneItemContextMenuRef = ref<HTMLElement | null>(null);
 const channelPaneItemContextMenuTarget = ref<ChannelPaneChatItem | null>(null);
 const channelPaneItemContextMenuPosition = ref({ x: 0, y: 0 });
+const isChannelPaneDeleteConfirmModalOpen = ref(false);
+const channelPaneDeleteConfirmTarget = ref<ChannelPaneChatItem | null>(null);
+const isChannelPaneDeleteConfirming = ref(false);
 const isChatAgentDeleteConfirmModalOpen = ref(false);
 const chatAgentDeleteConfirmTarget = ref<AgentListItem | null>(null);
 const isChatAgentDeleteConfirming = ref(false);
@@ -1269,12 +1272,15 @@ const feishuQrPollIntervalSeconds = ref(5);
 const feishuQrExpiresAtMs = ref<number | null>(null);
 const feishuQrTickMs = ref(Date.now());
 const feishuOpenclawUserCode = ref("");
+const feishuTargetAccountId = ref(FEISHU_DEFAULT_ACCOUNT_ID);
+const feishuTargetAccountName = ref("");
 let feishuQrCountdownTimer = 0;
 let feishuPluginPrepared = false;
 const isChannelConfigModalOpen = ref(false);
 const channelConfigCatalogId = ref("");
 const channelConfigBackendType = ref("");
 const channelConfigAccountId = ref("");
+const channelConfigDraftAccountName = ref("");
 const channelConfigAllowEditAccountId = ref(false);
 const channelConfigExistingAccountIds = ref<string[]>([]);
 const channelConfigForm = ref<Record<string, string>>({});
@@ -3977,8 +3983,77 @@ function stripLeadingUntrustedMetadataEnvelope(text: string) {
   return rest.trimStart();
 }
 
+function stripLeadingMessageIdLabel(text: string) {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const markerPattern = /^\s*\[(?:message|msg)[_\s-]?id\s*[:：]\s*[^\]\n]+\]\s*(?:\n+)?/i;
+  let rest = normalized;
+  let previous = "";
+  while (rest !== previous) {
+    previous = rest;
+    rest = rest.replace(markerPattern, "");
+  }
+  return rest.trimStart();
+}
+
+function stripLeadingChannelSenderIdLabel(text: string) {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const labeledSenderPattern =
+    /^\s*(?:feishu:(?:direct|group):)?(?:user:|chat:)?((?:ou|oc)_[a-z0-9]{8,})\s*(?:[:：-]\s*|\s+)([\s\S]+)$/i;
+  const labeledSenderMatch = normalized.match(labeledSenderPattern);
+  if (labeledSenderMatch?.[2]?.trim()) {
+    return labeledSenderMatch[2].trimStart();
+  }
+
+  const compactSenderPattern = /^\s*((?:ou|oc)_[a-z0-9]{16,})(?=[\u4e00-\u9fff])/i;
+  const compactSenderMatch = normalized.match(compactSenderPattern);
+  if (compactSenderMatch?.[1]) {
+    const rest = normalized.slice(compactSenderMatch[0].length).trimStart();
+    if (rest) {
+      return rest;
+    }
+  }
+
+  return text;
+}
+
+function extractLatestUserLineFromPromptEnvelope(text: string) {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const markerPattern = /\[Current message - respond to this\]/i;
+  const markerMatch = markerPattern.exec(normalized);
+  const scope = markerMatch ? normalized.slice(markerMatch.index + markerMatch[0].length) : normalized;
+
+  const userLinePattern = /^(?:User|用户)\s*[:：]\s*(.+)$/gim;
+  let lastContent = "";
+  let matched: RegExpExecArray | null = null;
+  while ((matched = userLinePattern.exec(scope)) !== null) {
+    const content = (matched[1] ?? "").trim();
+    if (content) {
+      lastContent = content;
+    }
+  }
+  return lastContent;
+}
+
+function stripChatContextEnvelope(text: string) {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const hasContextHeader = /^\s*\[Chat messages since your last reply - for context\]/i.test(normalized);
+  const hasCurrentMarker = /\[Current message - respond to this\]/i.test(normalized);
+  const hasConversationTurns = /(?:^|\n)(?:User|用户)\s*[:：]/i.test(normalized) && /(?:^|\n)(?:Assistant|助手)\s*[:：]/i.test(normalized);
+  if (!hasContextHeader && !hasCurrentMarker && !hasConversationTurns) {
+    return text;
+  }
+
+  const extractedCurrentMessage = extractLatestUserLineFromPromptEnvelope(normalized);
+  if (extractedCurrentMessage) {
+    return extractedCurrentMessage;
+  }
+  return text;
+}
+
 function sanitizeMessageTextForDisplay(rawText: string) {
-  return stripLeadingUntrustedMetadataEnvelope(rawText).trim();
+  return stripChatContextEnvelope(
+    stripLeadingChannelSenderIdLabel(stripLeadingMessageIdLabel(stripLeadingUntrustedMetadataEnvelope(rawText)))
+  ).trim();
 }
 
 function buildOpenClawMessageContent(message: AgentChatMessage) {
@@ -4972,6 +5047,18 @@ function closeChannelPaneItemContextMenu() {
   channelPaneItemContextMenuTarget.value = null;
 }
 
+function closeChannelPaneDeleteConfirmModal() {
+  if (isChannelPaneDeleteConfirming.value) {
+    return;
+  }
+  forceCloseChannelPaneDeleteConfirmModal();
+}
+
+function forceCloseChannelPaneDeleteConfirmModal() {
+  isChannelPaneDeleteConfirmModalOpen.value = false;
+  channelPaneDeleteConfirmTarget.value = null;
+}
+
 function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent) {
   const pane = activeAgentPaneTab.value;
   if (pane !== "staff" && pane !== "group") {
@@ -5011,8 +5098,8 @@ function handleChannelPaneChatItemContextMenu(item: ChannelPaneChatItem, event: 
   event.stopPropagation();
   closeChatQuickCreateMenu();
   closeChatAgentContextMenu();
-  const menuWidth = 136;
-  const menuHeight = 44;
+  const menuWidth = 152;
+  const menuHeight = 84;
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
   const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
   const fallbackX = Math.max(8, event.clientX);
@@ -5080,26 +5167,73 @@ function handleChannelPaneItemContextMenuDocumentKeyDown(event: KeyboardEvent) {
   closeChannelPaneItemContextMenu();
 }
 
-async function handleChannelPaneItemContextMenuDelete() {
-  const invoke = getTauriInvoke();
+function handleChannelPaneItemContextMenuDelete() {
   const target = channelPaneItemContextMenuTarget.value;
   closeChannelPaneItemContextMenu();
   if (!target) {
+    showChatAgentDeleteNotice("未找到可删除的频道账号，请重试。");
+    return;
+  }
+  channelPaneDeleteConfirmTarget.value = { ...target };
+  isChannelPaneDeleteConfirmModalOpen.value = true;
+}
+
+async function handleChannelPaneItemContextMenuRename() {
+  const target = channelPaneItemContextMenuTarget.value;
+  closeChannelPaneItemContextMenu();
+  if (!target) {
+    showChatAgentDeleteNotice("未找到可修改名称的频道账号，请重试。");
+    return;
+  }
+  if (typeof window === "undefined") {
+    showChatAgentDeleteNotice("当前环境不支持修改频道账号名称。");
     return;
   }
 
-  if (typeof window !== "undefined" && typeof window.confirm === "function") {
-    const confirmed = window.confirm(`确定删除频道「${target.name}」账号「${target.accountId}」吗？`);
-    if (!confirmed) {
-      return;
-    }
+  const input = window.prompt("输入新的机器人名称（最多 24 个字符）", target.name);
+  if (input === null) {
+    return;
   }
+  const normalizedName = normalizeChatUserGroupName(input);
+  if (!normalizedName) {
+    showChatAgentDeleteNotice("请输入有效的机器人名称。");
+    return;
+  }
+
+  try {
+    await renameChannelAccount(target.channelType, target.accountId, normalizedName);
+    await refreshDashboardData();
+    if (activeChannelChatSession.value?.id === target.id) {
+      activeChannelChatSession.value = {
+        ...activeChannelChatSession.value,
+        name: normalizedName
+      };
+    }
+    showChatAgentDeleteNotice(`已将「${target.accountId}」重命名为「${normalizedName}」。`);
+  } catch (error) {
+    showChatAgentDeleteNotice(resolveUnknownErrorMessage(error, "修改频道账号名称失败。"));
+  }
+}
+
+async function handleChannelPaneDeleteConfirmSubmit() {
+  if (isChannelPaneDeleteConfirming.value) {
+    return;
+  }
+  const target = channelPaneDeleteConfirmTarget.value;
+  if (!target) {
+    forceCloseChannelPaneDeleteConfirmModal();
+    return;
+  }
+
+  const invoke = getTauriInvoke();
 
   if (!invoke) {
     showChatAgentDeleteNotice("当前环境不支持删除频道配置。");
+    forceCloseChannelPaneDeleteConfirmModal();
     return;
   }
 
+  isChannelPaneDeleteConfirming.value = true;
   try {
     await invoke("delete_openclaw_channel_account_config", {
       payload: {
@@ -5121,8 +5255,11 @@ async function handleChannelPaneItemContextMenuDelete() {
       }
     }
     showChatAgentDeleteNotice(`已删除频道「${target.name}」账号「${target.accountId}」。`);
+    forceCloseChannelPaneDeleteConfirmModal();
   } catch (error) {
     showChatAgentDeleteNotice(resolveUnknownErrorMessage(error, "删除频道配置失败。"));
+  } finally {
+    isChannelPaneDeleteConfirming.value = false;
   }
 }
 
@@ -7629,6 +7766,38 @@ function parseConversationScope(scopeKey: string): ParsedConversationScope | nul
   };
 }
 
+function shouldHideFeishuConversationTargetLabel(rawValue: string) {
+  const normalized = rawValue.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("feishu:direct:") || normalized.startsWith("feishu:group:")) {
+    return true;
+  }
+  if (normalized.startsWith("user:") || normalized.startsWith("chat:")) {
+    return true;
+  }
+  return normalized.startsWith("ou_") || normalized.startsWith("oc_");
+}
+
+function resolveAgentSessionTargetLabel(sessionTargetRaw: string) {
+  const sessionTarget = sessionTargetRaw.trim();
+  if (!sessionTarget) {
+    return "默认会话";
+  }
+  const firstSegment = sessionTarget.split(":")[0]?.trim() || "";
+  const normalizedChannelType = normalizeChannelPaneType(firstSegment);
+  if (!normalizedChannelType || !isLikelyChannelConversationTarget(sessionTarget)) {
+    return sessionTarget;
+  }
+  if (!shouldHideFeishuConversationTargetLabel(sessionTarget)) {
+    return sessionTarget;
+  }
+  const catalog = resolveChannelConfigCatalog(normalizedChannelType);
+  const channelName = catalog?.name?.trim() || normalizedChannelType;
+  return `${channelName}会话`;
+}
+
 function resolveConversationScopeLabel(scopeKey: string) {
   const parsed = parseConversationScope(scopeKey);
   if (!parsed) {
@@ -7638,14 +7807,21 @@ function resolveConversationScopeLabel(scopeKey: string) {
     const sessionTarget = parsed.sessionTarget?.trim().toLowerCase() || "";
     const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase();
     if (sessionTarget && sessionTarget !== "main" && sessionTarget !== ownerAgentId) {
-      return parsed.sessionTarget?.trim() || "默认会话";
+      return resolveAgentSessionTargetLabel(parsed.sessionTarget ?? "");
     }
     return "默认会话";
   }
   const catalog = resolveChannelConfigCatalog(parsed.channelType);
   const channelName = catalog?.name?.trim() || parsed.channelType || "频道";
+  const normalizedChannelType = normalizeChannelPaneType(parsed.channelType);
   const accountId = parsed.accountId.trim();
-  return accountId ? `${channelName} / ${accountId}` : channelName;
+  if (!accountId) {
+    return channelName;
+  }
+  if (normalizedChannelType === FEISHU_CHANNEL_ID && shouldHideFeishuConversationTargetLabel(accountId)) {
+    return `${channelName}会话`;
+  }
+  return `${channelName} / ${accountId}`;
 }
 
 function buildRelatedHistoryDefaultChannelId(ownerAgentId: string) {
@@ -7756,6 +7932,151 @@ function normalizeChannelMessageMirrorTarget(channelTypeRaw: string, rawTarget: 
   return target;
 }
 
+function resolveChannelSnapshotGroup(channelTypeRaw: string) {
+  const normalizedType = normalizeChannelPaneType(channelTypeRaw);
+  const rawType = channelTypeRaw.trim().toLowerCase();
+  const groups = dashboardChannelSnapshot.value?.channels ?? [];
+  return (
+    groups.find((group) => {
+      const groupNormalizedType = normalizeChannelPaneType(group.channelType);
+      const groupRawType = (group.channelType ?? "").trim().toLowerCase();
+      if (normalizedType) {
+        return groupNormalizedType === normalizedType;
+      }
+      return groupRawType === rawType;
+    }) ?? null
+  );
+}
+
+function resolveBoundChannelAccountId(channelTypeRaw: string, ownerAgentIdRaw: string) {
+  const ownerAgentId = ownerAgentIdRaw.trim().toLowerCase();
+  if (!ownerAgentId) {
+    return "";
+  }
+
+  const group = resolveChannelSnapshotGroup(channelTypeRaw);
+  if (!group) {
+    return "";
+  }
+
+  const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+  if (accounts.length === 0) {
+    return "";
+  }
+  const configuredAccounts = accounts.filter((account) => account.configured);
+  const preferredAccounts = configuredAccounts.length > 0 ? configuredAccounts : accounts;
+  const boundAccount = preferredAccounts.find((account) => {
+    const boundAgentId = (account.agentId ?? "").trim();
+    return boundAgentId.length > 0 && equalsIgnoreCase(boundAgentId, ownerAgentId);
+  });
+  const boundAccountId = boundAccount?.accountId?.trim() ?? "";
+  if (boundAccountId) {
+    return boundAccountId;
+  }
+
+  const defaultAccountId = (group.defaultAccountId ?? "").trim();
+  if (defaultAccountId) {
+    const defaultAccount =
+      preferredAccounts.find((account) => equalsIgnoreCase(account.accountId, defaultAccountId)) ??
+      accounts.find((account) => equalsIgnoreCase(account.accountId, defaultAccountId));
+    const resolvedDefaultAccountId = defaultAccount?.accountId?.trim() ?? "";
+    if (resolvedDefaultAccountId) {
+      return resolvedDefaultAccountId;
+    }
+    return defaultAccountId;
+  }
+
+  return preferredAccounts[0]?.accountId?.trim() ?? accounts[0]?.accountId?.trim() ?? "";
+}
+
+function resolveChannelMirrorAccountId(
+  channelTypeRaw: string,
+  accountIdCandidateRaw: string | null | undefined,
+  ownerAgentIdRaw: string,
+  options: { preferBoundForOwner?: boolean } = {}
+) {
+  const candidateAccountId = (accountIdCandidateRaw ?? "").trim();
+  const candidateLooksLikeConversationTarget =
+    candidateAccountId.length > 0 &&
+    isLikelyChannelConversationTarget(candidateAccountId) &&
+    candidateAccountId.includes(":");
+  const group = resolveChannelSnapshotGroup(channelTypeRaw);
+  const groupAccounts = Array.isArray(group?.accounts) ? group.accounts : [];
+  const candidateExistsInSnapshot =
+    candidateAccountId.length > 0 &&
+    groupAccounts.some((account) => equalsIgnoreCase(account.accountId, candidateAccountId));
+  const boundAccountId = resolveBoundChannelAccountId(channelTypeRaw, ownerAgentIdRaw);
+
+  if (options.preferBoundForOwner && boundAccountId) {
+    return boundAccountId;
+  }
+
+  if (candidateAccountId && !candidateLooksLikeConversationTarget) {
+    if (!group || candidateExistsInSnapshot) {
+      return candidateAccountId;
+    }
+  }
+
+  if (boundAccountId) {
+    return boundAccountId;
+  }
+
+  if (candidateAccountId && !candidateLooksLikeConversationTarget) {
+    return candidateAccountId;
+  }
+
+  const defaultAccountId = (group?.defaultAccountId ?? "").trim();
+  if (defaultAccountId) {
+    return defaultAccountId;
+  }
+  const firstSnapshotAccountId = groupAccounts[0]?.accountId?.trim() ?? "";
+  if (firstSnapshotAccountId) {
+    return firstSnapshotAccountId;
+  }
+  return "default";
+}
+
+function collectChannelMirrorFallbackAccountIds(channelTypeRaw: string, primaryAccountIdRaw: string) {
+  const primaryAccountId = primaryAccountIdRaw.trim();
+  const group = resolveChannelSnapshotGroup(channelTypeRaw);
+  const accounts = Array.isArray(group?.accounts) ? group.accounts : [];
+  if (accounts.length === 0) {
+    return [] as string[];
+  }
+
+  const configuredAccounts = accounts.filter((account) => account.configured);
+  const source = configuredAccounts.length > 0 ? configuredAccounts : accounts;
+  const normalizedPrimaryAccountId = primaryAccountId.toLowerCase();
+  const normalizedChannelType = normalizeChannelPaneType(channelTypeRaw);
+  const ordered = [...source].sort((left, right) => {
+    if (normalizedChannelType === FEISHU_CHANNEL_ID) {
+      if (left.isDefault && !right.isDefault) {
+        return 1;
+      }
+      if (!left.isDefault && right.isDefault) {
+        return -1;
+      }
+    }
+    return left.accountId.localeCompare(right.accountId, "zh-CN");
+  });
+
+  const deduped = new Set<string>();
+  const results: string[] = [];
+  for (const account of ordered) {
+    const accountId = account.accountId.trim();
+    if (!accountId) {
+      continue;
+    }
+    const normalizedAccountId = accountId.toLowerCase();
+    if (normalizedAccountId === normalizedPrimaryAccountId || deduped.has(normalizedAccountId)) {
+      continue;
+    }
+    deduped.add(normalizedAccountId);
+    results.push(accountId);
+  }
+  return results;
+}
+
 function resolveChannelMessageMirrorTarget(
   conversationScopeKey: string,
   channelSession: ChannelPaneChatItem | null
@@ -7769,10 +8090,21 @@ function resolveChannelMessageMirrorTarget(
     channelSession?.channelType === VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE
       ? "default"
       : channelSession?.accountId?.trim() || "default";
-  const resolveWithChannel = (channelTypeRaw: string, rawTarget: string, accountId: string | null | undefined) => {
+  const resolveWithChannel = (
+    channelTypeRaw: string,
+    rawTarget: string,
+    accountId: string | null | undefined,
+    ownerAgentIdRaw: string,
+    options: { preferBoundForOwner?: boolean } = {}
+  ) => {
     const channelType = normalizeChannelPaneType(channelTypeRaw);
     const target = normalizeChannelMessageMirrorTarget(channelType, rawTarget);
-    const resolvedAccountId = (accountId ?? sessionAccountId).trim() || "default";
+    const resolvedAccountId = resolveChannelMirrorAccountId(
+      channelType,
+      accountId ?? sessionAccountId,
+      ownerAgentIdRaw,
+      options
+    );
     if (!channelType || !target || target.toLowerCase() === "main") {
       return null;
     }
@@ -7794,7 +8126,9 @@ function resolveChannelMessageMirrorTarget(
     const firstSegment = sessionTarget.split(":")[0]?.trim() || "";
     const inferredChannelFromTarget = normalizeChannelPaneType(firstSegment);
     if (inferredChannelFromTarget) {
-      return resolveWithChannel(inferredChannelFromTarget, sessionTarget, sessionAccountId);
+      return resolveWithChannel(inferredChannelFromTarget, sessionTarget, sessionAccountId, parsed.ownerAgentId, {
+        preferBoundForOwner: true
+      });
     }
 
     const channelFromSession =
@@ -7804,7 +8138,9 @@ function resolveChannelMessageMirrorTarget(
     if (!channelFromSession || !isLikelyChannelConversationTarget(sessionTarget)) {
       return null;
     }
-    return resolveWithChannel(channelFromSession, sessionTarget, sessionAccountId);
+    return resolveWithChannel(channelFromSession, sessionTarget, sessionAccountId, parsed.ownerAgentId, {
+      preferBoundForOwner: true
+    });
   }
 
   const channelType = normalizeChannelPaneType(parsed.channelType);
@@ -7821,7 +8157,7 @@ function resolveChannelMessageMirrorTarget(
     target = `user:${accountId}`;
   }
 
-  return resolveWithChannel(channelType, target, accountId);
+  return resolveWithChannel(channelType, target, accountId, parsed.ownerAgentId);
 }
 
 function buildChannelMessageMirrorContent(text: string, attachments: ChatComposerAttachment[]) {
@@ -7894,6 +8230,24 @@ async function dispatchChannelMessageMirror(
       payload: commandPayload
     });
   } catch (error) {
+    const fallbackAccountIds =
+      target.channelType === FEISHU_CHANNEL_ID ? collectChannelMirrorFallbackAccountIds(target.channelType, target.accountId) : [];
+    if (fallbackAccountIds.length > 0) {
+      for (const fallbackAccountId of fallbackAccountIds) {
+        try {
+          await invoke("send_openclaw_channel_message", {
+            payload: {
+              ...commandPayload,
+              accountId: fallbackAccountId
+            }
+          });
+          return;
+        } catch {
+          // try next fallback account
+        }
+      }
+    }
+
     const errorText =
       error instanceof Error
         ? error.message
@@ -8011,7 +8365,7 @@ async function loadOpenClawSessionHistory(agent: AgentListItem, scopeKey: string
         status: "done" as ChatStatus,
         createdAt: typeof item.createdAtMs === "number" && Number.isFinite(item.createdAtMs) ? item.createdAtMs : Date.now()
       }))
-      .filter((item) => item.text.trim().length > 0 || item.role === "assistant" || item.role === "user");
+      .filter((item) => item.text.trim().length > 0);
   } catch {
     return [] as AgentChatMessage[];
   }
@@ -9508,19 +9862,24 @@ function syncFeishuFormValues(values: Record<string, unknown> | null | undefined
   feishuAppSecret.value = typeof appSecret === "string" ? appSecret : "";
 }
 
-async function loadFeishuChannelFormValues() {
+async function loadFeishuChannelFormValues(accountId: string) {
   const invoke = getTauriInvoke();
   if (!invoke) {
     throw new Error("当前环境不支持读取飞书配置。");
   }
+  const normalizedAccountId = accountId.trim() || FEISHU_DEFAULT_ACCOUNT_ID;
   const values = (await invoke("load_openclaw_channel_form_values", {
     channelType: FEISHU_CHANNEL_ID,
-    accountId: FEISHU_DEFAULT_ACCOUNT_ID
+    accountId: normalizedAccountId
   })) as Record<string, unknown>;
   syncFeishuFormValues(values);
 }
 
-async function openFeishuConnectModal() {
+async function openFeishuConnectModal(options?: {
+  accountId?: string;
+  accountName?: string;
+  loadExisting?: boolean;
+}) {
   closeProxyConfigModal();
   closeRelatedResourceModal();
   closeChannelConfigModal();
@@ -9537,12 +9896,19 @@ async function openFeishuConnectModal() {
   feishuManualExpanded.value = false;
   feishuAppSecretVisible.value = false;
   feishuQrRequesting.value = false;
+  feishuTargetAccountId.value = options?.accountId?.trim() || FEISHU_DEFAULT_ACCOUNT_ID;
+  feishuTargetAccountName.value = normalizeChatUserGroupName(options?.accountName ?? "");
   resetFeishuQrState();
+  syncFeishuFormValues(null);
+  const loadExisting = options?.loadExisting !== false;
 
   try {
-    await loadFeishuChannelFormValues();
+    if (loadExisting) {
+      await loadFeishuChannelFormValues(feishuTargetAccountId.value);
+    }
     const group = getFeishuChannelGroup(dashboardChannelSnapshot.value);
-    const hasConfiguredFeishuAccount = Boolean(group?.accounts.some((account) => account.configured));
+    const targetAccount = group?.accounts.find((account) => equalsIgnoreCase(account.accountId, feishuTargetAccountId.value)) ?? null;
+    const hasConfiguredFeishuAccount = Boolean(targetAccount?.configured);
     const hasRunningFeishuAccount = Boolean(
       group?.accounts.some((account) => {
         const normalizedStatus = (account.status ?? "").trim().toLowerCase();
@@ -9551,6 +9917,11 @@ async function openFeishuConnectModal() {
     );
     feishuPluginPrepared = hasRunningFeishuAccount;
     if (hasConfiguredFeishuAccount) {
+      const accountLabel = (targetAccount?.name ?? "").trim() || targetAccount?.accountId || feishuTargetAccountId.value;
+      feishuConnectNotice.value = `已检测到账号 ${accountLabel} 的飞书配置。你可以重新扫码创建机器人，或直接更新 App ID / App Secret。`;
+    } else if (feishuTargetAccountName.value) {
+      feishuConnectNotice.value = `将创建新机器人：${feishuTargetAccountName.value}。`;
+    } else if (group?.accounts.some((account) => account.configured)) {
       feishuConnectNotice.value = "已检测到飞书账号配置。你可以重新扫码创建新机器人，或直接更新 App ID / App Secret。";
     }
   } catch (error) {
@@ -9573,6 +9944,8 @@ function closeFeishuConnectModal() {
   resetFeishuQrState();
   feishuAppId.value = "";
   feishuAppSecret.value = "";
+  feishuTargetAccountId.value = FEISHU_DEFAULT_ACCOUNT_ID;
+  feishuTargetAccountName.value = "";
 }
 
 function notifyFeishuConfiguredAndClose() {
@@ -9621,6 +9994,8 @@ async function saveFeishuCredentials(
   if (!invoke) {
     throw new Error("当前环境不支持写入飞书配置。");
   }
+  const targetAccountId = feishuTargetAccountId.value.trim() || FEISHU_DEFAULT_ACCOUNT_ID;
+  const targetAccountName = feishuTargetAccountName.value.trim();
 
   if (!feishuPluginPrepared) {
     const pluginInstallResult = (await invoke("install_openclaw_channel_plugin", {
@@ -9642,7 +10017,7 @@ async function saveFeishuCredentials(
   await invoke("save_openclaw_channel_config", {
     payload: {
       channelType: FEISHU_CHANNEL_ID,
-      accountId: FEISHU_DEFAULT_ACCOUNT_ID,
+      accountId: targetAccountId,
       config: {
         appId,
         appSecret,
@@ -9650,12 +10025,15 @@ async function saveFeishuCredentials(
       }
     }
   });
+  if (targetAccountName) {
+    await renameChannelAccount(FEISHU_CHANNEL_ID, targetAccountId, targetAccountName);
+  }
 
   const bindingAgentId = resolveMainStaffAgent()?.agentId?.trim() || "main";
   await invoke("save_openclaw_channel_binding", {
     payload: {
       channelType: FEISHU_CHANNEL_ID,
-      accountId: FEISHU_DEFAULT_ACCOUNT_ID,
+      accountId: targetAccountId,
       agentId: bindingAgentId
     }
   });
@@ -9759,17 +10137,21 @@ async function handleFeishuConnectionCheck() {
       return;
     }
 
-    const defaultAccount = group.accounts.find((account) => account.isDefault) ?? group.accounts[0];
-    if (!defaultAccount.configured) {
+    const targetAccount = group.accounts.find((account) => equalsIgnoreCase(account.accountId, feishuTargetAccountId.value)) ?? null;
+    if (!targetAccount) {
+      feishuConnectNotice.value = `尚未检测到账号 ${feishuTargetAccountId.value}，请先完成扫码创建或手动保存。`;
+      return;
+    }
+    if (!targetAccount.configured) {
       if (!feishuConnectNotice.value) {
         feishuConnectNotice.value = "已检测到飞书账号，但凭证尚未配置完整，请检查 App ID / App Secret。";
       }
       return;
     }
 
-    const normalizedAccountStatus = defaultAccount.status.trim().toLowerCase();
+    const normalizedAccountStatus = targetAccount.status.trim().toLowerCase();
     const statusLabel = normalizedAccountStatus === "connected" ? "已连接" : "已配置";
-    feishuConnectNotice.value = `检查完成：${defaultAccount.accountId} ${statusLabel}。`;
+    feishuConnectNotice.value = `检查完成：${targetAccount.accountId} ${statusLabel}。`;
   } catch (error) {
     feishuConnectError.value = error instanceof Error ? error.message : "检查飞书状态失败。";
   } finally {
@@ -9940,6 +10322,74 @@ function getChannelConfigGroup(catalogId: string, backendType: string) {
   return null;
 }
 
+function extractChannelBotSequence(raw: string | null | undefined) {
+  const value = (raw ?? "").trim();
+  if (!value) {
+    return 0;
+  }
+  const matched = value.match(/(?:机器人|bot|BOT)?\D*(\d+)\s*$/u) ?? value.match(/(\d+)\s*$/u);
+  if (!matched) {
+    return 0;
+  }
+  const index = Number.parseInt(matched[1], 10);
+  if (!Number.isFinite(index) || index <= 0) {
+    return 0;
+  }
+  return index;
+}
+
+function resolveNextChannelBotPreset(catalog: ChannelPaneCatalogItem, backendType: string) {
+  const group = getChannelConfigGroup(catalog.id, backendType);
+  const existingAccounts = group?.accounts ?? [];
+  const existingAccountIdsLower = new Set(existingAccounts.map((account) => account.accountId.trim().toLowerCase()).filter(Boolean));
+  const existingNamesLower = new Set(existingAccounts.map((account) => (account.name ?? "").trim().toLowerCase()).filter(Boolean));
+
+  let maxIndex = 0;
+  for (const account of existingAccounts) {
+    maxIndex = Math.max(maxIndex, extractChannelBotSequence(account.accountId), extractChannelBotSequence(account.name));
+  }
+  if (maxIndex === 0 && existingAccounts.length > 0) {
+    maxIndex = existingAccounts.length;
+  }
+
+  const accountPrefix = (catalog.id || backendType || "channel").trim().toLowerCase() || "channel";
+  const channelName = catalog.name?.trim() || catalog.id || backendType || "频道";
+  let index = Math.max(1, maxIndex + 1);
+  while (index < 1000) {
+    const accountId = `${accountPrefix}-bot-${index}`;
+    const accountName = `${channelName}机器人${index}`;
+    if (!existingAccountIdsLower.has(accountId.toLowerCase()) && !existingNamesLower.has(accountName.toLowerCase())) {
+      return {
+        accountId,
+        accountName,
+        existingAccountIds: existingAccounts.map((account) => account.accountId)
+      };
+    }
+    index += 1;
+  }
+
+  const fallbackId = `${accountPrefix}-bot-${Date.now()}`;
+  return {
+    accountId: fallbackId,
+    accountName: `${channelName}机器人`,
+    existingAccountIds: existingAccounts.map((account) => account.accountId)
+  };
+}
+
+async function renameChannelAccount(channelType: string, accountId: string, name: string) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    throw new Error("当前环境不支持修改频道账号名称。");
+  }
+  await invoke("rename_openclaw_channel_account", {
+    payload: {
+      channelType,
+      accountId,
+      name
+    }
+  });
+}
+
 async function openChannelConfigModal(
   catalogId: string,
   backendType: string,
@@ -9948,6 +10398,7 @@ async function openChannelConfigModal(
     allowEditAccountId?: boolean;
     loadExisting?: boolean;
     existingAccountIds?: string[];
+    draftAccountName?: string;
   }
 ) {
   closeProxyConfigModal();
@@ -9966,6 +10417,7 @@ async function openChannelConfigModal(
   channelConfigCatalogId.value = catalogId;
   channelConfigBackendType.value = backendType;
   channelConfigAccountId.value = accountId;
+  channelConfigDraftAccountName.value = options?.draftAccountName?.trim() ?? "";
   channelConfigAllowEditAccountId.value = allowEdit;
   channelConfigExistingAccountIds.value = options?.existingAccountIds ?? [];
   channelConfigForm.value = {};
@@ -10016,6 +10468,7 @@ function closeChannelConfigModal() {
   channelConfigCatalogId.value = "";
   channelConfigBackendType.value = "";
   channelConfigAccountId.value = "";
+  channelConfigDraftAccountName.value = "";
   channelConfigAllowEditAccountId.value = false;
   channelConfigExistingAccountIds.value = [];
   channelConfigForm.value = {};
@@ -10118,22 +10571,32 @@ async function handleOpenLegacyChannelConfigFromCatalog(channelId: string) {
     return;
   }
   const isQrMode = isChannelConfigQrMode(catalog);
-
-  const group = getChannelConfigGroup(catalog.id, backendType);
-  if (group && group.accounts.length > 0) {
-    const target = group.accounts.find((account) => account.isDefault) ?? group.accounts[0];
-    await openChannelConfigModal(catalog.id, backendType, target.accountId, {
+  if (isQrMode) {
+    const group = getChannelConfigGroup(catalog.id, backendType);
+    const target = group?.accounts.find((account) => account.isDefault) ?? group?.accounts[0] ?? null;
+    await openChannelConfigModal(catalog.id, backendType, target?.accountId || FEISHU_DEFAULT_ACCOUNT_ID, {
       allowEditAccountId: false,
-      loadExisting: !isQrMode,
-      existingAccountIds: group.accounts.map((account) => account.accountId)
+      loadExisting: false,
+      existingAccountIds: group?.accounts.map((account) => account.accountId) ?? []
     });
     return;
   }
 
-  await openChannelConfigModal(catalog.id, backendType, FEISHU_DEFAULT_ACCOUNT_ID, {
+  const preset = resolveNextChannelBotPreset(catalog, backendType);
+  if (catalog.id === FEISHU_CHANNEL_ID) {
+    await openFeishuConnectModal({
+      accountId: preset.accountId,
+      accountName: preset.accountName,
+      loadExisting: false
+    });
+    return;
+  }
+
+  await openChannelConfigModal(catalog.id, backendType, preset.accountId, {
     allowEditAccountId: false,
-    loadExisting: !isQrMode,
-    existingAccountIds: []
+    loadExisting: false,
+    existingAccountIds: preset.existingAccountIds,
+    draftAccountName: preset.accountName
   });
 }
 
@@ -10205,6 +10668,11 @@ async function handleSaveChannelConfig() {
       }
     });
 
+    const draftName = channelConfigDraftAccountName.value.trim();
+    if (draftName) {
+      await renameChannelAccount(backendType, accountId, draftName);
+    }
+
     if (isChannelConfigGuidedLayout.value) {
       const restartResult = (await invoke("run_lobster_action", {
         action: "restart_gateway"
@@ -10225,10 +10693,6 @@ async function handleSaveChannelConfig() {
 
 function handleChannelPaneCatalogCardClick(channelId: string) {
   const normalized = normalizeChannelPaneType(channelId);
-  if (normalized === FEISHU_CHANNEL_ID) {
-    void openFeishuConnectModal();
-    return;
-  }
   void handleOpenLegacyChannelConfigFromCatalog(normalized || channelId);
 }
 
@@ -12821,35 +13285,43 @@ const configuredChannelChatItems = computed(() => {
     if (configuredAccounts.length === 0) {
       continue;
     }
-
-    const preferredAccount = configuredAccounts.find((account) => account.isDefault) ?? configuredAccounts[0];
-    const normalizedStatus = (preferredAccount.status ?? "").trim().toLowerCase();
-    const isOnline = normalizedStatus === "connected" || normalizedStatus === "online";
-    const statusLabel = isOnline ? "在线" : "已配置";
-    const statusTone: AgentStatusTone = isOnline ? "online" : "busy";
-    const configuredBoundAgent =
-      preferredAccount.agentId?.trim()
-        ? agents.value.find((agent) => equalsIgnoreCase(agent.agentId, preferredAccount.agentId)) ?? null
-        : null;
-    const boundAgent = configuredBoundAgent ?? mainStaffAgent;
-    const summary = configuredBoundAgent
-      ? `已绑定 ${stripRoleLabel(configuredBoundAgent.displayName)}`
-      : boundAgent
-        ? `默认 ${stripRoleLabel(boundAgent.displayName)}`
-        : `账号 ${preferredAccount.accountId}`;
-
-    items.push({
-      id: `${normalizedType || rawChannelType.toLowerCase()}::${preferredAccount.accountId}`,
-      catalogId: normalizedType || rawChannelType.toLowerCase(),
-      channelType: rawChannelType || normalizedType || "unknown",
-      name: catalog?.name || rawChannelType || normalizedType || "未命名频道",
-      icon: catalog?.icon ?? null,
-      accountId: preferredAccount.accountId,
-      summary,
-      statusLabel,
-      statusTone,
-      boundAgentId: boundAgent?.agentId ?? null
+    const orderedAccounts = [...configuredAccounts].sort((left, right) => {
+      if (left.isDefault && !right.isDefault) {
+        return -1;
+      }
+      if (!left.isDefault && right.isDefault) {
+        return 1;
+      }
+      return left.accountId.localeCompare(right.accountId, "zh-CN");
     });
+    for (const account of orderedAccounts) {
+      const normalizedStatus = (account.status ?? "").trim().toLowerCase();
+      const isOnline = normalizedStatus === "connected" || normalizedStatus === "online";
+      const statusLabel = isOnline ? "在线" : "已配置";
+      const statusTone: AgentStatusTone = isOnline ? "online" : "busy";
+      const configuredBoundAgent =
+        account.agentId?.trim() ? agents.value.find((agent) => equalsIgnoreCase(agent.agentId, account.agentId)) ?? null : null;
+      const boundAgent = configuredBoundAgent ?? mainStaffAgent;
+      const summary = configuredBoundAgent
+        ? `已绑定 ${stripRoleLabel(configuredBoundAgent.displayName)}`
+        : boundAgent
+          ? `默认 ${stripRoleLabel(boundAgent.displayName)}`
+          : `账号 ${account.accountId}`;
+      const displayName = (account.name ?? "").trim() || catalog?.name || rawChannelType || normalizedType || "未命名频道";
+
+      items.push({
+        id: `${normalizedType || rawChannelType.toLowerCase()}::${account.accountId}`,
+        catalogId: normalizedType || rawChannelType.toLowerCase(),
+        channelType: rawChannelType || normalizedType || "unknown",
+        name: displayName,
+        icon: catalog?.icon ?? null,
+        accountId: account.accountId,
+        summary,
+        statusLabel,
+        statusTone,
+        boundAgentId: boundAgent?.agentId ?? null
+      });
+    }
   }
 
   const filtered = !normalizedQuery.value
@@ -12920,6 +13392,20 @@ const feishuQrImageUrl = computed(() => {
 const feishuManualSaveDisabled = computed(
   () => feishuConnectLoading.value || feishuConnectSaving.value || !feishuAppId.value.trim() || !feishuAppSecret.value.trim()
 );
+const feishuConnectTargetLabel = computed(() => {
+  const accountName = feishuTargetAccountName.value.trim();
+  const accountId = feishuTargetAccountId.value.trim();
+  if (accountName && accountId) {
+    return `${accountName}（${accountId}）`;
+  }
+  if (accountName) {
+    return accountName;
+  }
+  if (accountId) {
+    return accountId;
+  }
+  return "新机器人";
+});
 const activeChannelConfigMeta = computed(() => {
   const channelId = channelConfigCatalogId.value.trim();
   if (!channelId) {
@@ -13014,6 +13500,17 @@ const channelConfigSubmitButtonLabel = computed(() => {
   }
   return "保存配置";
 });
+function resolveChannelSessionAccountLabelForDisplay(channelTypeRaw: string, accountIdRaw: string | null | undefined) {
+  const accountId = (accountIdRaw ?? "").trim();
+  if (!accountId) {
+    return "";
+  }
+  const normalizedChannelType = normalizeChannelPaneType(channelTypeRaw);
+  if (normalizedChannelType === FEISHU_CHANNEL_ID && shouldHideFeishuConversationTargetLabel(accountId)) {
+    return "";
+  }
+  return accountId;
+}
 const activeChannelSessionLabel = computed(() => {
   const session = activeChannelChatSession.value;
   if (!session) {
@@ -13023,7 +13520,7 @@ const activeChannelSessionLabel = computed(() => {
     return session.name?.trim() || "历史会话";
   }
   const channelName = session.name?.trim() || session.channelType || "频道";
-  const accountId = session.accountId?.trim();
+  const accountId = resolveChannelSessionAccountLabelForDisplay(session.channelType, session.accountId);
   return accountId ? `${channelName} / ${accountId}` : channelName;
 });
 const activeConversationChannelLabel = computed(() => {
@@ -15289,14 +15786,71 @@ watch(
           >
             <button
               type="button"
+              class="agent-context-menu__item"
+              role="menuitem"
+              @mousedown.left.stop.prevent="handleChannelPaneItemContextMenuRename"
+              @keydown.enter.stop.prevent="handleChannelPaneItemContextMenuRename"
+              @keydown.space.stop.prevent="handleChannelPaneItemContextMenuRename"
+            >
+              修改名称
+            </button>
+            <button
+              type="button"
               class="agent-context-menu__item agent-context-menu__item--danger"
               role="menuitem"
-              @click.stop.prevent="handleChannelPaneItemContextMenuDelete"
+              @mousedown.left.stop.prevent="handleChannelPaneItemContextMenuDelete"
               @keydown.enter.stop.prevent="handleChannelPaneItemContextMenuDelete"
               @keydown.space.stop.prevent="handleChannelPaneItemContextMenuDelete"
             >
               删除
             </button>
+          </div>
+
+          <div
+            v-if="isChannelPaneDeleteConfirmModalOpen && channelPaneDeleteConfirmTarget"
+            class="related-resource-modal-backdrop"
+            @click.self="closeChannelPaneDeleteConfirmModal"
+          >
+            <section class="related-resource-modal chat-agent-delete-modal" role="dialog" aria-modal="true" aria-label="确认删除频道账号">
+              <header class="related-resource-modal__header chat-agent-delete-modal__header">
+                <div class="chat-agent-delete-modal__title">
+                  <span class="chat-agent-delete-modal__icon" aria-hidden="true">
+                    <ControlIcon name="trash" />
+                  </span>
+                  <div>
+                    <strong>确认删除</strong>
+                    <p>该操作不可撤销，请确认后继续。</p>
+                  </div>
+                </div>
+              </header>
+              <div class="related-resource-modal__body chat-agent-delete-modal__body">
+                <div class="chat-agent-delete-modal__risk">
+                  <p>
+                    即将删除频道账号
+                    <strong>「{{ channelPaneDeleteConfirmTarget.name }} · {{ channelPaneDeleteConfirmTarget.accountId }}」</strong>。
+                  </p>
+                  <small>删除后该频道会从列表移除，并解除与员工的绑定关系。</small>
+                </div>
+                <div class="chat-agent-delete-modal__actions">
+                  <button
+                    class="related-resource-modal__refresh"
+                    type="button"
+                    :disabled="isChannelPaneDeleteConfirming"
+                    @click="closeChannelPaneDeleteConfirmModal"
+                  >
+                    取消
+                  </button>
+                  <button
+                    class="related-resource-modal__refresh chat-agent-delete-modal__confirm"
+                    type="button"
+                    :disabled="isChannelPaneDeleteConfirming"
+                    @click="handleChannelPaneDeleteConfirmSubmit"
+                  >
+                    {{ isChannelPaneDeleteConfirming ? "删除中..." : "确认删除" }}
+                  </button>
+                </div>
+              </div>
+            </section>
           </div>
 
           <div
@@ -17107,7 +17661,7 @@ watch(
       <section class="feishu-connect-modal" role="dialog" aria-modal="true" aria-label="连接飞书">
         <header class="feishu-connect-modal__header">
           <div>
-            <strong>连接飞书</strong>
+            <strong>连接飞书 · {{ feishuConnectTargetLabel }}</strong>
             <p>扫码进入飞书 OpenClaw 页面创建机器人。完成后点击“检查结果”，系统会自动回填并保存 App ID / App Secret。</p>
             <small>官方插件版本: {{ feishuPluginVersionText }}</small>
           </div>
