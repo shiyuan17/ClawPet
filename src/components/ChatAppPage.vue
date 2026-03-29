@@ -1135,6 +1135,9 @@ const chatAgentDeleteNotice = ref("");
 const CHAT_AGENT_DELETE_NOTICE_DURATION_MS = 2200;
 const isSidebarThemePopoverOpen = ref(false);
 const sidebarThemeQuickActionRef = ref<HTMLElement | null>(null);
+const SIDEBAR_DEFAULT_USER_NAME = "管理员";
+const isSidebarSystemMenuExpanded = ref(false);
+const sidebarSystemMenuRef = ref<HTMLElement | null>(null);
 const isSidebarProfilePopoverOpen = ref(false);
 const sidebarProfilePanelRef = ref<HTMLElement | null>(null);
 const sidebarAvatarUploadInputRef = ref<HTMLInputElement | null>(null);
@@ -1319,6 +1322,7 @@ const chatHistoryArchives = ref<ChatArchiveRecord[]>([]);
 const chatRelatedHistoryRecords = ref<ChatRelatedHistoryRecord[]>([]);
 const chatRelatedArchiveRecords = ref<ChatRelatedArchiveRecord[]>([]);
 const chatRuntimeLogs = ref<OpenClawMessageLogResponse | null>(null);
+const localRuntimeErrorLogs = ref<OpenClawMessageLogItem[]>([]);
 const dashboardGatewayHealth = ref<GatewayHealthSnapshotResponse | null>(null);
 const dashboardChannelSnapshot = ref<OpenClawChannelAccountsSnapshotResponse | null>(null);
 const dashboardPlatformSnapshot = ref<OpenClawPlatformSnapshotResponse | null>(null);
@@ -1336,6 +1340,7 @@ const isSidebarLogDetailModalOpen = ref(false);
 const runtimeToolSyncWindowMs = 180000;
 const runtimeToolSyncPostResponseWindowMs = 4000;
 const runtimeToolSyncRetryDelayMs = 400;
+const localRuntimeErrorLogLimit = 120;
 let runtimeToolSyncRetryTimer = 0;
 const openclawSessionSyncPollIntervalMs = 3500;
 let openclawSessionSyncPollTimer = 0;
@@ -4906,7 +4911,7 @@ function closeSidebarProfilePopover() {
 }
 
 function openSidebarProfilePopover() {
-  closeSidebarThemePopover();
+  closeSidebarSystemMenu();
   isSidebarProfilePopoverOpen.value = true;
   sidebarAvatarUploadError.value = "";
   sidebarProfileNotice.value = "";
@@ -5060,6 +5065,45 @@ function handleSidebarProfilePopoverDocumentKeyDown(event: KeyboardEvent) {
 
 function closeSidebarThemePopover() {
   isSidebarThemePopoverOpen.value = false;
+}
+
+function closeSidebarSystemMenu() {
+  isSidebarSystemMenuExpanded.value = false;
+  closeSidebarThemePopover();
+}
+
+function toggleSidebarSystemMenu() {
+  isSidebarSystemMenuExpanded.value = !isSidebarSystemMenuExpanded.value;
+  if (!isSidebarSystemMenuExpanded.value) {
+    closeSidebarThemePopover();
+  }
+}
+
+function handleSidebarSystemMenuDocumentMouseDown(event: MouseEvent) {
+  if (!isSidebarSystemMenuExpanded.value) {
+    return;
+  }
+  const menuRoot = sidebarSystemMenuRef.value;
+  if (!menuRoot) {
+    closeSidebarSystemMenu();
+    return;
+  }
+  const target = event.target;
+  if (target instanceof Node && menuRoot.contains(target)) {
+    return;
+  }
+  closeSidebarSystemMenu();
+}
+
+function handleSidebarSystemMenuDocumentKeyDown(event: KeyboardEvent) {
+  if (!isSidebarSystemMenuExpanded.value) {
+    return;
+  }
+  if (event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  closeSidebarSystemMenu();
 }
 
 function toggleSidebarThemePopover() {
@@ -6654,6 +6698,14 @@ async function submitChat() {
             pendingMessage.status = "error";
             pendingMessage.createdAt = failedAt;
           }
+          appendLocalRuntimeErrorLog({
+            agentId: row.member.agentId,
+            agentName: stripRoleLabel(row.member.displayName),
+            requestText: userContent,
+            errorText,
+            sessionKey,
+            startedAt
+          });
         }
       }
       const finishedAt = Date.now();
@@ -6724,9 +6776,9 @@ async function submitChat() {
 
   isSending.value = true;
   void scrollMessagesToBottom();
+  const runtimeSessionKey = resolveRuntimeSessionKeyForConversation(conversationScopeKey, activeAgent.agentId);
 
   try {
-    const runtimeSessionKey = resolveRuntimeSessionKeyForConversation(conversationScopeKey, activeAgent.agentId);
     const response = await sendOpenClawChat(
       [...history, { role: "user", content: userContent }],
       runtimeSessionKey
@@ -6750,11 +6802,20 @@ async function submitChat() {
   } catch (error) {
     const failedAt = Date.now();
     const pendingMessage = chatMessages.value.find((item) => item.id === pendingId);
+    const errorText = error instanceof Error ? error.message : "Agent 回复失败。";
     if (pendingMessage) {
-      pendingMessage.text = error instanceof Error ? error.message : "Agent 回复失败。";
+      pendingMessage.text = errorText;
       pendingMessage.status = "error";
       pendingMessage.createdAt = failedAt;
     }
+    appendLocalRuntimeErrorLog({
+      agentId: activeAgent.agentId,
+      agentName: stripRoleLabel(activeAgent.displayName),
+      requestText: userContent,
+      errorText,
+      sessionKey: runtimeSessionKey,
+      startedAt
+    });
 
     setAgentMeta(activeAgent.agentId, {
       preview: "消息发送失败",
@@ -7363,7 +7424,7 @@ function closeAgentSettingsPanel() {
 
 async function openSidebarSettings() {
   activeSection.value = "chat";
-  closeSidebarThemePopover();
+  closeSidebarSystemMenu();
   isAgentSettingsOpen.value = false;
   closeSidebarLogsPanel();
   closeUtilityModal();
@@ -7383,7 +7444,7 @@ async function openSidebarLogs() {
     return;
   }
   activeSection.value = "chat";
-  closeSidebarThemePopover();
+  closeSidebarSystemMenu();
   closeSidebarSettingsModal();
   closeProxyConfigModal();
   closeFeishuConnectModal();
@@ -7405,7 +7466,7 @@ async function openSidebarHistory() {
     return;
   }
   activeSection.value = "chat";
-  closeSidebarThemePopover();
+  closeSidebarSystemMenu();
   closeSidebarSettingsModal();
   closeProxyConfigModal();
   closeFeishuConnectModal();
@@ -7605,7 +7666,7 @@ async function handleProxyConfigSave() {
 }
 
 async function openSidebarProxyConfig() {
-  closeSidebarThemePopover();
+  closeSidebarSystemMenu();
   isAgentSettingsOpen.value = false;
   closeSidebarLogsPanel();
   closeSidebarSettingsModal();
@@ -7619,7 +7680,7 @@ async function openSidebarProxyConfig() {
 }
 
 async function openSidebarOpenClawWeb() {
-  closeSidebarThemePopover();
+  closeSidebarSystemMenu();
   isAgentSettingsOpen.value = false;
   closeSidebarLogsPanel();
   closeSidebarSettingsModal();
@@ -9347,6 +9408,74 @@ function formatDurationLabel(durationMs: number) {
     return `${(durationMs / 1000).toFixed(2)}s`;
   }
   return `${Math.max(0, Math.round(durationMs))}ms`;
+}
+
+function parseRuntimeLogEndpoint(errorText: string) {
+  const source = errorText.trim();
+  const urlMatch = source.match(/https?:\/\/[^\s)]+/i);
+  return urlMatch?.[0] ?? "openclaw://runtime/client-error";
+}
+
+function resolveRuntimeLogEndpointParts(endpoint: string) {
+  const normalized = endpoint.trim();
+  if (!/^https?:\/\//i.test(normalized)) {
+    return { baseUrl: undefined as string | undefined, path: undefined as string | undefined };
+  }
+  try {
+    const parsed = new URL(normalized);
+    return {
+      baseUrl: `${parsed.protocol}//${parsed.host}`,
+      path: `${parsed.pathname}${parsed.search}` || "/"
+    };
+  } catch {
+    return { baseUrl: undefined as string | undefined, path: undefined as string | undefined };
+  }
+}
+
+function appendLocalRuntimeErrorLog(payload: {
+  agentId: string;
+  agentName: string;
+  requestText: string;
+  errorText: string;
+  sessionKey?: string | null;
+  startedAt?: number;
+}) {
+  const normalizedAgentId = payload.agentId.trim();
+  const normalizedError = payload.errorText.trim();
+  if (!normalizedAgentId || !normalizedError) {
+    return;
+  }
+
+  const createdAt = Date.now();
+  const endpoint = parseRuntimeLogEndpoint(normalizedError);
+  const { baseUrl, path } = resolveRuntimeLogEndpointParts(endpoint);
+  const startedAt = typeof payload.startedAt === "number" ? payload.startedAt : createdAt;
+  const duration = Math.max(0, Math.round(createdAt - startedAt));
+  const sessionId = payload.sessionKey?.trim() || `runtime-${normalizedAgentId}-local-error`;
+
+  const nextLog: OpenClawMessageLogItem = {
+    id: createMessageId("runtime-log-error"),
+    sessionId,
+    platformId: `openclaw-agent-${normalizedAgentId}`,
+    platformName: `OpenClaw 运行时 / ${payload.agentName.trim() || normalizedAgentId}`,
+    protocol: "openai",
+    method: "MESSAGE",
+    endpoint,
+    baseUrl,
+    path,
+    requestBody: payload.requestText ? JSON.stringify({ role: "user", content: payload.requestText }, null, 2) : "",
+    responseStatus: 500,
+    responseBody: "",
+    streamSummary: "",
+    duration,
+    firstTokenTime: duration,
+    error: normalizedError,
+    createdAt
+  };
+
+  localRuntimeErrorLogs.value = [nextLog, ...localRuntimeErrorLogs.value]
+    .sort((left, right) => right.createdAt - left.createdAt)
+    .slice(0, localRuntimeErrorLogLimit);
 }
 
 function getLogRequestUrl(log: OpenClawMessageLogItem) {
@@ -12561,7 +12690,7 @@ function getRecruitmentRoleAvatarStyle(role: AgencyRosterRole) {
 
 function handleSidebarSectionChange(section: SidebarSection) {
   closeChatQuickCreateMenu();
-  closeSidebarThemePopover();
+  closeSidebarSystemMenu();
   activeSection.value = section;
   if (section !== "chat") {
     isAgentSettingsOpen.value = false;
@@ -14374,8 +14503,23 @@ const utilityModalSubtitle = computed(() => {
   }
   return `${stripRoleLabel(agent.displayName)} · ${agent.agentId}`;
 });
+const runtimeLogSourceItems = computed(() => {
+  const remoteLogs = chatRuntimeLogs.value?.logs ?? [];
+  const localLogs = localRuntimeErrorLogs.value;
+  if (localLogs.length === 0) {
+    return remoteLogs;
+  }
+  const merged = [...localLogs, ...remoteLogs];
+  const deduped = new Map<string, OpenClawMessageLogItem>();
+  for (const log of merged) {
+    if (!deduped.has(log.id)) {
+      deduped.set(log.id, log);
+    }
+  }
+  return Array.from(deduped.values()).sort((left, right) => right.createdAt - left.createdAt);
+});
 const utilityRuntimeRoleFilterOptions = computed(() => {
-  const logs = chatRuntimeLogs.value?.logs ?? [];
+  const logs = runtimeLogSourceItems.value;
   const activeAgentId = activeAgent.value?.agentId ?? null;
   const activeAgentName = activeAgent.value ? stripRoleLabel(activeAgent.value.displayName) : "当前角色";
   const activeCount = activeAgentId ? logs.filter((log) => matchesAgentLog(log, activeAgentId)).length : logs.length;
@@ -14424,7 +14568,7 @@ const utilityRuntimeResolvedRoleAgentId = computed(() =>
   resolveUtilityRuntimeRoleFilterAgentId(utilityRuntimeRoleFilter.value, activeAgent.value?.agentId ?? null)
 );
 const runtimeRoleFilteredLogItems = computed(() =>
-  [...(chatRuntimeLogs.value?.logs ?? [])]
+  [...runtimeLogSourceItems.value]
     .filter((log) => {
       const roleAgentId = isLogsPanelActive.value
         ? (activeAgent.value?.agentId?.trim() ?? null)
@@ -14693,7 +14837,7 @@ const dashboardChannelStats = computed(() => {
 });
 
 const dashboardRuntimeLogItems = computed(() =>
-  [...(chatRuntimeLogs.value?.logs ?? [])].sort((left, right) => right.createdAt - left.createdAt)
+  [...runtimeLogSourceItems.value].sort((left, right) => right.createdAt - left.createdAt)
 );
 
 const dashboardTodayStats = computed(() => {
@@ -15378,6 +15522,8 @@ onMounted(() => {
   if (typeof document !== "undefined") {
     document.addEventListener("mousedown", handleChatQuickCreateMenuDocumentMouseDown);
     document.addEventListener("keydown", handleChatQuickCreateMenuDocumentKeyDown);
+    document.addEventListener("mousedown", handleSidebarSystemMenuDocumentMouseDown);
+    document.addEventListener("keydown", handleSidebarSystemMenuDocumentKeyDown);
     document.addEventListener("mousedown", handleSidebarProfilePopoverDocumentMouseDown);
     document.addEventListener("keydown", handleSidebarProfilePopoverDocumentKeyDown);
     document.addEventListener("mousedown", handleSidebarThemePopoverDocumentMouseDown);
@@ -15402,6 +15548,8 @@ onBeforeUnmount(() => {
   if (typeof document !== "undefined") {
     document.removeEventListener("mousedown", handleChatQuickCreateMenuDocumentMouseDown);
     document.removeEventListener("keydown", handleChatQuickCreateMenuDocumentKeyDown);
+    document.removeEventListener("mousedown", handleSidebarSystemMenuDocumentMouseDown);
+    document.removeEventListener("keydown", handleSidebarSystemMenuDocumentKeyDown);
     document.removeEventListener("mousedown", handleSidebarProfilePopoverDocumentMouseDown);
     document.removeEventListener("keydown", handleSidebarProfilePopoverDocumentKeyDown);
     document.removeEventListener("mousedown", handleSidebarThemePopoverDocumentMouseDown);
@@ -15452,6 +15600,7 @@ watch(
 watch(
   () => activeSection.value,
   (section) => {
+    closeSidebarSystemMenu();
     closeSidebarProfilePopover();
     closeChatAgentContextMenu();
     closeChannelPaneItemContextMenu();
@@ -15760,143 +15909,167 @@ watch(
           </div>
 
           <div class="sidebar-spacer" />
-          <div class="sidebar-quick-actions" data-no-window-drag>
-            <div ref="sidebarThemeQuickActionRef" class="sidebar-quick-action-wrap" data-no-window-drag>
-              <button
-                class="sidebar-quick-action"
-                :class="{ 'is-active': isSidebarThemePopoverOpen }"
-                type="button"
-                :title="isSidebarProfilePopoverOpen ? undefined : '主题'"
-                aria-label="打开主题切换"
-                :aria-expanded="isSidebarThemePopoverOpen"
-                aria-haspopup="dialog"
-                @click.stop="toggleSidebarThemePopover"
-              >
-                <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--theme" aria-hidden="true">
-                  <ControlIcon name="theme" />
-                </span>
-                <span class="sidebar-quick-action__label">主题</span>
-              </button>
-              <transition name="sidebar-theme-pop">
-                <div
-                  v-if="isSidebarThemePopoverOpen"
-                  class="sidebar-theme-popover"
-                  role="dialog"
-                  aria-label="主题切换面板"
-                  data-no-window-drag
-                >
-                  <div class="sidebar-theme-switcher">
-                    <div
-                      class="sidebar-theme-switcher__mode-row"
-                      role="group"
-                      aria-label="日夜模式"
-                      :style="{
-                        '--switch-count': String(sidebarThemeModeOptions.length),
-                        '--switch-index': String(sidebarThemeModeActiveIndex)
-                      }"
-                    >
-                      <button
-                        v-for="mode in sidebarThemeModeOptions"
-                        :key="`sidebar-theme-mode-${mode.id}`"
-                        class="sidebar-theme-switcher__mode"
-                        :class="{ 'is-active': sidebarThemeMode === mode.id }"
-                        :aria-pressed="sidebarThemeMode === mode.id"
-                        type="button"
-                        @click="setSidebarThemeMode(mode.id)"
-                      >
-                        {{ mode.label }}
-                      </button>
-                    </div>
-                    <div
-                      class="sidebar-theme-switcher__preset-row"
-                      role="group"
-                      aria-label="主题切换"
-                      :style="{
-                        '--switch-count': String(sidebarThemePresetOptions.length),
-                        '--switch-index': String(sidebarThemePresetActiveIndex)
-                      }"
-                    >
-                      <button
-                        v-for="preset in sidebarThemePresetOptions"
-                        :key="`sidebar-theme-preset-${preset.id}`"
-                        class="sidebar-theme-switcher__preset"
-                        :class="{ 'is-active': sidebarThemePreset === preset.id }"
-                        :aria-pressed="sidebarThemePreset === preset.id"
-                        type="button"
-                        @click="setSidebarThemePreset(preset.id)"
-                      >
-                        {{ preset.label }}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </transition>
-            </div>
+          <div ref="sidebarSystemMenuRef" class="sidebar-system-menu" data-no-window-drag>
+            <button
+              class="sidebar-profile sidebar-profile--system-menu"
+              :class="{ 'is-open': isSidebarSystemMenuExpanded }"
+              type="button"
+              :title="isSidebarProfilePopoverOpen ? undefined : SIDEBAR_DEFAULT_USER_NAME"
+              :aria-label="isSidebarSystemMenuExpanded ? '收起系统菜单' : '展开系统菜单'"
+              :aria-expanded="isSidebarSystemMenuExpanded"
+              @click="toggleSidebarSystemMenu"
+            >
+              <span class="sidebar-profile__avatar" aria-hidden="true">管</span>
+              <span class="sidebar-profile__meta">
+                <strong>{{ SIDEBAR_DEFAULT_USER_NAME }}</strong>
+              </span>
+              <span class="sidebar-profile__toggle" aria-hidden="true">
+                <ControlIcon name="chevron-down" />
+              </span>
+            </button>
 
-            <button
-              class="sidebar-quick-action"
-              :class="{ 'is-active': isProxyConfigModalOpen }"
-              type="button"
-              :title="isSidebarProfilePopoverOpen ? undefined : '代理配置'"
-              aria-label="打开代理配置"
-              @click="openSidebarProxyConfig"
-            >
-              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--proxy" aria-hidden="true">
-                <ControlIcon name="proxy" />
-              </span>
-              <span class="sidebar-quick-action__label">代理</span>
-            </button>
-            <button
-              class="sidebar-quick-action"
-              :class="{ 'is-active': activeSection === 'chat' && isLogsPanelActive }"
-              type="button"
-              :title="isSidebarProfilePopoverOpen ? undefined : '日志'"
-              aria-label="打开日志"
-              @click="openSidebarLogs"
-            >
-              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--logs" aria-hidden="true">
-                <ControlIcon name="logs" />
-              </span>
-              <span class="sidebar-quick-action__label">日志</span>
-            </button>
-            <button
-              class="sidebar-quick-action"
-              :class="{ 'is-active': isTemporaryTaskReminderPopupActive }"
-              type="button"
-              :title="isSidebarProfilePopoverOpen ? undefined : '测试提醒'"
-              aria-label="触发测试任务提醒"
-              @click="triggerTemporaryTaskReminderTestPopup"
-            >
-              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--test" aria-hidden="true">
-                <ControlIcon name="nav-tasks" />
-              </span>
-              <span class="sidebar-quick-action__label">测试提醒</span>
-            </button>
-            <button
-              class="sidebar-quick-action"
-              :class="{ 'is-active': activeSection === 'chat' && isSidebarSettingsModalOpen }"
-              type="button"
-              :title="isSidebarProfilePopoverOpen ? undefined : '设置'"
-              aria-label="打开设置"
-              @click="openSidebarSettings"
-            >
-              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--settings" aria-hidden="true">
-                <ControlIcon name="settings" />
-              </span>
-              <span class="sidebar-quick-action__label">设置</span>
-            </button>
-            <button
-              class="sidebar-quick-action sidebar-quick-action--web-bar"
-              type="button"
-              :title="isSidebarProfilePopoverOpen ? undefined : '打开 OpenClaw 原站点'"
-              aria-label="打开 OpenClaw 原站点"
-              @click="openSidebarOpenClawWeb"
-            >
-              <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--web" aria-hidden="true">
-                <ControlIcon name="web" />
-              </span>
-              <span class="sidebar-quick-action__label">打开 OpenClaw 原站点</span>
-            </button>
+            <transition name="sidebar-system-menu-pop">
+              <div v-if="isSidebarSystemMenuExpanded" class="sidebar-system-menu__panel" data-no-window-drag>
+                <div class="sidebar-quick-actions" data-no-window-drag>
+                  <div ref="sidebarThemeQuickActionRef" class="sidebar-quick-action-wrap" data-no-window-drag>
+                    <button
+                      class="sidebar-quick-action"
+                      :class="{ 'is-active': isSidebarThemePopoverOpen }"
+                      type="button"
+                      :title="isSidebarProfilePopoverOpen ? undefined : '主题'"
+                      aria-label="打开主题切换"
+                      :aria-expanded="isSidebarThemePopoverOpen"
+                      aria-haspopup="dialog"
+                      @click.stop="toggleSidebarThemePopover"
+                    >
+                      <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--theme" aria-hidden="true">
+                        <ControlIcon name="theme" />
+                      </span>
+                      <span class="sidebar-quick-action__label">主题</span>
+                    </button>
+                    <transition name="sidebar-theme-pop">
+                      <div
+                        v-if="isSidebarThemePopoverOpen"
+                        class="sidebar-theme-popover"
+                        role="dialog"
+                        aria-label="主题切换面板"
+                        data-no-window-drag
+                      >
+                        <div class="sidebar-theme-switcher">
+                          <div
+                            class="sidebar-theme-switcher__mode-row"
+                            role="group"
+                            aria-label="日夜模式"
+                            :style="{
+                              '--switch-count': String(sidebarThemeModeOptions.length),
+                              '--switch-index': String(sidebarThemeModeActiveIndex)
+                            }"
+                          >
+                            <button
+                              v-for="mode in sidebarThemeModeOptions"
+                              :key="`sidebar-theme-mode-${mode.id}`"
+                              class="sidebar-theme-switcher__mode"
+                              :class="{ 'is-active': sidebarThemeMode === mode.id }"
+                              :aria-pressed="sidebarThemeMode === mode.id"
+                              type="button"
+                              @click="setSidebarThemeMode(mode.id)"
+                            >
+                              {{ mode.label }}
+                            </button>
+                          </div>
+                          <div
+                            class="sidebar-theme-switcher__preset-row"
+                            role="group"
+                            aria-label="主题切换"
+                            :style="{
+                              '--switch-count': String(sidebarThemePresetOptions.length),
+                              '--switch-index': String(sidebarThemePresetActiveIndex)
+                            }"
+                          >
+                            <button
+                              v-for="preset in sidebarThemePresetOptions"
+                              :key="`sidebar-theme-preset-${preset.id}`"
+                              class="sidebar-theme-switcher__preset"
+                              :class="{ 'is-active': sidebarThemePreset === preset.id }"
+                              :aria-pressed="sidebarThemePreset === preset.id"
+                              type="button"
+                              @click="setSidebarThemePreset(preset.id)"
+                            >
+                              {{ preset.label }}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </transition>
+                  </div>
+
+                  <button
+                    class="sidebar-quick-action"
+                    :class="{ 'is-active': isProxyConfigModalOpen }"
+                    type="button"
+                    :title="isSidebarProfilePopoverOpen ? undefined : '代理配置'"
+                    aria-label="打开代理配置"
+                    @click="openSidebarProxyConfig"
+                  >
+                    <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--proxy" aria-hidden="true">
+                      <ControlIcon name="proxy" />
+                    </span>
+                    <span class="sidebar-quick-action__label">代理</span>
+                  </button>
+                  <button
+                    class="sidebar-quick-action"
+                    :class="{ 'is-active': activeSection === 'chat' && isLogsPanelActive }"
+                    type="button"
+                    :title="isSidebarProfilePopoverOpen ? undefined : '日志'"
+                    aria-label="打开日志"
+                    @click="openSidebarLogs"
+                  >
+                    <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--logs" aria-hidden="true">
+                      <ControlIcon name="logs" />
+                    </span>
+                    <span class="sidebar-quick-action__label">日志</span>
+                  </button>
+                  <button
+                    class="sidebar-quick-action"
+                    :class="{ 'is-active': isTemporaryTaskReminderPopupActive }"
+                    type="button"
+                    :title="isSidebarProfilePopoverOpen ? undefined : '测试提醒'"
+                    aria-label="触发测试任务提醒"
+                    @click="triggerTemporaryTaskReminderTestPopup"
+                  >
+                    <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--test" aria-hidden="true">
+                      <ControlIcon name="nav-tasks" />
+                    </span>
+                    <span class="sidebar-quick-action__label">测试提醒</span>
+                  </button>
+                  <button
+                    class="sidebar-quick-action"
+                    :class="{ 'is-active': activeSection === 'chat' && isSidebarSettingsModalOpen }"
+                    type="button"
+                    :title="isSidebarProfilePopoverOpen ? undefined : '设置'"
+                    aria-label="打开设置"
+                    @click="openSidebarSettings"
+                  >
+                    <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--settings" aria-hidden="true">
+                      <ControlIcon name="settings" />
+                    </span>
+                    <span class="sidebar-quick-action__label">设置</span>
+                  </button>
+                  <button
+                    class="sidebar-quick-action sidebar-quick-action--web-bar"
+                    type="button"
+                    :title="isSidebarProfilePopoverOpen ? undefined : '打开 OpenClaw 原站点'"
+                    aria-label="打开 OpenClaw 原站点"
+                    @click="openSidebarOpenClawWeb"
+                  >
+                    <span class="sidebar-quick-action__bubble sidebar-quick-action__bubble--web" aria-hidden="true">
+                      <ControlIcon name="web" />
+                    </span>
+                    <span class="sidebar-quick-action__label">打开 OpenClaw 原站点</span>
+                  </button>
+                </div>
+              </div>
+            </transition>
           </div>
         </aside>
 
@@ -20648,6 +20821,53 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-p
   box-shadow: 0 10px 22px rgba(82, 103, 149, 0.17);
 }
 
+.sidebar-profile--system-menu {
+  grid-template-columns: 34px minmax(0, 1fr) 14px;
+  gap: 6px;
+  border: 1px solid var(--cp-border-200);
+  background: var(--cp-surface-elevated);
+  padding: 5px 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.sidebar-profile--system-menu:hover {
+  border-color: var(--cp-border-300);
+}
+
+.sidebar-profile--system-menu .sidebar-profile__meta strong {
+  margin-top: 0;
+  font-size: 13px;
+  line-height: 1.05;
+}
+
+.sidebar-profile--system-menu .sidebar-profile__avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+  box-shadow: 0 2px 8px rgba(79, 111, 255, 0.22);
+}
+
+.sidebar-profile__toggle {
+  width: 12px;
+  height: 12px;
+  display: grid;
+  place-items: center;
+  color: var(--cp-text-muted);
+  transition: transform 180ms ease;
+}
+
+.sidebar-profile__toggle svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+}
+
+.sidebar-profile--system-menu.is-open .sidebar-profile__toggle {
+  transform: rotate(180deg);
+}
+
 .sidebar-profile__avatar {
   width: 44px;
   height: 44px;
@@ -21328,13 +21548,47 @@ html[data-app-theme-resolved="dark"] .window-version-chip__beta {
   flex: 1;
 }
 
+.sidebar-system-menu {
+  width: 100%;
+  position: relative;
+  display: block;
+  padding: 2px 0 4px;
+}
+
+.sidebar-system-menu__panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  border: 1px solid var(--cp-border-200);
+  border-radius: 12px;
+  background: var(--cp-surface-elevated);
+  box-shadow:
+    0 10px 24px var(--cp-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  padding: 8px;
+}
+
+.sidebar-system-menu-pop-enter-active,
+.sidebar-system-menu-pop-leave-active {
+  transition: opacity 170ms ease, transform 220ms cubic-bezier(0.2, 0.72, 0.24, 1);
+  transform-origin: bottom center;
+}
+
+.sidebar-system-menu-pop-enter-from,
+.sidebar-system-menu-pop-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+}
+
 .sidebar-quick-actions {
   width: 100%;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
   gap: 7px;
   align-items: center;
-  padding: 2px 0 4px;
+  padding: 0;
 }
 
 .sidebar-quick-action-wrap {
@@ -31687,6 +31941,23 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
     padding: 6px;
   }
 
+  .sidebar-system-menu {
+    gap: 6px;
+  }
+
+  .sidebar-system-menu__panel {
+    padding: 6px;
+  }
+
+  .sidebar-profile--system-menu {
+    grid-template-columns: 1fr;
+    padding: 6px;
+  }
+
+  .sidebar-profile--system-menu .sidebar-profile__toggle {
+    display: none;
+  }
+
   .sidebar-profile__meta,
   .nav-item__label,
   .nav-item__badge {
@@ -31700,7 +31971,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
   .sidebar-quick-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 4px;
-    padding: 2px 0 2px;
+    padding: 0;
   }
 
   .sidebar-quick-action {

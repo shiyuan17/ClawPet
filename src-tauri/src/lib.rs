@@ -1390,6 +1390,123 @@ fn sanitize_openclaw_models_provider_schema() -> Result<Option<String>, String> 
     )))
 }
 
+fn sanitize_openclaw_channel_schema_at_path(config_path: &Path) -> Result<Option<String>, String> {
+    let raw = match std::fs::read_to_string(config_path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("无法读取 openclaw.json: {error}")),
+    };
+    let mut parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
+    let Some(root_obj) = parsed.as_object_mut() else {
+        return Ok(None);
+    };
+
+    let mut changed = false;
+    let mut notes = Vec::new();
+
+    if let Some(channels_obj) = root_obj.get_mut("channels").and_then(Value::as_object_mut) {
+        let channel_keys = channels_obj.keys().cloned().collect::<Vec<_>>();
+        let mut merge_targets = HashSet::new();
+        for channel_key in channel_keys {
+            let normalized = normalize_channel_identifier(&channel_key);
+            let canonical = normalize_channel_identifier_for_openclaw_config(&channel_key);
+            if canonical != normalized {
+                merge_targets.insert(canonical.clone());
+                notes.push(format!("channels.{channel_key}->channels.{canonical}"));
+            }
+        }
+        if !merge_targets.is_empty() {
+            changed = true;
+            for target in merge_targets {
+                let _ = merge_channel_alias_sections(channels_obj, &target)?;
+            }
+        }
+    }
+
+    if let Some(bindings_arr) = root_obj.get_mut("bindings").and_then(Value::as_array_mut) {
+        for (index, binding_value) in bindings_arr.iter_mut().enumerate() {
+            let Some(binding_obj) = binding_value.as_object_mut() else {
+                continue;
+            };
+            let Some(match_obj) = binding_obj.get_mut("match").and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            let Some(channel_raw) = match_obj
+                .get("channel")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+
+            let canonical = normalize_channel_identifier_for_openclaw_config(channel_raw);
+            let normalized = normalize_channel_identifier(channel_raw);
+            if canonical != normalized {
+                match_obj.insert("channel".to_string(), Value::String(canonical.clone()));
+                changed = true;
+                notes.push(format!(
+                    "bindings[{index}].match.channel: {normalized}->{canonical}"
+                ));
+            }
+        }
+    }
+
+    if !changed {
+        return Ok(None);
+    }
+
+    write_openclaw_config_value(config_path, &parsed)?;
+    let summary = if notes.is_empty() {
+        "channel schema normalized".to_string()
+    } else if notes.len() > 8 {
+        format!(
+            "{} 等 {} 项",
+            notes.iter().take(8).cloned().collect::<Vec<_>>().join(", "),
+            notes.len()
+        )
+    } else {
+        notes.join(", ")
+    };
+    Ok(Some(format!("{} -> {}", config_path.display(), summary)))
+}
+
+fn sanitize_openclaw_channel_schema() -> Result<Option<String>, String> {
+    let mut changed_paths = Vec::new();
+    let mut failures = Vec::new();
+    for path in collect_openclaw_candidate_config_paths() {
+        match sanitize_openclaw_channel_schema_at_path(&path) {
+            Ok(Some(detail)) => changed_paths.push(detail),
+            Ok(None) => {}
+            Err(error) => failures.push(format!("{}: {error}", path.display())),
+        }
+    }
+
+    if changed_paths.is_empty() && failures.is_empty() {
+        return Ok(None);
+    }
+    if !changed_paths.is_empty() && failures.is_empty() {
+        return Ok(Some(format!(
+            "已自动迁移 OpenClaw 频道配置中的旧 channel id：{}",
+            changed_paths.join("；")
+        )));
+    }
+    if changed_paths.is_empty() && !failures.is_empty() {
+        return Err(format!(
+            "迁移 OpenClaw 频道配置失败：{}",
+            failures.join("；")
+        ));
+    }
+
+    Ok(Some(format!(
+        "已部分迁移 OpenClaw 频道配置：{}；剩余失败：{}",
+        changed_paths.join("；"),
+        failures.join("；")
+    )))
+}
+
 fn resolve_user_home_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -1917,6 +2034,44 @@ fn normalize_channel_identifier(raw: &str) -> String {
     raw.trim().to_ascii_lowercase()
 }
 
+fn is_weixin_channel_identifier(normalized_channel: &str) -> bool {
+    matches!(
+        normalized_channel,
+        "weixin"
+            | "wechat"
+            | "wx"
+            | "wechat_official_account"
+            | "wechat-official-account"
+            | "openclaw-weixin"
+            | "openclaw_weixin"
+    )
+}
+
+fn is_wecom_channel_identifier(normalized_channel: &str) -> bool {
+    matches!(
+        normalized_channel,
+        "wecom"
+            | "workwechat"
+            | "work-wechat"
+            | "work_wechat"
+            | "wechatwork"
+            | "qywx"
+            | "openclaw-wecom"
+            | "openclaw_wecom"
+    )
+}
+
+fn normalize_channel_identifier_for_openclaw_config(raw: &str) -> String {
+    let normalized = normalize_channel_identifier(raw);
+    if is_weixin_channel_identifier(&normalized) {
+        "openclaw-weixin".to_string()
+    } else if is_wecom_channel_identifier(&normalized) {
+        "wecom".to_string()
+    } else {
+        normalized
+    }
+}
+
 fn normalize_account_identifier(raw: &str) -> String {
     raw.trim().to_ascii_lowercase()
 }
@@ -2012,8 +2167,8 @@ fn channel_payload_has_content(payload: &serde_json::Map<String, Value>) -> bool
 
 fn resolve_channel_plugin_account_store_paths(channel_type: &str) -> Vec<PathBuf> {
     let openclaw_home = resolve_openclaw_home_path();
-    match normalize_channel_identifier(channel_type).as_str() {
-        "weixin" => vec![
+    match normalize_channel_identifier_for_openclaw_config(channel_type).as_str() {
+        "openclaw-weixin" => vec![
             openclaw_home.join("openclaw-weixin").join("accounts.json"),
             openclaw_home.join("weixin").join("accounts.json"),
             openclaw_home.join("wechat").join("accounts.json"),
@@ -2160,11 +2315,14 @@ fn load_channel_plugin_account_configs(
 
 fn sync_channel_accounts_from_plugin_store(channel_type: &str) -> Result<bool, String> {
     let normalized_channel = normalize_channel_identifier(channel_type);
-    if normalized_channel != "weixin" && normalized_channel != "wecom" {
+    if !is_weixin_channel_identifier(&normalized_channel)
+        && !is_wecom_channel_identifier(&normalized_channel)
+    {
         return Ok(false);
     }
+    let channel_config_key = normalize_channel_identifier_for_openclaw_config(channel_type);
 
-    let plugin_accounts = load_channel_plugin_account_configs(&normalized_channel)?;
+    let plugin_accounts = load_channel_plugin_account_configs(&channel_config_key)?;
     if plugin_accounts.is_empty() {
         return Ok(false);
     }
@@ -2187,7 +2345,7 @@ fn sync_channel_accounts_from_plugin_store(channel_type: &str) -> Result<bool, S
     let root = parsed
         .as_object_mut()
         .ok_or("openclaw.json 根节点不是对象")?;
-    ensure_channel_plugin_allowlist(root, &normalized_channel)?;
+    ensure_channel_plugin_allowlist(root, &channel_config_key)?;
 
     if !matches!(root.get("channels"), Some(Value::Object(_))) {
         root.insert(
@@ -2199,17 +2357,9 @@ fn sync_channel_accounts_from_plugin_store(channel_type: &str) -> Result<bool, S
         .get_mut("channels")
         .and_then(Value::as_object_mut)
         .ok_or("channels 不是对象")?;
-    if !matches!(
-        channels_obj.get(&normalized_channel),
-        Some(Value::Object(_))
-    ) {
-        channels_obj.insert(
-            normalized_channel.clone(),
-            Value::Object(serde_json::Map::<String, Value>::new()),
-        );
-    }
+    let _ = merge_channel_alias_sections(channels_obj, &channel_config_key)?;
     let section_obj = channels_obj
-        .get_mut(&normalized_channel)
+        .get_mut(&channel_config_key)
         .and_then(Value::as_object_mut)
         .ok_or("channels.<channelType> 不是对象")?;
     migrate_legacy_channel_section_to_accounts(section_obj);
@@ -2278,21 +2428,27 @@ fn sync_channel_accounts_from_plugin_store(channel_type: &str) -> Result<bool, S
 fn resolve_channel_config_verification_aliases(channel_type: &str) -> HashSet<String> {
     let normalized = normalize_channel_identifier(channel_type);
     let mut aliases = vec![normalized.clone()];
-    match normalized.as_str() {
-        "weixin" => aliases.extend([
+    if is_weixin_channel_identifier(&normalized) {
+        aliases.extend([
+            "openclaw-weixin".to_string(),
             "wechat".to_string(),
             "wx".to_string(),
-            "openclaw-weixin".to_string(),
             "openclaw_weixin".to_string(),
-        ]),
-        "wecom" => aliases.extend([
+            "weixin".to_string(),
+            "wechat_official_account".to_string(),
+            "wechat-official-account".to_string(),
+        ]);
+    } else if is_wecom_channel_identifier(&normalized) {
+        aliases.extend([
+            "wecom".to_string(),
             "workwechat".to_string(),
+            "work-wechat".to_string(),
+            "work_wechat".to_string(),
             "wechatwork".to_string(),
             "qywx".to_string(),
             "openclaw-wecom".to_string(),
             "openclaw_wecom".to_string(),
-        ]),
-        _ => {}
+        ]);
     }
 
     aliases
@@ -2300,6 +2456,159 @@ fn resolve_channel_config_verification_aliases(channel_type: &str) -> HashSet<St
         .map(|value| normalize_channel_identifier(&value))
         .filter(|value| !value.is_empty())
         .collect()
+}
+
+fn resolve_channel_section_from_channels_obj<'a>(
+    channels_obj: &'a serde_json::Map<String, Value>,
+    channel_type: &str,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    let preferred = normalize_channel_identifier_for_openclaw_config(channel_type);
+    let aliases = resolve_channel_config_verification_aliases(channel_type);
+
+    if let Some(section_obj) = channels_obj.get(&preferred).and_then(Value::as_object) {
+        return Some(section_obj);
+    }
+
+    for (channel_key, section_value) in channels_obj {
+        if !aliases.contains(&normalize_channel_identifier(channel_key)) {
+            continue;
+        }
+        if let Some(section_obj) = section_value.as_object() {
+            return Some(section_obj);
+        }
+    }
+
+    None
+}
+
+fn merge_channel_section_from_alias(
+    target: &mut serde_json::Map<String, Value>,
+    source: &serde_json::Map<String, Value>,
+) {
+    migrate_legacy_channel_section_to_accounts(target);
+    let mut source_clone = source.clone();
+    migrate_legacy_channel_section_to_accounts(&mut source_clone);
+
+    if !matches!(target.get("accounts"), Some(Value::Object(_))) {
+        target.insert(
+            "accounts".to_string(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    if let (Some(target_accounts), Some(source_accounts)) = (
+        target.get_mut("accounts").and_then(Value::as_object_mut),
+        source_clone.get("accounts").and_then(Value::as_object),
+    ) {
+        for (account_id, source_account_value) in source_accounts {
+            let Some(source_account_obj) = source_account_value.as_object() else {
+                continue;
+            };
+            if !matches!(target_accounts.get(account_id), Some(Value::Object(_))) {
+                target_accounts.insert(
+                    account_id.clone(),
+                    Value::Object(source_account_obj.clone()),
+                );
+                continue;
+            }
+            if let Some(target_account_obj) = target_accounts
+                .get_mut(account_id)
+                .and_then(Value::as_object_mut)
+            {
+                for (key, value) in source_account_obj {
+                    if !target_account_obj.contains_key(key) {
+                        target_account_obj.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if target
+        .get("defaultAccount")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        if let Some(default_account) = source_clone
+            .get("defaultAccount")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            target.insert(
+                "defaultAccount".to_string(),
+                Value::String(default_account.to_string()),
+            );
+        }
+    }
+
+    for (key, value) in &source_clone {
+        if is_channel_section_reserved_key(key) {
+            continue;
+        }
+        if !target.contains_key(key) {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+
+    let source_enabled = source_clone
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    if source_enabled && target.get("enabled").and_then(Value::as_bool) != Some(true) {
+        target.insert("enabled".to_string(), Value::Bool(true));
+    }
+
+    mirror_default_account_to_channel_section(target);
+}
+
+fn merge_channel_alias_sections(
+    channels_obj: &mut serde_json::Map<String, Value>,
+    channel_type: &str,
+) -> Result<String, String> {
+    let canonical_key = normalize_channel_identifier_for_openclaw_config(channel_type);
+    if canonical_key.is_empty() {
+        return Err("channelType 不能为空".to_string());
+    }
+
+    if !matches!(channels_obj.get(&canonical_key), Some(Value::Object(_))) {
+        channels_obj.insert(
+            canonical_key.clone(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+
+    let aliases = resolve_channel_config_verification_aliases(channel_type);
+    let keys_to_merge = channels_obj
+        .keys()
+        .cloned()
+        .filter(|channel_key| {
+            let normalized_key = normalize_channel_identifier(channel_key);
+            normalized_key != canonical_key && aliases.contains(&normalized_key)
+        })
+        .collect::<Vec<_>>();
+
+    for alias_key in keys_to_merge {
+        let Some(source_value) = channels_obj.remove(&alias_key) else {
+            continue;
+        };
+        let Some(source_obj) = source_value.as_object() else {
+            continue;
+        };
+        let target_obj = channels_obj
+            .get_mut(&canonical_key)
+            .and_then(Value::as_object_mut)
+            .ok_or("channels.<channelType> 不是对象")?;
+        merge_channel_section_from_alias(target_obj, source_obj);
+    }
+
+    let section_obj = channels_obj
+        .get_mut(&canonical_key)
+        .and_then(Value::as_object_mut)
+        .ok_or("channels.<channelType> 不是对象")?;
+    migrate_legacy_channel_section_to_accounts(section_obj);
+    Ok(canonical_key)
 }
 
 fn channel_section_has_configured_accounts(section_obj: &serde_json::Map<String, Value>) -> bool {
@@ -2340,8 +2649,12 @@ fn has_configured_channel_account_in_openclaw_config(channel_type: &str) -> Resu
             ))
         }
     };
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|error| format!("openclaw.json 解析失败（{}）：{error}", source_path.display()))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "openclaw.json 解析失败（{}）：{error}",
+            source_path.display()
+        )
+    })?;
     let Some(root) = value_as_object(&parsed) else {
         return Ok(false);
     };
@@ -2477,8 +2790,11 @@ fn ensure_channel_plugin_allowlist(
     let plugin_id = match normalize_channel_identifier(channel_type).as_str() {
         "feishu" => Some("openclaw-lark"),
         "dingtalk" => Some("dingtalk"),
-        "weixin" => Some("openclaw-weixin"),
-        "wecom" => Some("wecom"),
+        "weixin" | "wechat" | "wx" | "openclaw-weixin" | "openclaw_weixin" => {
+            Some("openclaw-weixin")
+        }
+        "wecom" | "workwechat" | "work-wechat" | "work_wechat" | "wechatwork" | "qywx"
+        | "openclaw-wecom" | "openclaw_wecom" => Some("wecom"),
         "qqbot" => Some("qqbot"),
         "whatsapp" => Some("whatsapp"),
         _ => None,
@@ -2551,7 +2867,8 @@ fn resolve_channel_plugin_install_spec(channel_type: &str) -> Option<(&'static s
 }
 
 fn clear_all_channel_bindings(root: &mut serde_json::Map<String, Value>, channel_type: &str) {
-    let normalized_channel = normalize_channel_identifier(channel_type);
+    let normalized_channel = normalize_channel_identifier_for_openclaw_config(channel_type);
+    let aliases = resolve_channel_config_verification_aliases(channel_type);
     let Some(bindings) = root.get_mut("bindings").and_then(Value::as_array_mut) else {
         return;
     };
@@ -2569,7 +2886,11 @@ fn clear_all_channel_bindings(root: &mut serde_json::Map<String, Value>, channel
             return true;
         };
 
-        normalize_channel_identifier(existing_channel) != normalized_channel
+        let normalized_existing = normalize_channel_identifier(existing_channel);
+        if normalized_existing == normalized_channel {
+            return false;
+        }
+        !aliases.contains(&normalized_existing)
     });
 
     if bindings.is_empty() {
@@ -2583,7 +2904,8 @@ fn upsert_channel_binding(
     account_id: Option<&str>,
     agent_id: Option<&str>,
 ) {
-    let normalized_channel = normalize_channel_identifier(channel_type);
+    let normalized_channel = normalize_channel_identifier_for_openclaw_config(channel_type);
+    let channel_aliases = resolve_channel_config_verification_aliases(channel_type);
     if normalized_channel.is_empty() {
         return;
     }
@@ -2624,7 +2946,10 @@ fn upsert_channel_binding(
             continue;
         };
 
-        if normalize_channel_identifier(existing_channel) != normalized_channel {
+        let normalized_existing_channel = normalize_channel_identifier(existing_channel);
+        if normalized_existing_channel != normalized_channel
+            && !channel_aliases.contains(&normalized_existing_channel)
+        {
             next_bindings.push(item);
             continue;
         }
@@ -3249,8 +3574,21 @@ fn infer_openclaw_response_status(text: &str) -> (u16, Option<String>) {
         }
     }
 
+    let lower = trimmed.to_ascii_lowercase();
     if trimmed.contains("请求失败")
+        || trimmed.contains("请求 OpenClaw 失败")
+        || trimmed.contains("OpenClaw 请求失败")
         || trimmed.contains("返回错误状态")
+        || trimmed.contains("连接失败")
+        || trimmed.contains("连接被拒绝")
+        || trimmed.contains("超时")
+        || lower.starts_with("error sending request for url")
+        || lower.contains(": error sending request for url")
+        || lower.contains("connection refused")
+        || lower.contains("failed to connect")
+        || lower.contains("network error")
+        || lower.contains("timed out")
+        || lower.contains("dns error")
         || trimmed.contains("invalid_api_key")
         || trimmed.contains("unauthorized")
         || trimmed.contains("rate limit")
@@ -6737,8 +7075,9 @@ fn load_openclaw_channel_form_values(
     let Some(section_obj) = root
         .get("channels")
         .and_then(Value::as_object)
-        .and_then(|channels| channels.get(&normalized_channel))
-        .and_then(Value::as_object)
+        .and_then(|channels| {
+            resolve_channel_section_from_channels_obj(channels, &normalized_channel)
+        })
     else {
         return Ok(std::collections::HashMap::new());
     };
@@ -6804,18 +7143,9 @@ fn save_openclaw_channel_config(payload: OpenClawChannelConfigPayload) -> Result
         .get_mut("channels")
         .and_then(Value::as_object_mut)
         .ok_or("channels 不是对象")?;
-
-    if !matches!(
-        channels_obj.get(&normalized_channel),
-        Some(Value::Object(_))
-    ) {
-        channels_obj.insert(
-            normalized_channel.clone(),
-            Value::Object(serde_json::Map::<String, Value>::new()),
-        );
-    }
+    let channel_config_key = merge_channel_alias_sections(channels_obj, &normalized_channel)?;
     let section_obj = channels_obj
-        .get_mut(&normalized_channel)
+        .get_mut(&channel_config_key)
         .and_then(Value::as_object_mut)
         .ok_or("channels.<channelType> 不是对象")?;
     migrate_legacy_channel_section_to_accounts(section_obj);
@@ -6861,21 +7191,16 @@ fn save_openclaw_channel_config(payload: OpenClawChannelConfigPayload) -> Result
     mirror_default_account_to_channel_section(section_obj);
 
     let (channel_to_agent, account_to_agent) = resolve_channel_binding_maps(root);
-    let binding_key = channel_account_binding_key(&normalized_channel, &resolved_account_id);
+    let binding_key = channel_account_binding_key(&channel_config_key, &resolved_account_id);
     let has_account_binding = account_to_agent.contains_key(&binding_key);
-    let has_channel_binding = channel_to_agent.contains_key(&normalized_channel);
+    let has_channel_binding = channel_to_agent.contains_key(&channel_config_key);
     if !has_account_binding && !has_channel_binding {
         let binding_account = if is_default_channel_account_id(&resolved_account_id) {
             None
         } else {
             Some(resolved_account_id.as_str())
         };
-        upsert_channel_binding(
-            root,
-            &normalized_channel,
-            binding_account,
-            Some("main"),
-        );
+        upsert_channel_binding(root, &channel_config_key, binding_account, Some("main"));
     }
 
     write_openclaw_config_value(&source_path, &parsed)
@@ -6895,7 +7220,8 @@ fn save_openclaw_channel_binding(payload: OpenClawChannelBindingPayload) -> Resu
         .as_object_mut()
         .ok_or("openclaw.json 根节点不是对象")?;
 
-    let normalized_channel = normalize_channel_identifier(&payload.channel_type);
+    let normalized_channel =
+        normalize_channel_identifier_for_openclaw_config(&payload.channel_type);
     let normalized_account = payload.account_id.trim();
     if normalized_channel.is_empty() || normalized_account.is_empty() {
         return Err("channelType 与 accountId 不能为空".to_string());
@@ -6930,7 +7256,8 @@ fn delete_openclaw_channel_account_config(
         .as_object_mut()
         .ok_or("openclaw.json 根节点不是对象")?;
 
-    let normalized_channel = normalize_channel_identifier(&payload.channel_type);
+    let normalized_channel =
+        normalize_channel_identifier_for_openclaw_config(&payload.channel_type);
     let normalized_account = payload.account_id.trim().to_string();
     if normalized_channel.is_empty() || normalized_account.is_empty() {
         return Err("channelType 与 accountId 不能为空".to_string());
@@ -6938,6 +7265,7 @@ fn delete_openclaw_channel_account_config(
 
     let mut removed = false;
     if let Some(channels_obj) = root.get_mut("channels").and_then(Value::as_object_mut) {
+        let _ = merge_channel_alias_sections(channels_obj, &normalized_channel)?;
         let mut remove_channel = false;
         if let Some(section_obj) = channels_obj
             .get_mut(&normalized_channel)
@@ -6994,16 +7322,20 @@ fn delete_openclaw_channel_account_config(
 }
 
 #[tauri::command]
-fn rename_openclaw_channel_account(payload: OpenClawChannelAccountRenamePayload) -> Result<(), String> {
+fn rename_openclaw_channel_account(
+    payload: OpenClawChannelAccountRenamePayload,
+) -> Result<(), String> {
     let source_path = resolve_openclaw_config_path();
-    let raw = std::fs::read_to_string(&source_path).map_err(|error| format!("读取 openclaw.json 失败: {error}"))?;
+    let raw = std::fs::read_to_string(&source_path)
+        .map_err(|error| format!("读取 openclaw.json 失败: {error}"))?;
     let mut parsed: Value =
         serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
     let root = parsed
         .as_object_mut()
         .ok_or("openclaw.json 根节点不是对象")?;
 
-    let normalized_channel = normalize_channel_identifier(&payload.channel_type);
+    let normalized_channel =
+        normalize_channel_identifier_for_openclaw_config(&payload.channel_type);
     let normalized_account = payload.account_id.trim().to_string();
     let normalized_name = payload.name.trim().to_string();
     if normalized_channel.is_empty() || normalized_account.is_empty() {
@@ -7017,6 +7349,7 @@ fn rename_openclaw_channel_account(payload: OpenClawChannelAccountRenamePayload)
         .get_mut("channels")
         .and_then(Value::as_object_mut)
         .ok_or("channels 不存在或格式错误")?;
+    let _ = merge_channel_alias_sections(channels_obj, &normalized_channel)?;
     let section_obj = channels_obj
         .get_mut(&normalized_channel)
         .and_then(Value::as_object_mut)
@@ -7049,13 +7382,21 @@ fn delete_openclaw_channel_config(channel_type: String) -> Result<(), String> {
         .as_object_mut()
         .ok_or("openclaw.json 根节点不是对象")?;
 
-    let normalized_channel = normalize_channel_identifier(&channel_type);
+    let normalized_channel = normalize_channel_identifier_for_openclaw_config(&channel_type);
     if normalized_channel.is_empty() {
         return Err("channelType 不能为空".to_string());
     }
 
     if let Some(channels_obj) = root.get_mut("channels").and_then(Value::as_object_mut) {
-        channels_obj.remove(&normalized_channel);
+        let aliases = resolve_channel_config_verification_aliases(&normalized_channel);
+        let keys_to_remove = channels_obj
+            .keys()
+            .cloned()
+            .filter(|key| aliases.contains(&normalize_channel_identifier(key)))
+            .collect::<Vec<_>>();
+        for key in keys_to_remove {
+            channels_obj.remove(&key);
+        }
     }
     clear_all_channel_bindings(root, &normalized_channel);
     write_openclaw_config_value(&source_path, &parsed)
@@ -8673,6 +9014,12 @@ fn bootstrap_openclaw_runtime(install_cli: bool) -> Result<Vec<String>, String> 
         format!("entry={}", entry.display()),
         format!("node={} (v{})", node.display(), node_version),
     ];
+
+    match sanitize_openclaw_channel_schema() {
+        Ok(Some(detail)) => notes.push(format!("channel_schema_sanitized={detail}")),
+        Ok(None) => {}
+        Err(error) => notes.push(format!("channel_schema_sanitize_error={error}")),
+    }
 
     if install_cli {
         match install_openclaw_cli_wrapper() {
@@ -11764,7 +12111,12 @@ fn append_openclaw_channel_mirror_failure_log_blocking(
         .create(true)
         .append(true)
         .open(&log_path)
-        .map_err(|error| format!("打开频道转发日志文件失败（{}）：{error}", log_path.display()))?;
+        .map_err(|error| {
+            format!(
+                "打开频道转发日志文件失败（{}）：{error}",
+                log_path.display()
+            )
+        })?;
 
     let normalized_channel = normalize_channel_identifier(&payload.channel_type);
     let account_id = payload.account_id.trim();
@@ -12753,9 +13105,7 @@ fn start_openclaw_channel_qr_binding(
     } else {
         "printf '\\n' | npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
     };
-    let command_line = format!(
-        "({login_command}) || (({install_command}) && ({login_command}))"
-    );
+    let command_line = format!("({login_command}) || (({install_command}) && ({login_command}))");
 
     let now = current_timestamp_millis();
     let session_state = Arc::new(Mutex::new(OpenClawChannelQrBindingSessionState {
@@ -12896,7 +13246,8 @@ fn start_openclaw_channel_qr_binding(
                                 ));
                             }
                             if state.detail.is_none() {
-                                state.detail = Some("绑定流程已完成，并检测到频道配置。".to_string());
+                                state.detail =
+                                    Some("绑定流程已完成，并检测到频道配置。".to_string());
                             }
                         }
                         Ok(false) => {
@@ -13828,6 +14179,30 @@ mod tests {
   "result": "started"
 }"#;
         assert!(!gateway_cli_text_indicates_non_effective_success(raw));
+    }
+
+    #[test]
+    fn infer_runtime_status_marks_openclaw_request_failure_as_error() {
+        let text = "请求 OpenClaw 失败: error sending request for url (http://127.0.0.1:19789/v1/chat/completions)";
+        let (status, error) = infer_openclaw_response_status(text);
+        assert_eq!(status, 500);
+        assert_eq!(error.as_deref(), Some(text));
+    }
+
+    #[test]
+    fn infer_runtime_status_marks_english_network_failure_as_error() {
+        let text = "error sending request for url (http://127.0.0.1:19789/v1/chat/completions)";
+        let (status, error) = infer_openclaw_response_status(text);
+        assert_eq!(status, 500);
+        assert_eq!(error.as_deref(), Some(text));
+    }
+
+    #[test]
+    fn infer_runtime_status_keeps_normal_text_successful() {
+        let text = "配置已经基本落地，下一步继续执行。";
+        let (status, error) = infer_openclaw_response_status(text);
+        assert_eq!(status, 200);
+        assert!(error.is_none());
     }
 
     #[test]
