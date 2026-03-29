@@ -1913,6 +1913,10 @@ fn normalize_account_identifier(raw: &str) -> String {
     raw.trim().to_ascii_lowercase()
 }
 
+fn is_default_channel_account_id(raw: &str) -> bool {
+    normalize_account_identifier(raw) == "default"
+}
+
 fn channel_account_binding_key(channel_type: &str, account_id: &str) -> String {
     format!(
         "{}:{}",
@@ -1963,7 +1967,8 @@ fn resolve_channel_binding_maps(
             .and_then(|match_obj| match_obj.get("accountId"))
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|value| !value.is_empty());
+            .filter(|value| !value.is_empty())
+            .filter(|value| !is_default_channel_account_id(value));
 
         if let Some(account_id) = account_id {
             account_to_agent.insert(
@@ -2205,7 +2210,14 @@ fn upsert_channel_binding(
     let normalized_account = account_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(normalize_account_identifier);
+        .map(normalize_account_identifier)
+        .and_then(|value| {
+            if value == "default" {
+                None
+            } else {
+                Some(value)
+            }
+        });
     let normalized_agent = agent_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -2247,7 +2259,14 @@ fn upsert_channel_binding(
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(normalize_account_identifier);
+            .map(normalize_account_identifier)
+            .and_then(|value| {
+                if value == "default" {
+                    None
+                } else {
+                    Some(value)
+                }
+            });
 
         if let Some(ref target_agent) = normalized_agent {
             if !target_agent.is_empty() && existing_agent.eq_ignore_ascii_case(target_agent) {
@@ -2282,6 +2301,7 @@ fn upsert_channel_binding(
         }
 
         let mut binding_obj = serde_json::Map::new();
+        binding_obj.insert("type".to_string(), Value::String("route".to_string()));
         binding_obj.insert("agentId".to_string(), Value::String(agent_id));
         binding_obj.insert("match".to_string(), Value::Object(match_obj));
         next_bindings.push(Value::Object(binding_obj));
@@ -6238,13 +6258,10 @@ fn load_openclaw_channel_accounts_snapshot_blocking(
                     .to_string();
                     let normalized_channel = normalize_channel_identifier(channel_type);
                     let binding_key = channel_account_binding_key(channel_type, account_id);
-                    let agent_id = account_to_agent.get(&binding_key).cloned().or_else(|| {
-                        if account_id.eq_ignore_ascii_case("default") {
-                            channel_to_agent.get(&normalized_channel).cloned()
-                        } else {
-                            None
-                        }
-                    });
+                    let agent_id = account_to_agent
+                        .get(&binding_key)
+                        .cloned()
+                        .or_else(|| channel_to_agent.get(&normalized_channel).cloned());
 
                     accounts.push(OpenClawChannelAccountSnapshotItem {
                         account_id: account_id.to_string(),
@@ -6455,10 +6472,15 @@ fn save_openclaw_channel_config(payload: OpenClawChannelConfigPayload) -> Result
     let has_account_binding = account_to_agent.contains_key(&binding_key);
     let has_channel_binding = channel_to_agent.contains_key(&normalized_channel);
     if !has_account_binding && !has_channel_binding {
+        let binding_account = if is_default_channel_account_id(&resolved_account_id) {
+            None
+        } else {
+            Some(resolved_account_id.as_str())
+        };
         upsert_channel_binding(
             root,
             &normalized_channel,
-            Some(&resolved_account_id),
+            binding_account,
             Some("main"),
         );
     }
@@ -6485,11 +6507,16 @@ fn save_openclaw_channel_binding(payload: OpenClawChannelBindingPayload) -> Resu
     if normalized_channel.is_empty() || normalized_account.is_empty() {
         return Err("channelType 与 accountId 不能为空".to_string());
     }
+    let binding_account = if is_default_channel_account_id(normalized_account) {
+        None
+    } else {
+        Some(normalized_account)
+    };
 
     upsert_channel_binding(
         root,
         &normalized_channel,
-        Some(normalized_account),
+        binding_account,
         payload.agent_id.as_deref(),
     );
     write_openclaw_config_value(&source_path, &parsed)
@@ -6566,6 +6593,9 @@ fn delete_openclaw_channel_account_config(
         return Ok(());
     }
 
+    if is_default_channel_account_id(&normalized_account) {
+        upsert_channel_binding(root, &normalized_channel, None, None);
+    }
     upsert_channel_binding(root, &normalized_channel, Some(&normalized_account), None);
     write_openclaw_config_value(&source_path, &parsed)
 }
@@ -13326,6 +13356,11 @@ pub fn run() {
                 .map_err(|error| error.to_string())?;
 
             if let Some(window) = app.get_webview_window("main") {
+                if let Some(icon) = app.default_window_icon().cloned() {
+                    if let Err(error) = window.set_icon(icon) {
+                        eprintln!("[dragonclaw] failed to refresh main window icon: {error}");
+                    }
+                }
                 let _ = window.set_decorations(false);
                 let _ = window.set_always_on_top(false);
                 let _ = window.set_shadow(false);

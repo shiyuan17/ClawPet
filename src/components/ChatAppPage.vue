@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
 import ControlIcon from "./ControlIcon.vue";
-import appLogoUrl from "../../images/xia-logo.png";
+import appLogoUrl from "../../images/DragonClaw-logo.png";
 import channelDingtalkIcon from "../images/channels/dingtalk.svg";
 import channelDiscordIcon from "../images/channels/discord.svg";
 import channelFeishuIcon from "../images/channels/feishu.svg";
@@ -248,6 +248,9 @@ type ChatComposerAttachment = {
 type ChatMentionCandidate = {
   agentId: string;
   displayName: string;
+  mentionValue: string;
+  avatarUrl: string | null;
+  isAll: boolean;
 };
 
 type AgentChatMessage = {
@@ -1110,6 +1113,10 @@ const chatAgentContextMenuRef = ref<HTMLElement | null>(null);
 const chatAgentContextMenuAgentId = ref<string | null>(null);
 const chatAgentContextMenuTarget = ref<AgentListItem | null>(null);
 const chatAgentContextMenuPosition = ref({ x: 0, y: 0 });
+const isChannelPaneItemContextMenuOpen = ref(false);
+const channelPaneItemContextMenuRef = ref<HTMLElement | null>(null);
+const channelPaneItemContextMenuTarget = ref<ChannelPaneChatItem | null>(null);
+const channelPaneItemContextMenuPosition = ref({ x: 0, y: 0 });
 const isChatAgentDeleteConfirmModalOpen = ref(false);
 const chatAgentDeleteConfirmTarget = ref<AgentListItem | null>(null);
 const isChatAgentDeleteConfirming = ref(false);
@@ -1138,6 +1145,9 @@ const CHAT_COMPOSER_MAX_ROWS = 8;
 const CHAT_COMPOSER_MAX_ATTACHMENT_COUNT = 5;
 const CHAT_COMPOSER_MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const CHAT_MENTION_MAX_CANDIDATES = 8;
+const CHAT_MENTION_ALL_AGENT_ID = "__mention_all__";
+const CHAT_MENTION_ALL_DISPLAY_NAME = "all";
+const CHAT_MENTION_ALL_KEYWORDS = ["all", "everyone", "所有", "全体", "全部"] as const;
 const isSending = ref(false);
 const agents = ref<AgentListItem[]>([]);
 const selectedAgentId = ref<string | null>(null);
@@ -1309,6 +1319,9 @@ const runtimeToolSyncWindowMs = 180000;
 const runtimeToolSyncPostResponseWindowMs = 4000;
 const runtimeToolSyncRetryDelayMs = 400;
 let runtimeToolSyncRetryTimer = 0;
+const openclawSessionSyncPollIntervalMs = 3500;
+let openclawSessionSyncPollTimer = 0;
+let openclawSessionSyncInFlight = false;
 const RELATED_HISTORY_FILTER_ALL = "__all__";
 const RELATED_HISTORY_AGENT_DEFAULT_CHANNEL_PREFIX = "agent-default:";
 const relatedHistoryChannelFilter = ref<string>(RELATED_HISTORY_FILTER_ALL);
@@ -3763,6 +3776,10 @@ function resolveMentionedGroupMembers(text: string, members: AgentListItem[]) {
   if (!content.includes("@")) {
     return [] as AgentListItem[];
   }
+  const mentionAllMatched = CHAT_MENTION_ALL_KEYWORDS.some((token) => containsGroupMention(content, token));
+  if (mentionAllMatched) {
+    return [...members];
+  }
   const deduped = new Map<string, AgentListItem>();
   for (const member of members) {
     const displayName = stripRoleLabel(member.displayName);
@@ -4950,6 +4967,11 @@ function closeChatAgentContextMenu() {
   chatAgentContextMenuTarget.value = null;
 }
 
+function closeChannelPaneItemContextMenu() {
+  isChannelPaneItemContextMenuOpen.value = false;
+  channelPaneItemContextMenuTarget.value = null;
+}
+
 function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent) {
   const pane = activeAgentPaneTab.value;
   if (pane !== "staff" && pane !== "group") {
@@ -4964,6 +4986,7 @@ function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent)
   event.preventDefault();
   event.stopPropagation();
   closeChatQuickCreateMenu();
+  closeChannelPaneItemContextMenu();
   const menuWidth = 152;
   const menuHeight = 128;
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
@@ -4978,6 +5001,29 @@ function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent)
   chatAgentContextMenuAgentId.value = agent.agentId;
   chatAgentContextMenuTarget.value = agent;
   isChatAgentContextMenuOpen.value = true;
+}
+
+function handleChannelPaneChatItemContextMenu(item: ChannelPaneChatItem, event: MouseEvent) {
+  if (!isChannelPaneActive.value) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  closeChatQuickCreateMenu();
+  closeChatAgentContextMenu();
+  const menuWidth = 136;
+  const menuHeight = 44;
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
+  const fallbackX = Math.max(8, event.clientX);
+  const fallbackY = Math.max(8, event.clientY);
+  const x =
+    viewportWidth > 0 ? Math.max(8, Math.min(fallbackX, viewportWidth - menuWidth - 8)) : fallbackX;
+  const y =
+    viewportHeight > 0 ? Math.max(8, Math.min(fallbackY, viewportHeight - menuHeight - 8)) : fallbackY;
+  channelPaneItemContextMenuPosition.value = { x, y };
+  channelPaneItemContextMenuTarget.value = { ...item };
+  isChannelPaneItemContextMenuOpen.value = true;
 }
 
 function handleChatAgentContextMenuDocumentMouseDown(event: MouseEvent) {
@@ -4996,6 +5042,22 @@ function handleChatAgentContextMenuDocumentMouseDown(event: MouseEvent) {
   closeChatAgentContextMenu();
 }
 
+function handleChannelPaneItemContextMenuDocumentMouseDown(event: MouseEvent) {
+  if (!isChannelPaneItemContextMenuOpen.value) {
+    return;
+  }
+  const menuRoot = channelPaneItemContextMenuRef.value;
+  if (!menuRoot) {
+    closeChannelPaneItemContextMenu();
+    return;
+  }
+  const target = event.target;
+  if (target instanceof Node && menuRoot.contains(target)) {
+    return;
+  }
+  closeChannelPaneItemContextMenu();
+}
+
 function handleChatAgentContextMenuDocumentKeyDown(event: KeyboardEvent) {
   if (!isChatAgentContextMenuOpen.value) {
     return;
@@ -5005,6 +5067,63 @@ function handleChatAgentContextMenuDocumentKeyDown(event: KeyboardEvent) {
   }
   event.preventDefault();
   closeChatAgentContextMenu();
+}
+
+function handleChannelPaneItemContextMenuDocumentKeyDown(event: KeyboardEvent) {
+  if (!isChannelPaneItemContextMenuOpen.value) {
+    return;
+  }
+  if (event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  closeChannelPaneItemContextMenu();
+}
+
+async function handleChannelPaneItemContextMenuDelete() {
+  const invoke = getTauriInvoke();
+  const target = channelPaneItemContextMenuTarget.value;
+  closeChannelPaneItemContextMenu();
+  if (!target) {
+    return;
+  }
+
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    const confirmed = window.confirm(`确定删除频道「${target.name}」账号「${target.accountId}」吗？`);
+    if (!confirmed) {
+      return;
+    }
+  }
+
+  if (!invoke) {
+    showChatAgentDeleteNotice("当前环境不支持删除频道配置。");
+    return;
+  }
+
+  try {
+    await invoke("delete_openclaw_channel_account_config", {
+      payload: {
+        channelType: target.channelType,
+        accountId: target.accountId
+      }
+    });
+    await refreshDashboardData();
+    if (channelBindingModalItem.value?.id === target.id) {
+      closeChannelBindingModal();
+    }
+    const activeSession = activeChannelChatSession.value;
+    if (activeSession && activeSession.id === target.id) {
+      const currentAgentId = selectedAgentId.value;
+      if (currentAgentId) {
+        switchAgent(currentAgentId, { channelSession: null, force: true });
+      } else {
+        activeChannelChatSession.value = null;
+      }
+    }
+    showChatAgentDeleteNotice(`已删除频道「${target.name}」账号「${target.accountId}」。`);
+  } catch (error) {
+    showChatAgentDeleteNotice(resolveUnknownErrorMessage(error, "删除频道配置失败。"));
+  }
 }
 
 function openAgentSettingsPanelForAgent(agentId: string) {
@@ -5822,7 +5941,7 @@ function applyChatMentionCandidate(candidate: ChatMentionCandidate) {
   }
   const before = chatInput.value.slice(0, context.startIndex);
   const after = chatInput.value.slice(cursor);
-  const mentionText = `@${candidate.displayName}`;
+  const mentionText = `@${candidate.mentionValue}`;
   const needsTrailingSpace = after.length === 0 || !/^[\s,，。!！?？:：;；、)）\]】}>》]/.test(after);
   const spacer = needsTrailingSpace ? " " : "";
   const nextValue = `${before}${mentionText}${spacer}${after}`;
@@ -6710,6 +6829,10 @@ async function openSidebarSettings() {
 }
 
 async function openSidebarLogs() {
+  if (isLogsPanelActive.value) {
+    closeSidebarLogsPanel();
+    return;
+  }
   activeSection.value = "chat";
   closeSidebarThemePopover();
   closeSidebarSettingsModal();
@@ -6728,6 +6851,10 @@ async function openSidebarLogs() {
 }
 
 async function openSidebarHistory() {
+  if (isHistoryPanelActive.value) {
+    closeSidebarLogsPanel();
+    return;
+  }
   activeSection.value = "chat";
   closeSidebarThemePopover();
   closeSidebarSettingsModal();
@@ -6976,6 +7103,18 @@ async function openSidebarOpenClawWeb() {
 
 function equalsIgnoreCase(left: string | null | undefined, right: string | null | undefined) {
   return (left ?? "").trim().toLowerCase() === (right ?? "").trim().toLowerCase();
+}
+
+function resolveUnknownErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    return message || fallback;
+  }
+  if (typeof error === "string") {
+    const message = error.trim();
+    return message || fallback;
+  }
+  return fallback;
 }
 
 function isProtectedStaffAgentId(agentId: string | null | undefined) {
@@ -7949,6 +8088,49 @@ async function syncOpenClawSessionHistoryToLocal(
   return latestHistory;
 }
 
+function stopOpenClawSessionSyncMonitor() {
+  if (openclawSessionSyncPollTimer) {
+    window.clearInterval(openclawSessionSyncPollTimer);
+    openclawSessionSyncPollTimer = 0;
+  }
+}
+
+async function pollActiveOpenClawSessionHistory() {
+  if (openclawSessionSyncInFlight) {
+    return;
+  }
+  const agent = activeAgent.value;
+  const scopeKey = activeConversationScopeKey.value;
+  if (!agent || !scopeKey || !isOpenClawAgentSessionScope(scopeKey, agent.agentId)) {
+    return;
+  }
+  openclawSessionSyncInFlight = true;
+  try {
+    await syncOpenClawSessionHistoryToLocal(agent, scopeKey, { applyToActiveConversation: true });
+  } finally {
+    openclawSessionSyncInFlight = false;
+  }
+}
+
+function syncOpenClawSessionSyncMonitorState() {
+  const agent = activeAgent.value;
+  const scopeKey = activeConversationScopeKey.value;
+  const shouldRun =
+    activeSection.value === "chat" &&
+    Boolean(agent && scopeKey && isOpenClawAgentSessionScope(scopeKey, agent.agentId));
+  if (!shouldRun) {
+    stopOpenClawSessionSyncMonitor();
+    return;
+  }
+
+  if (!openclawSessionSyncPollTimer) {
+    openclawSessionSyncPollTimer = window.setInterval(() => {
+      void pollActiveOpenClawSessionHistory();
+    }, openclawSessionSyncPollIntervalMs);
+  }
+  void pollActiveOpenClawSessionHistory();
+}
+
 function buildVirtualOpenClawSessionItem(scopeKey: string, scopeLabel: string, agentId: string, preview: string): ChannelPaneChatItem {
   return {
     id: `virtual-openclaw-${scopeKey}`,
@@ -8121,6 +8303,69 @@ function collectRelatedArchiveRecords(agent: AgentListItem) {
   }
   records.sort((left, right) => right.archivedAt - left.archivedAt);
   return records;
+}
+
+function resolveRelatedHistoryConversationId(record: ChatRelatedHistoryRecord) {
+  const extractConversationId = (rawValue: string) => {
+    const target = rawValue.trim();
+    if (!target) {
+      return "";
+    }
+    const idMatch = target.match(/(?:^|:)((?:ou|oc)_[^:\s]+)/i);
+    if (idMatch?.[1]) {
+      return idMatch[1];
+    }
+    const segments = target
+      .split(":")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    if (segments.length >= 2) {
+      return segments[segments.length - 1] || target;
+    }
+    return target;
+  };
+
+  const parsed = parseConversationScope(record.scopeKey);
+  if (!parsed) {
+    return extractConversationId(record.scopeKey) || "unknown";
+  }
+  if (parsed.kind === "agent") {
+    const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase() || "main";
+    const target = parsed.sessionTarget?.trim() || "";
+    const normalizedTarget = target.toLowerCase();
+    if (!target || normalizedTarget === "main" || normalizedTarget === ownerAgentId) {
+      return ownerAgentId;
+    }
+    return extractConversationId(target) || target;
+  }
+  const accountId = parsed.accountId.trim();
+  if (!accountId) {
+    const channelType = normalizeChannelPaneType(parsed.channelType) || parsed.channelType.trim().toLowerCase();
+    return channelType || "unknown";
+  }
+  return extractConversationId(accountId) || accountId;
+}
+
+function resolveRelatedHistoryScopeLabel(record: ChatRelatedHistoryRecord) {
+  const parsed = parseConversationScope(record.scopeKey);
+  if (!parsed) {
+    return record.scopeLabel.trim() || "默认会话";
+  }
+  if (parsed.kind === "channel") {
+    return normalizeChannelPaneType(parsed.channelType) || parsed.channelType.trim().toLowerCase() || "默认会话";
+  }
+  const target = parsed.sessionTarget?.trim() || "";
+  const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase();
+  const normalizedTarget = target.toLowerCase();
+  if (!target || normalizedTarget === "main" || normalizedTarget === ownerAgentId) {
+    return "默认会话";
+  }
+  const channelCandidate = target.split(":")[0]?.trim() || "";
+  const normalizedChannelType = normalizeChannelPaneType(channelCandidate);
+  if (normalizedChannelType) {
+    return normalizedChannelType;
+  }
+  return target;
 }
 
 const relatedHistoryChannelFilterOptions = computed(() => {
@@ -9408,9 +9653,11 @@ async function saveFeishuCredentials(
 
   const bindingAgentId = resolveMainStaffAgent()?.agentId?.trim() || "main";
   await invoke("save_openclaw_channel_binding", {
-    channelType: FEISHU_CHANNEL_ID,
-    accountId: FEISHU_DEFAULT_ACCOUNT_ID,
-    agentId: bindingAgentId
+    payload: {
+      channelType: FEISHU_CHANNEL_ID,
+      accountId: FEISHU_DEFAULT_ACCOUNT_ID,
+      agentId: bindingAgentId
+    }
   });
 }
 
@@ -10084,9 +10331,11 @@ async function handleSaveChannelBinding() {
   channelBindingError.value = "";
   try {
     await invoke("save_openclaw_channel_binding", {
-      channelType: item.channelType,
-      accountId: item.accountId,
-      agentId: targetAgent.agentId
+      payload: {
+        channelType: item.channelType,
+        accountId: item.accountId,
+        agentId: targetAgent.agentId
+      }
     });
     await refreshDashboardData();
 
@@ -10103,7 +10352,7 @@ async function handleSaveChannelBinding() {
 
     closeChannelBindingModal();
   } catch (error) {
-    channelBindingError.value = error instanceof Error ? error.message : "保存频道绑定失败。";
+    channelBindingError.value = resolveUnknownErrorMessage(error, "保存频道绑定失败。");
   } finally {
     channelBindingSaving.value = false;
   }
@@ -10127,9 +10376,11 @@ async function handleChannelPaneChatItemClick(item: ChannelPaneChatItem) {
   if (invoke && shouldPersistDefaultBinding) {
     try {
       await invoke("save_openclaw_channel_binding", {
-        channelType: item.channelType,
-        accountId: item.accountId,
-        agentId: targetAgent.agentId
+        payload: {
+          channelType: item.channelType,
+          accountId: item.accountId,
+          agentId: targetAgent.agentId
+        }
       });
       await refreshDashboardData();
     } catch {
@@ -12262,14 +12513,16 @@ async function handleRelatedChannelBinding(channelType: string, accountId: strin
 
   try {
     await invoke("save_openclaw_channel_binding", {
-      channelType,
-      accountId,
-      agentId: nextAgentId
+      payload: {
+        channelType,
+        accountId,
+        agentId: nextAgentId
+      }
     });
     relatedResourceModalNotice.value = nextAgentId ? "已绑定到当前员工。" : "已取消与当前员工的绑定。";
     await loadRelatedChannelSnapshot();
   } catch (error) {
-    relatedResourceModalError.value = error instanceof Error ? error.message : "频道绑定保存失败。";
+    relatedResourceModalError.value = resolveUnknownErrorMessage(error, "频道绑定保存失败。");
   } finally {
     relatedResourceModalSaving.value = false;
   }
@@ -12315,6 +12568,10 @@ const chatMentionCandidates = computed<ChatMentionCandidate[]>(() => {
   }
   const keyword = chatMentionQuery.value.trim().toLowerCase();
   const source = activeConversationGroupMembers.value;
+  const showAllCandidate =
+    source.length > 0 &&
+    (!keyword ||
+      CHAT_MENTION_ALL_KEYWORDS.some((token) => token.includes(keyword) || keyword.includes(token)));
   const filtered = !keyword
     ? source
     : source.filter((member) => {
@@ -12323,10 +12580,26 @@ const chatMentionCandidates = computed<ChatMentionCandidate[]>(() => {
         const role = member.roleLabel.trim().toLowerCase();
         return name.includes(keyword) || agentId.includes(keyword) || role.includes(keyword);
       });
-  return filtered.slice(0, CHAT_MENTION_MAX_CANDIDATES).map((member) => ({
+  const memberCandidates = filtered.map((member) => ({
     agentId: member.agentId,
-    displayName: stripRoleLabel(member.displayName)
+    displayName: stripRoleLabel(member.displayName),
+    mentionValue: stripRoleLabel(member.displayName),
+    avatarUrl: getAgentAvatarUrl(member),
+    isAll: false
   }));
+  if (!showAllCandidate) {
+    return memberCandidates.slice(0, CHAT_MENTION_MAX_CANDIDATES);
+  }
+  return [
+    {
+      agentId: CHAT_MENTION_ALL_AGENT_ID,
+      displayName: CHAT_MENTION_ALL_DISPLAY_NAME,
+      mentionValue: CHAT_MENTION_ALL_DISPLAY_NAME,
+      avatarUrl: null,
+      isAll: true
+    },
+    ...memberCandidates
+  ].slice(0, CHAT_MENTION_MAX_CANDIDATES);
 });
 const isChatMentionDropdownVisible = computed(
   () => activeAgentIsConversationGroup.value && chatMentionStartIndex.value !== null && Boolean(activeAgent.value)
@@ -13930,6 +14203,8 @@ onMounted(() => {
     document.addEventListener("keydown", handleSidebarThemePopoverDocumentKeyDown);
     document.addEventListener("mousedown", handleChatAgentContextMenuDocumentMouseDown);
     document.addEventListener("keydown", handleChatAgentContextMenuDocumentKeyDown);
+    document.addEventListener("mousedown", handleChannelPaneItemContextMenuDocumentMouseDown);
+    document.addEventListener("keydown", handleChannelPaneItemContextMenuDocumentKeyDown);
   }
   pruneChatUserGroupMembership();
   taskItems.value = loadTasks();
@@ -13950,22 +14225,39 @@ onBeforeUnmount(() => {
     document.removeEventListener("keydown", handleSidebarThemePopoverDocumentKeyDown);
     document.removeEventListener("mousedown", handleChatAgentContextMenuDocumentMouseDown);
     document.removeEventListener("keydown", handleChatAgentContextMenuDocumentKeyDown);
+    document.removeEventListener("mousedown", handleChannelPaneItemContextMenuDocumentMouseDown);
+    document.removeEventListener("keydown", handleChannelPaneItemContextMenuDocumentKeyDown);
   }
   stopSystemThemeModeListener();
   clearRuntimeToolSyncRetryTimer();
   stopFeishuQrCountdown();
   resetChannelQrBindingState({ clearSession: true });
   stopTaskReminderMonitor();
+  stopOpenClawSessionSyncMonitor();
   clearChatAgentDeleteNoticeTimer();
 });
+
+watch(
+  [() => activeSection.value, () => activeAgent.value?.agentId ?? "", () => activeConversationScopeKey.value],
+  () => {
+    syncOpenClawSessionSyncMonitorState();
+  },
+  { immediate: true }
+);
 
 watch(
   () => [activeSection.value, activeAgentPaneTab.value],
   ([section, pane]) => {
     if (section === "chat" && (pane === "staff" || pane === "group")) {
+      closeChannelPaneItemContextMenu();
+      return;
+    }
+    if (section === "chat" && pane === "channel") {
+      closeChatAgentContextMenu();
       return;
     }
     closeChatAgentContextMenu();
+    closeChannelPaneItemContextMenu();
   }
 );
 
@@ -13974,6 +14266,7 @@ watch(
   (section) => {
     closeSidebarProfilePopover();
     closeChatAgentContextMenu();
+    closeChannelPaneItemContextMenu();
     if (section === "dashboard") {
       void refreshDashboardData();
       return;
@@ -14773,6 +15066,7 @@ watch(
                       @click="handleChannelPaneChatItemClick(item)"
                       @keydown.enter.prevent="handleChannelPaneChatItemClick(item)"
                       @keydown.space.prevent="handleChannelPaneChatItemClick(item)"
+                      @contextmenu.prevent="handleChannelPaneChatItemContextMenu(item, $event)"
                     >
                       <div class="chat-channel-pane__chat-item-main">
                         <span class="chat-channel-pane__icon-shell">
@@ -14979,6 +15273,31 @@ watch(
               </template>
             </div>
           </section>
+
+          <div
+            v-if="isChannelPaneItemContextMenuOpen && channelPaneItemContextMenuTarget"
+            ref="channelPaneItemContextMenuRef"
+            class="agent-context-menu"
+            role="menu"
+            aria-label="频道操作菜单"
+            data-no-window-drag
+            :style="{
+              left: `${channelPaneItemContextMenuPosition.x}px`,
+              top: `${channelPaneItemContextMenuPosition.y}px`
+            }"
+            @mousedown.stop
+          >
+            <button
+              type="button"
+              class="agent-context-menu__item agent-context-menu__item--danger"
+              role="menuitem"
+              @click.stop.prevent="handleChannelPaneItemContextMenuDelete"
+              @keydown.enter.stop.prevent="handleChannelPaneItemContextMenuDelete"
+              @keydown.space.stop.prevent="handleChannelPaneItemContextMenuDelete"
+            >
+              删除
+            </button>
+          </div>
 
           <div
             v-if="isChatAgentContextMenuOpen"
@@ -15416,36 +15735,12 @@ watch(
                 </div>
 
                 <div v-else-if="isHistoryPanelActive" class="chat-settings-sidebar__body chat-settings-sidebar__body--history">
-                  <div class="chat-settings-logs-head">
-                    <strong>聊天记录</strong>
-                    <button class="utility-modal__refresh" type="button" :disabled="utilityModalLoading" @click="handleUtilityModalRefresh">
-                      刷新
-                    </button>
-                  </div>
-                  <p class="utility-modal__detail">
-                    当前 Agent 关联记录 {{ chatRelatedHistoryRecords.length }} 条 · 归档记录 {{ chatRelatedArchiveRecords.length }} 条
-                  </p>
                   <p v-if="utilityModalNotice" class="utility-modal__notice">{{ utilityModalNotice }}</p>
                   <p v-if="utilityModalError" class="utility-modal__error">{{ utilityModalError }}</p>
 
                   <div v-if="utilityModalLoading" class="utility-modal__empty">正在加载数据...</div>
                   <div v-else-if="!activeAgent" class="utility-modal__empty">请选择用户后查看聊天记录。</div>
                   <template v-else>
-                    <section class="utility-history-current">
-                      <div>
-                        <strong>当前会话</strong>
-                        <p>{{ currentSessionPreviewText }}</p>
-                      </div>
-                      <button
-                        class="utility-history-current__action"
-                        type="button"
-                        :disabled="currentSessionMessages.length === 0"
-                        @click="handleArchiveCurrentChat"
-                      >
-                        归档当前会话
-                      </button>
-                    </section>
-
                     <p class="chat-settings-history-section-title">关联记录</p>
                     <div v-if="chatRelatedHistoryRecords.length === 0" class="utility-modal__empty">当前 Agent 暂无关联会话记录。</div>
                     <div v-else>
@@ -15476,33 +15771,18 @@ watch(
                           @keydown.space.prevent="handleRelatedHistoryRecordSelect(record)"
                         >
                           <div class="utility-history-card__head">
-                            <strong>{{ record.scopeLabel }}</strong>
+                            <strong>{{ resolveRelatedHistoryScopeLabel(record) }}{{ record.isActiveScope ? "（当前）" : "" }}</strong>
                             <small>{{ formatDateTime(record.updatedAt) }}</small>
                           </div>
                           <p>{{ record.preview }}</p>
-                          <div class="utility-history-card__foot">
-                            <span>{{ record.messageCount }} 条消息</span>
+                          <div class="utility-history-card__foot utility-history-card__foot--related">
+                            <span class="utility-history-card__conversation-id" :title="resolveRelatedHistoryConversationId(record)">
+                              对话ID {{ resolveRelatedHistoryConversationId(record) }}
+                            </span>
+                            <span class="utility-history-card__message-count">{{ record.messageCount }} 条消息</span>
                           </div>
                         </article>
                       </div>
-                    </div>
-
-                    <p class="chat-settings-history-section-title">归档记录</p>
-                    <div v-if="chatRelatedArchiveRecords.length === 0" class="utility-modal__empty">暂无归档记录。</div>
-                    <div v-else class="utility-history-list">
-                      <article v-for="archive in chatRelatedArchiveRecords" :key="archive.id" class="utility-history-card">
-                        <div class="utility-history-card__head">
-                          <strong>{{ archive.title }}</strong>
-                          <small>{{ formatDateTime(archive.archivedAt) }}</small>
-                        </div>
-                        <p>{{ archive.preview }}</p>
-                        <div class="utility-history-card__foot">
-                          <span>{{ archive.scopeLabel }} · {{ archive.messageCount }} 条消息</span>
-                          <button class="utility-history-card__action" type="button" @click="handleRestoreArchive(archive.record)">
-                            恢复到当前会话
-                          </button>
-                        </div>
-                      </article>
                     </div>
                   </template>
                 </div>
@@ -15798,15 +16078,25 @@ watch(
                       :key="`composer-mention-${candidate.agentId}`"
                       class="composer-mention-item"
                       :class="{ 'is-active': index === chatMentionActiveIndex }"
-                      type="button"
-                      @mouseenter="chatMentionActiveIndex = index"
-                      @mousedown.prevent="applyChatMentionCandidate(candidate)"
-                    >
-                      <span class="composer-mention-item__main">
-                        <strong>{{ candidate.displayName }}</strong>
-                      </span>
-                    </button>
-                  </div>
+                    type="button"
+                    @mouseenter="chatMentionActiveIndex = index"
+                    @mousedown.prevent="applyChatMentionCandidate(candidate)"
+                  >
+                    <span class="composer-mention-item__avatar" :class="{ 'is-all': candidate.isAll }">
+                      <img
+                        v-if="candidate.avatarUrl"
+                        :src="candidate.avatarUrl"
+                        :alt="`${candidate.displayName} 头像`"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <span v-else>{{ candidate.isAll ? "全" : candidate.displayName.slice(0, 1).toUpperCase() }}</span>
+                    </span>
+                    <span class="composer-mention-item__main">
+                      <strong>{{ candidate.displayName }}</strong>
+                    </span>
+                  </button>
+                </div>
                 </div>
                 <div v-if="chatAttachments.length > 0" class="composer-attachments">
                   <span v-for="attachment in chatAttachments" :key="attachment.id" class="composer-attachment-chip" :title="attachment.name">
@@ -15838,14 +16128,6 @@ watch(
                     >
                       <span class="composer-model-chip__label">{{ activeAgent?.model || "DragonClaw" }}</span>
                       <ControlIcon name="chevron-down" />
-                    </button>
-                    <button
-                      class="composer-archive-chip"
-                      type="button"
-                      :disabled="!activeAgent || currentSessionMessages.length === 0"
-                      @click="handleArchiveCurrentChat"
-                    >
-                      归档
                     </button>
                   </div>
                   <div class="composer-meta__right">
@@ -17842,32 +18124,7 @@ watch(
           <div v-if="utilityModalLoading" class="utility-modal__empty">正在加载数据...</div>
 
           <template v-else-if="utilityModalType === 'history'">
-            <p class="utility-modal__detail">
-              当前会话 {{ currentSessionMessages.length }} 条消息 · 归档记录 {{ chatHistoryArchives.length }} 条
-            </p>
-            <section class="utility-history-current">
-              <div>
-                <strong>当前会话</strong>
-                <p>{{ currentSessionPreviewText }}</p>
-              </div>
-              <button class="utility-history-current__action" type="button" :disabled="currentSessionMessages.length === 0" @click="handleArchiveCurrentChat">
-                归档当前会话
-              </button>
-            </section>
-            <div v-if="chatHistoryArchives.length === 0" class="utility-modal__empty">暂无归档记录。</div>
-            <div v-else class="utility-history-list">
-              <article v-for="record in chatHistoryArchives" :key="record.id" class="utility-history-card">
-                <div class="utility-history-card__head">
-                  <strong>{{ record.title }}</strong>
-                  <small>{{ formatDateTime(record.archivedAt) }}</small>
-                </div>
-                <p>{{ getArchivePreviewText(record) }}</p>
-                <div class="utility-history-card__foot">
-                  <span>{{ record.messages.length }} 条消息</span>
-                  <button class="utility-history-card__action" type="button" @click="handleRestoreArchive(record)">恢复到当前会话</button>
-                </div>
-              </article>
-            </div>
+            <div class="utility-modal__empty">归档功能已移除，请在聊天记录面板查看关联记录。</div>
           </template>
 
           <template v-else>
@@ -22681,6 +22938,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 8px;
   width: auto;
   max-width: 100%;
   text-align: left;
@@ -22696,10 +22954,35 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   color: #254267;
 }
 
+.composer-mention-item__avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  background: #dfe9fb;
+  color: #426a99;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.composer-mention-item__avatar.is-all {
+  background: #dff6ea;
+  color: #23724d;
+}
+
+.composer-mention-item__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .composer-mention-item__main {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: center;
   min-width: 0;
 }
 
@@ -22884,36 +23167,10 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   opacity: 0.55;
 }
 
-.composer-archive-chip {
-  height: 28px;
-  border-radius: 8px;
-  border: 0;
-  background: transparent;
-  color: #676767;
-  padding: 0 7px;
-  display: inline-flex;
-  align-items: center;
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease, opacity 140ms ease;
-}
-
 .composer-model-chip svg {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-}
-
-.composer-archive-chip:hover:not(:disabled) {
-  background: #dfe2e7;
-  color: #424242;
-}
-
-.composer-archive-chip:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
 }
 
 .composer-file-input {
@@ -28229,6 +28486,25 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   word-break: break-word;
 }
 
+.utility-history-card__foot--related {
+  align-items: center;
+}
+
+.utility-history-card__conversation-id {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #6f83a3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.utility-history-card__message-count {
+  flex-shrink: 0;
+  text-align: right;
+  color: #6b7f9f;
+}
+
 .utility-history-card__action {
   height: 28px;
   border: 1px solid #c9daf6;
@@ -29334,6 +29610,16 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .composer-mention-item.is-active {
   background: var(--cp-hover-bg);
   color: var(--cp-text-strong);
+}
+
+.composer-mention-item__avatar {
+  background: var(--cp-hover-bg);
+  color: var(--cp-text-muted);
+}
+
+.composer-mention-item__avatar.is-all {
+  background: var(--cp-soft-accent-bg);
+  color: var(--cp-soft-accent-text);
 }
 
 .composer-attachment-chip {

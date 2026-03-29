@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
-import appLogoUrl from "../../images/xia-logo.png";
+import appLogoUrl from "../../images/DragonClaw-logo.png";
 
 type TauriInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 type TauriWindowApi = {
