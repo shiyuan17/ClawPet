@@ -1119,6 +1119,12 @@ const isChannelPaneItemContextMenuOpen = ref(false);
 const channelPaneItemContextMenuRef = ref<HTMLElement | null>(null);
 const channelPaneItemContextMenuTarget = ref<ChannelPaneChatItem | null>(null);
 const channelPaneItemContextMenuPosition = ref({ x: 0, y: 0 });
+const isChatMessageContextMenuOpen = ref(false);
+const chatMessageContextMenuRef = ref<HTMLElement | null>(null);
+const chatMessageContextMenuMessageId = ref<string | null>(null);
+const chatMessageContextMenuTarget = ref<AgentChatMessage | null>(null);
+const chatMessageContextMenuSelectedText = ref("");
+const chatMessageContextMenuPosition = ref({ x: 0, y: 0 });
 const isChannelPaneDeleteConfirmModalOpen = ref(false);
 const channelPaneDeleteConfirmTarget = ref<ChannelPaneChatItem | null>(null);
 const isChannelPaneDeleteConfirming = ref(false);
@@ -5156,6 +5162,65 @@ function closeChannelPaneItemContextMenu() {
   channelPaneItemContextMenuTarget.value = null;
 }
 
+function getCurrentWindowSelectedText() {
+  if (typeof window === "undefined" || !window.getSelection) {
+    return "";
+  }
+  return (window.getSelection()?.toString() ?? "").trim();
+}
+
+function resolveChatMessageContextMenuTarget() {
+  const targetMessageId = chatMessageContextMenuMessageId.value;
+  const pinnedTarget = chatMessageContextMenuTarget.value;
+  if (!targetMessageId) {
+    return pinnedTarget;
+  }
+  if (pinnedTarget && pinnedTarget.id === targetMessageId) {
+    return pinnedTarget;
+  }
+  return chatMessagesForDisplay.value.find((message) => message.id === targetMessageId) ?? null;
+}
+
+function closeChatMessageContextMenu() {
+  isChatMessageContextMenuOpen.value = false;
+  chatMessageContextMenuMessageId.value = null;
+  chatMessageContextMenuTarget.value = null;
+  chatMessageContextMenuSelectedText.value = "";
+}
+
+function getChatMessageRoleLabel(message: AgentChatMessage) {
+  if (isRuntimeToolMessage(message)) {
+    return "工具";
+  }
+  if (message.role === "user") {
+    return "用户";
+  }
+  if (message.role === "assistant") {
+    return "助手";
+  }
+  return "系统";
+}
+
+function buildChatMessageRecordCopyText(message: AgentChatMessage) {
+  const timestampLabel = formatDateTime(message.createdAt);
+  if (isRuntimeToolMessage(message)) {
+    const header = `[${timestampLabel}] ${getChatMessageRoleLabel(message)} · ${getRuntimeToolLabel(message)} · ${getRuntimeToolStatusLabel(message)}`;
+    const detail = getRuntimeToolMessageDetail(message).trim();
+    return detail ? `${header}\n${detail}` : header;
+  }
+
+  const lines = [`[${timestampLabel}] ${getChatMessageRoleLabel(message)}`];
+  if (message.attachments && message.attachments.length > 0) {
+    const attachmentLabel = message.attachments
+      .map((attachment) => `${attachment.name} (${formatAttachmentSize(attachment.size)})`)
+      .join("，");
+    lines.push(`附件：${attachmentLabel}`);
+  }
+  const content = getMessageDisplayText(message).trim();
+  lines.push(content || "(空消息)");
+  return lines.join("\n");
+}
+
 function closeChannelPaneDeleteConfirmModal() {
   if (isChannelPaneDeleteConfirming.value) {
     return;
@@ -5183,6 +5248,7 @@ function handleChatAgentItemContextMenu(agent: AgentListItem, event: MouseEvent)
   event.stopPropagation();
   closeChatQuickCreateMenu();
   closeChannelPaneItemContextMenu();
+  closeChatMessageContextMenu();
   const menuWidth = 152;
   const menuHeight = agent.groupKind === "group" ? 84 : 128;
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
@@ -5207,6 +5273,7 @@ function handleChannelPaneChatItemContextMenu(item: ChannelPaneChatItem, event: 
   event.stopPropagation();
   closeChatQuickCreateMenu();
   closeChatAgentContextMenu();
+  closeChatMessageContextMenu();
   const menuWidth = 152;
   const menuHeight = 84;
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
@@ -5220,6 +5287,33 @@ function handleChannelPaneChatItemContextMenu(item: ChannelPaneChatItem, event: 
   channelPaneItemContextMenuPosition.value = { x, y };
   channelPaneItemContextMenuTarget.value = { ...item };
   isChannelPaneItemContextMenuOpen.value = true;
+}
+
+function handleChatMessageContextMenu(message: AgentChatMessage, event: MouseEvent) {
+  if (activeSection.value !== "chat" || message.status === "pending") {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  closeChatQuickCreateMenu();
+  closeChatAgentContextMenu();
+  closeChannelPaneItemContextMenu();
+  const selectedText = getCurrentWindowSelectedText();
+  const menuWidth = 170;
+  const menuHeight = selectedText ? 86 : 48;
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
+  const fallbackX = Math.max(8, event.clientX);
+  const fallbackY = Math.max(8, event.clientY);
+  const x =
+    viewportWidth > 0 ? Math.max(8, Math.min(fallbackX, viewportWidth - menuWidth - 8)) : fallbackX;
+  const y =
+    viewportHeight > 0 ? Math.max(8, Math.min(fallbackY, viewportHeight - menuHeight - 8)) : fallbackY;
+  chatMessageContextMenuPosition.value = { x, y };
+  chatMessageContextMenuMessageId.value = message.id;
+  chatMessageContextMenuTarget.value = message;
+  chatMessageContextMenuSelectedText.value = selectedText;
+  isChatMessageContextMenuOpen.value = true;
 }
 
 function handleChatAgentContextMenuDocumentMouseDown(event: MouseEvent) {
@@ -5236,6 +5330,22 @@ function handleChatAgentContextMenuDocumentMouseDown(event: MouseEvent) {
     return;
   }
   closeChatAgentContextMenu();
+}
+
+function handleChatMessageContextMenuDocumentMouseDown(event: MouseEvent) {
+  if (!isChatMessageContextMenuOpen.value) {
+    return;
+  }
+  const menuRoot = chatMessageContextMenuRef.value;
+  if (!menuRoot) {
+    closeChatMessageContextMenu();
+    return;
+  }
+  const target = event.target;
+  if (target instanceof Node && menuRoot.contains(target)) {
+    return;
+  }
+  closeChatMessageContextMenu();
 }
 
 function handleChannelPaneItemContextMenuDocumentMouseDown(event: MouseEvent) {
@@ -5265,6 +5375,17 @@ function handleChatAgentContextMenuDocumentKeyDown(event: KeyboardEvent) {
   closeChatAgentContextMenu();
 }
 
+function handleChatMessageContextMenuDocumentKeyDown(event: KeyboardEvent) {
+  if (!isChatMessageContextMenuOpen.value) {
+    return;
+  }
+  if (event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  closeChatMessageContextMenu();
+}
+
 function handleChannelPaneItemContextMenuDocumentKeyDown(event: KeyboardEvent) {
   if (!isChannelPaneItemContextMenuOpen.value) {
     return;
@@ -5274,6 +5395,41 @@ function handleChannelPaneItemContextMenuDocumentKeyDown(event: KeyboardEvent) {
   }
   event.preventDefault();
   closeChannelPaneItemContextMenu();
+}
+
+async function handleChatMessageContextMenuCopySelection() {
+  const selectedText = chatMessageContextMenuSelectedText.value.trim() || getCurrentWindowSelectedText();
+  closeChatMessageContextMenu();
+  if (!selectedText) {
+    showChatAgentDeleteNotice("未检测到选中文本。");
+    return;
+  }
+  try {
+    await writeTextToClipboard(selectedText);
+    showChatAgentDeleteNotice("已复制选中文本。");
+  } catch {
+    showChatAgentDeleteNotice("复制失败，请重试。");
+  }
+}
+
+async function handleChatMessageContextMenuCopyRecord() {
+  const target = resolveChatMessageContextMenuTarget();
+  closeChatMessageContextMenu();
+  if (!target) {
+    showChatAgentDeleteNotice("未找到可复制的消息记录。");
+    return;
+  }
+  const payload = buildChatMessageRecordCopyText(target).trim();
+  if (!payload) {
+    showChatAgentDeleteNotice("当前消息暂无可复制内容。");
+    return;
+  }
+  try {
+    await writeTextToClipboard(payload);
+    showChatAgentDeleteNotice("已复制整条记录。");
+  } catch {
+    showChatAgentDeleteNotice("复制失败，请重试。");
+  }
 }
 
 function handleChannelPaneItemContextMenuDelete() {
@@ -13615,6 +13771,7 @@ const groupAgents = computed(() => filteredAgents.value.filter((agent) => agent.
 const staffAgentsAll = computed(() => agents.value.filter((agent) => agent.groupKind === "staff"));
 const groupAgentsAll = computed(() => agents.value.filter((agent) => agent.groupKind === "group"));
 const isChatAgentContextMenuGroupTarget = computed(() => chatAgentContextMenuTarget.value?.groupKind === "group");
+const chatMessageContextMenuHasSelection = computed(() => chatMessageContextMenuSelectedText.value.trim().length > 0);
 const isChatAgentDeleteConfirmGroupTarget = computed(() => chatAgentDeleteConfirmTarget.value?.groupKind === "group");
 const channelBindingCandidateAgents = computed(() => agents.value.filter((agent) => agent.groupKind === "staff"));
 const channelBindingModalSubtitle = computed(() => {
@@ -15227,6 +15384,8 @@ onMounted(() => {
     document.addEventListener("keydown", handleSidebarThemePopoverDocumentKeyDown);
     document.addEventListener("mousedown", handleChatAgentContextMenuDocumentMouseDown);
     document.addEventListener("keydown", handleChatAgentContextMenuDocumentKeyDown);
+    document.addEventListener("mousedown", handleChatMessageContextMenuDocumentMouseDown);
+    document.addEventListener("keydown", handleChatMessageContextMenuDocumentKeyDown);
     document.addEventListener("mousedown", handleChannelPaneItemContextMenuDocumentMouseDown);
     document.addEventListener("keydown", handleChannelPaneItemContextMenuDocumentKeyDown);
   }
@@ -15249,6 +15408,8 @@ onBeforeUnmount(() => {
     document.removeEventListener("keydown", handleSidebarThemePopoverDocumentKeyDown);
     document.removeEventListener("mousedown", handleChatAgentContextMenuDocumentMouseDown);
     document.removeEventListener("keydown", handleChatAgentContextMenuDocumentKeyDown);
+    document.removeEventListener("mousedown", handleChatMessageContextMenuDocumentMouseDown);
+    document.removeEventListener("keydown", handleChatMessageContextMenuDocumentKeyDown);
     document.removeEventListener("mousedown", handleChannelPaneItemContextMenuDocumentMouseDown);
     document.removeEventListener("keydown", handleChannelPaneItemContextMenuDocumentKeyDown);
   }
@@ -15274,14 +15435,17 @@ watch(
   ([section, pane]) => {
     if (section === "chat" && (pane === "staff" || pane === "group")) {
       closeChannelPaneItemContextMenu();
+      closeChatMessageContextMenu();
       return;
     }
     if (section === "chat" && pane === "channel") {
       closeChatAgentContextMenu();
+      closeChatMessageContextMenu();
       return;
     }
     closeChatAgentContextMenu();
     closeChannelPaneItemContextMenu();
+    closeChatMessageContextMenu();
   }
 );
 
@@ -15291,6 +15455,7 @@ watch(
     closeSidebarProfilePopover();
     closeChatAgentContextMenu();
     closeChannelPaneItemContextMenu();
+    closeChatMessageContextMenu();
     if (section === "dashboard") {
       void refreshDashboardData();
       return;
@@ -16384,6 +16549,42 @@ watch(
           </div>
 
           <div
+            v-if="isChatMessageContextMenuOpen"
+            ref="chatMessageContextMenuRef"
+            class="agent-context-menu chat-message-context-menu"
+            role="menu"
+            aria-label="消息操作菜单"
+            data-no-window-drag
+            :style="{
+              left: `${chatMessageContextMenuPosition.x}px`,
+              top: `${chatMessageContextMenuPosition.y}px`
+            }"
+            @mousedown.stop
+          >
+            <button
+              v-if="chatMessageContextMenuHasSelection"
+              type="button"
+              class="agent-context-menu__item"
+              role="menuitem"
+              @mousedown.left.stop.prevent="handleChatMessageContextMenuCopySelection"
+              @keydown.enter.stop.prevent="handleChatMessageContextMenuCopySelection"
+              @keydown.space.stop.prevent="handleChatMessageContextMenuCopySelection"
+            >
+              复制选中文本
+            </button>
+            <button
+              type="button"
+              class="agent-context-menu__item"
+              role="menuitem"
+              @mousedown.left.stop.prevent="handleChatMessageContextMenuCopyRecord"
+              @keydown.enter.stop.prevent="handleChatMessageContextMenuCopyRecord"
+              @keydown.space.stop.prevent="handleChatMessageContextMenuCopyRecord"
+            >
+              复制整条记录
+            </button>
+          </div>
+
+          <div
             v-if="isChatAgentDeleteConfirmModalOpen && chatAgentDeleteConfirmTarget"
             class="related-resource-modal-backdrop"
             @click.self="closeChatAgentDeleteConfirmModal"
@@ -16603,6 +16804,7 @@ watch(
                       `message-row--${message.status}`,
                       { 'message-row--tool': isRuntimeToolMessage(message) }
                     ]"
+                    @contextmenu="handleChatMessageContextMenu(message, $event)"
                   >
                     <template v-if="isRuntimeToolMessage(message)">
                       <div class="chat-tool-call__avatar" aria-hidden="true">
@@ -22008,6 +22210,10 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   padding: 4px 0;
 }
 
+.chat-message-context-menu {
+  min-width: 170px;
+}
+
 .agent-context-menu__item {
   width: 100%;
   border: 0;
@@ -23762,6 +23968,8 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   box-shadow: 0 8px 16px rgba(61, 89, 130, 0.06);
   white-space: pre-wrap;
   word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .message-bubble__attachments {
