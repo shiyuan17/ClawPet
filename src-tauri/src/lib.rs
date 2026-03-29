@@ -2010,6 +2010,377 @@ fn channel_payload_has_content(payload: &serde_json::Map<String, Value>) -> bool
     })
 }
 
+fn resolve_channel_plugin_account_store_paths(channel_type: &str) -> Vec<PathBuf> {
+    let openclaw_home = resolve_openclaw_home_path();
+    match normalize_channel_identifier(channel_type).as_str() {
+        "weixin" => vec![
+            openclaw_home.join("openclaw-weixin").join("accounts.json"),
+            openclaw_home.join("weixin").join("accounts.json"),
+            openclaw_home.join("wechat").join("accounts.json"),
+        ],
+        "wecom" => vec![
+            openclaw_home.join("wecom").join("accounts.json"),
+            openclaw_home.join("openclaw-wecom").join("accounts.json"),
+            openclaw_home.join("wecom-openclaw").join("accounts.json"),
+            openclaw_home.join("work-wechat").join("accounts.json"),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn parse_channel_plugin_account_ids(value: &Value) -> Vec<String> {
+    let mut account_ids = Vec::new();
+
+    if let Some(items) = value.as_array() {
+        for item in items {
+            let Some(raw) = item.as_str().map(str::trim).filter(|text| !text.is_empty()) else {
+                continue;
+            };
+            account_ids.push(raw.to_string());
+        }
+        return account_ids;
+    }
+
+    let Some(obj) = value.as_object() else {
+        return account_ids;
+    };
+    if let Some(items) = obj.get("accounts").and_then(Value::as_array) {
+        for item in items {
+            let Some(raw) = item.as_str().map(str::trim).filter(|text| !text.is_empty()) else {
+                continue;
+            };
+            account_ids.push(raw.to_string());
+        }
+        return account_ids;
+    }
+    for key in obj.keys() {
+        let normalized = key.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        account_ids.push(normalized.to_string());
+    }
+    account_ids
+}
+
+fn load_channel_plugin_account_configs(
+    channel_type: &str,
+) -> Result<Vec<(String, serde_json::Map<String, Value>)>, String> {
+    let mut output = Vec::<(String, serde_json::Map<String, Value>)>::new();
+    let mut seen_accounts = HashSet::<String>::new();
+
+    for accounts_index_path in resolve_channel_plugin_account_store_paths(channel_type) {
+        if !accounts_index_path.exists() || !accounts_index_path.is_file() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(&accounts_index_path).map_err(|error| {
+            format!(
+                "读取频道账号索引失败（{}）：{error}",
+                accounts_index_path.display()
+            )
+        })?;
+        let parsed: Value = serde_json::from_str(&raw).map_err(|error| {
+            format!(
+                "解析频道账号索引失败（{}）：{error}",
+                accounts_index_path.display()
+            )
+        })?;
+
+        let account_ids = parse_channel_plugin_account_ids(&parsed);
+        if account_ids.is_empty() {
+            continue;
+        }
+
+        let Some(channel_state_dir) = accounts_index_path.parent() else {
+            continue;
+        };
+        let accounts_dir = channel_state_dir.join("accounts");
+
+        for account_id in account_ids {
+            let normalized_key = normalize_account_identifier(&account_id);
+            if normalized_key.is_empty() || !seen_accounts.insert(normalized_key) {
+                continue;
+            }
+
+            let mut config_obj = serde_json::Map::<String, Value>::new();
+            config_obj.insert(
+                "pluginAccountId".to_string(),
+                Value::String(account_id.clone()),
+            );
+            config_obj.insert("enabled".to_string(), Value::Bool(true));
+
+            let detail_path = accounts_dir.join(format!("{account_id}.json"));
+            if detail_path.exists() && detail_path.is_file() {
+                if let Ok(detail_raw) = std::fs::read_to_string(&detail_path) {
+                    if let Ok(detail_parsed) = serde_json::from_str::<Value>(&detail_raw) {
+                        if let Some(detail_obj) = detail_parsed.as_object() {
+                            if let Some(user_id) = detail_obj
+                                .get("userId")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|text| !text.is_empty())
+                            {
+                                config_obj.insert(
+                                    "userId".to_string(),
+                                    Value::String(user_id.to_string()),
+                                );
+                            }
+                            if let Some(base_url) = detail_obj
+                                .get("baseUrl")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|text| !text.is_empty())
+                            {
+                                config_obj.insert(
+                                    "baseUrl".to_string(),
+                                    Value::String(base_url.to_string()),
+                                );
+                            }
+                            if let Some(name) = detail_obj
+                                .get("name")
+                                .or_else(|| detail_obj.get("nickname"))
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|text| !text.is_empty())
+                            {
+                                config_obj
+                                    .insert("name".to_string(), Value::String(name.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            output.push((account_id, config_obj));
+        }
+    }
+
+    Ok(output)
+}
+
+fn sync_channel_accounts_from_plugin_store(channel_type: &str) -> Result<bool, String> {
+    let normalized_channel = normalize_channel_identifier(channel_type);
+    if normalized_channel != "weixin" && normalized_channel != "wecom" {
+        return Ok(false);
+    }
+
+    let plugin_accounts = load_channel_plugin_account_configs(&normalized_channel)?;
+    if plugin_accounts.is_empty() {
+        return Ok(false);
+    }
+
+    let source_path = resolve_openclaw_config_path();
+    let mut parsed = match std::fs::read_to_string(&source_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({})),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => {
+            return Err(format!(
+                "读取 openclaw.json 失败（{}）：{error}",
+                source_path.display()
+            ))
+        }
+    };
+    if !parsed.is_object() {
+        parsed = serde_json::json!({});
+    }
+
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+    ensure_channel_plugin_allowlist(root, &normalized_channel)?;
+
+    if !matches!(root.get("channels"), Some(Value::Object(_))) {
+        root.insert(
+            "channels".to_string(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    let channels_obj = root
+        .get_mut("channels")
+        .and_then(Value::as_object_mut)
+        .ok_or("channels 不是对象")?;
+    if !matches!(
+        channels_obj.get(&normalized_channel),
+        Some(Value::Object(_))
+    ) {
+        channels_obj.insert(
+            normalized_channel.clone(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    let section_obj = channels_obj
+        .get_mut(&normalized_channel)
+        .and_then(Value::as_object_mut)
+        .ok_or("channels.<channelType> 不是对象")?;
+    migrate_legacy_channel_section_to_accounts(section_obj);
+    if !matches!(section_obj.get("accounts"), Some(Value::Object(_))) {
+        section_obj.insert(
+            "accounts".to_string(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    let accounts_obj = section_obj
+        .get_mut("accounts")
+        .and_then(Value::as_object_mut)
+        .ok_or("channels.<channelType>.accounts 不是对象")?;
+
+    let mut changed = false;
+    let mut first_account_id = String::new();
+    for (account_id, plugin_config) in plugin_accounts {
+        if first_account_id.is_empty() {
+            first_account_id = account_id.clone();
+        }
+        let current = accounts_obj
+            .get(&account_id)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut merged = current;
+        for (key, value) in plugin_config {
+            if merged.get(&key) != Some(&value) {
+                merged.insert(key, value);
+                changed = true;
+            }
+        }
+        if accounts_obj.get(&account_id) != Some(&Value::Object(merged.clone())) {
+            accounts_obj.insert(account_id, Value::Object(merged));
+            changed = true;
+        }
+    }
+
+    if section_obj
+        .get("defaultAccount")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+        && !first_account_id.is_empty()
+    {
+        section_obj.insert(
+            "defaultAccount".to_string(),
+            Value::String(first_account_id),
+        );
+        changed = true;
+    }
+    if section_obj.get("enabled").and_then(Value::as_bool) != Some(true) {
+        section_obj.insert("enabled".to_string(), Value::Bool(true));
+        changed = true;
+    }
+    mirror_default_account_to_channel_section(section_obj);
+
+    if !changed {
+        return Ok(true);
+    }
+    write_openclaw_config_value(&source_path, &parsed)?;
+    Ok(true)
+}
+
+fn resolve_channel_config_verification_aliases(channel_type: &str) -> HashSet<String> {
+    let normalized = normalize_channel_identifier(channel_type);
+    let mut aliases = vec![normalized.clone()];
+    match normalized.as_str() {
+        "weixin" => aliases.extend([
+            "wechat".to_string(),
+            "wx".to_string(),
+            "openclaw-weixin".to_string(),
+            "openclaw_weixin".to_string(),
+        ]),
+        "wecom" => aliases.extend([
+            "workwechat".to_string(),
+            "wechatwork".to_string(),
+            "qywx".to_string(),
+            "openclaw-wecom".to_string(),
+            "openclaw_wecom".to_string(),
+        ]),
+        _ => {}
+    }
+
+    aliases
+        .into_iter()
+        .map(|value| normalize_channel_identifier(&value))
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn channel_section_has_configured_accounts(section_obj: &serde_json::Map<String, Value>) -> bool {
+    let mut section_clone = section_obj.clone();
+    migrate_legacy_channel_section_to_accounts(&mut section_clone);
+    if section_clone
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .is_some_and(|enabled| !enabled)
+    {
+        return false;
+    }
+
+    let Some(accounts_obj) = section_clone.get("accounts").and_then(Value::as_object) else {
+        return false;
+    };
+    accounts_obj
+        .values()
+        .filter_map(Value::as_object)
+        .any(|account_obj| {
+            account_obj
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+                && channel_payload_has_content(account_obj)
+        })
+}
+
+fn has_configured_channel_account_in_openclaw_config(channel_type: &str) -> Result<bool, String> {
+    let source_path = resolve_openclaw_config_path();
+    let raw = match std::fs::read_to_string(&source_path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "读取 openclaw.json 失败（{}）：{error}",
+                source_path.display()
+            ))
+        }
+    };
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("openclaw.json 解析失败（{}）：{error}", source_path.display()))?;
+    let Some(root) = value_as_object(&parsed) else {
+        return Ok(false);
+    };
+    let Some(channels_obj) = root.get("channels").and_then(Value::as_object) else {
+        return Ok(false);
+    };
+
+    let aliases = resolve_channel_config_verification_aliases(channel_type);
+    if aliases.is_empty() {
+        return Ok(false);
+    }
+
+    for (channel_key, section_value) in channels_obj {
+        if !aliases.contains(&normalize_channel_identifier(channel_key)) {
+            continue;
+        }
+        let Some(section_obj) = section_value.as_object() else {
+            continue;
+        };
+        if channel_section_has_configured_accounts(section_obj) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn wait_for_channel_config_sync(channel_type: &str) -> Result<bool, String> {
+    for attempt in 0..6 {
+        let _ = sync_channel_accounts_from_plugin_store(channel_type);
+        if has_configured_channel_account_in_openclaw_config(channel_type)? {
+            return Ok(true);
+        }
+        if attempt < 5 {
+            thread::sleep(Duration::from_millis(900));
+        }
+    }
+    Ok(false)
+}
+
 fn migrate_legacy_channel_section_to_accounts(section_obj: &mut serde_json::Map<String, Value>) {
     let has_accounts = section_obj
         .get("accounts")
@@ -2106,6 +2477,7 @@ fn ensure_channel_plugin_allowlist(
     let plugin_id = match normalize_channel_identifier(channel_type).as_str() {
         "feishu" => Some("openclaw-lark"),
         "dingtalk" => Some("dingtalk"),
+        "weixin" => Some("openclaw-weixin"),
         "wecom" => Some("wecom"),
         "qqbot" => Some("qqbot"),
         "whatsapp" => Some("whatsapp"),
@@ -6197,6 +6569,9 @@ async fn load_openclaw_platforms_snapshot() -> Result<OpenClawPlatformSnapshotRe
 
 fn load_openclaw_channel_accounts_snapshot_blocking(
 ) -> Result<OpenClawChannelAccountsSnapshotResponse, String> {
+    let _ = sync_channel_accounts_from_plugin_store("weixin");
+    let _ = sync_channel_accounts_from_plugin_store("wecom");
+
     let source_path = resolve_openclaw_config_path();
     let raw = match std::fs::read_to_string(&source_path) {
         Ok(value) => value,
@@ -7909,6 +8284,22 @@ fn resolve_openclaw_cli_wrapper_source() -> Option<PathBuf> {
         .find(|path| path.exists() && path.is_file())
 }
 
+fn prepend_openclaw_cli_wrapper_to_command_path(command: &mut Command) -> Option<String> {
+    let wrapper_source = resolve_openclaw_cli_wrapper_source()?;
+    let wrapper_dir = wrapper_source.parent()?.to_path_buf();
+    let normalized_wrapper_dir = normalize_windows_path_for_child_process(&wrapper_dir);
+
+    let mut path_entries = Vec::<PathBuf>::new();
+    path_entries.push(normalized_wrapper_dir.clone());
+    if let Some(existing_path) = std::env::var_os("PATH") {
+        path_entries.extend(std::env::split_paths(&existing_path));
+    }
+
+    let joined_path = std::env::join_paths(path_entries).ok()?;
+    command.env("PATH", joined_path);
+    Some(normalized_wrapper_dir.display().to_string())
+}
+
 fn collect_node_binary_candidates() -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
@@ -8368,48 +8759,99 @@ struct OfficialOnboardOutcome {
 }
 
 fn parse_json_object_from_line_tail(line: &str) -> Option<Value> {
-    let trimmed = line.trim();
+    extract_last_json_object_from_text(line)
+}
+
+fn extract_last_json_object_from_text(raw: &str) -> Option<Value> {
+    let cleaned = strip_ansi_escape_sequences(raw).replace('\r', "");
+    let trimmed = cleaned.trim();
     if trimmed.is_empty() {
         return None;
     }
-    for (index, _) in trimmed.match_indices('{') {
-        let candidate = &trimmed[index..];
-        if let Ok(value) = serde_json::from_str::<Value>(candidate) {
-            if value.is_object() {
-                return Some(value);
-            }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if value.is_object() {
+            return Some(value);
         }
     }
-    None
+
+    let mut latest: Option<Value> = None;
+    let mut depth = 0usize;
+    let mut start_index: Option<usize> = None;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in cleaned.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => {
+                if depth == 0 {
+                    start_index = Some(index);
+                }
+                depth += 1;
+            }
+            '}' => {
+                if depth == 0 {
+                    continue;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(start) = start_index {
+                        let end = index + ch.len_utf8();
+                        let candidate = &cleaned[start..end];
+                        if let Ok(value) = serde_json::from_str::<Value>(candidate) {
+                            if value.is_object() {
+                                latest = Some(value);
+                            }
+                        }
+                    }
+                    start_index = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    latest
 }
 
 fn extract_last_json_object_from_streams(stdout: &str, stderr: &str) -> Option<Value> {
-    for line in stderr.lines().rev() {
+    let stderr_cleaned = strip_ansi_escape_sequences(stderr).replace('\r', "");
+    let stdout_cleaned = strip_ansi_escape_sequences(stdout).replace('\r', "");
+
+    if let Some(value) = extract_last_json_object_from_text(&stderr_cleaned) {
+        return Some(value);
+    }
+    if let Some(value) = extract_last_json_object_from_text(&stdout_cleaned) {
+        return Some(value);
+    }
+
+    for line in stderr_cleaned.lines().rev() {
         if let Some(value) = parse_json_object_from_line_tail(line) {
             return Some(value);
         }
     }
-    for line in stdout.lines().rev() {
+    for line in stdout_cleaned.lines().rev() {
         if let Some(value) = parse_json_object_from_line_tail(line) {
             return Some(value);
         }
     }
-    let stderr_trimmed = stderr.trim();
-    if !stderr_trimmed.is_empty() {
-        if let Ok(value) = serde_json::from_str::<Value>(stderr_trimmed) {
-            if value.is_object() {
-                return Some(value);
-            }
-        }
-    }
-    let stdout_trimmed = stdout.trim();
-    if !stdout_trimmed.is_empty() {
-        if let Ok(value) = serde_json::from_str::<Value>(stdout_trimmed) {
-            if value.is_object() {
-                return Some(value);
-            }
-        }
-    }
+
     None
 }
 
@@ -8983,6 +9425,29 @@ fn gateway_status_text_indicates_running(text: &str) -> bool {
     loaded && running
 }
 
+fn is_gateway_health_probe_online(probe: &GatewayHealthResponse) -> bool {
+    probe.status.trim().eq_ignore_ascii_case("online")
+}
+
+fn summarize_gateway_health_probe(probe: Option<&GatewayHealthResponse>) -> String {
+    let Some(probe) = probe else {
+        return "gateway_probe=skipped".to_string();
+    };
+
+    let url = probe.checked_url.as_deref().unwrap_or("-");
+    let detail = probe.detail.as_deref().unwrap_or("-");
+    format!(
+        "gateway_probe_status={}, gateway_probe_url={}, gateway_probe_detail={}",
+        probe.status.trim(),
+        url,
+        trim_remote_error_detail(detail)
+    )
+}
+
+fn check_openclaw_gateway_health_fallback_blocking() -> Option<GatewayHealthResponse> {
+    tauri::async_runtime::block_on(async { check_openclaw_gateway(None).await.ok() })
+}
+
 fn run_openclaw_gateway_daemon_ensure_once() -> GatewayDaemonEnsureOutcome {
     let gateway_port = resolve_openclaw_gateway_port();
     let gateway_port_string = gateway_port.to_string();
@@ -9120,14 +9585,27 @@ fn run_openclaw_gateway_daemon_ensure_once() -> GatewayDaemonEnsureOutcome {
         gateway_status_text_indicates_running(&merged_status_text)
     };
     let port_ready = wait_for_loopback_port_listening(gateway_port, 12, 250);
+    let gateway_probe = if !status_effective || !status_running {
+        check_openclaw_gateway_health_fallback_blocking()
+    } else {
+        None
+    };
+    let gateway_probe_online = gateway_probe
+        .as_ref()
+        .map(is_gateway_health_probe_online)
+        .unwrap_or(false);
+    let fallback_online = port_ready && gateway_probe_online;
+    let effective_success = status_effective || fallback_online;
+    let effective_running = status_running || fallback_online;
     let status_summary = status_payload
         .as_ref()
         .map(gateway_status_payload_summary)
         .unwrap_or_else(|| "未解析到 JSON 状态对象".to_string());
+    let probe_summary = summarize_gateway_health_probe(gateway_probe.as_ref());
 
-    if !status_effective || !status_running || !port_ready {
+    if !effective_success || !effective_running || !port_ready {
         let status_detail = format!(
-            "status_effective={status_effective}, status_running={status_running}, port_ready={port_ready}, {status_summary}"
+            "status_effective={status_effective}, status_running={status_running}, port_ready={port_ready}, fallback_online={fallback_online}, {status_summary}, {probe_summary}"
         );
         let merged_detail = format!("{}\n{}", status_stdout.trim(), status_stderr.trim())
             .trim()
@@ -9153,7 +9631,9 @@ fn run_openclaw_gateway_daemon_ensure_once() -> GatewayDaemonEnsureOutcome {
     GatewayDaemonEnsureOutcome {
         success: true,
         command: format!("{install_command} && {start_command} && {status_command}"),
-        detail: format!("后台守护进程已安装并运行（{status_summary}）。"),
+        detail: format!(
+            "后台守护进程已安装并运行（status_effective={status_effective}, status_running={status_running}, port_ready={port_ready}, fallback_online={fallback_online}, {status_summary}, {probe_summary}）。"
+        ),
         exit_code: status_output
             .status
             .code()
@@ -10364,6 +10844,20 @@ fn start_main_window_drag(app: tauri::AppHandle) -> Result<(), String> {
     window.start_dragging().map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn toggle_main_window_maximize(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let is_maximized = window.is_maximized().map_err(|error| error.to_string())?;
+    if is_maximized {
+        window.unmaximize().map_err(|error| error.to_string())?;
+    } else {
+        window.maximize().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn toggle_main_window_visibility(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -10895,17 +11389,28 @@ fn check_openclaw_runtime_status_blocking() -> Result<OpenClawRuntimeStatusRespo
         gateway_status_text_indicates_running(&merged_output)
     };
     let port_ready = wait_for_loopback_port_listening(resolve_openclaw_gateway_port(), 4, 180);
-    let healthy = status_effective && status_running && port_ready;
+    let gateway_probe = if port_ready && (!status_effective || !status_running) {
+        check_openclaw_gateway_health_fallback_blocking()
+    } else {
+        None
+    };
+    let gateway_probe_online = gateway_probe
+        .as_ref()
+        .map(is_gateway_health_probe_online)
+        .unwrap_or(false);
+    let fallback_online = port_ready && gateway_probe_online;
+    let healthy = (status_effective && status_running && port_ready) || fallback_online;
 
     let status_summary = status_payload
         .as_ref()
         .map(gateway_status_payload_summary)
         .unwrap_or_else(|| "未解析到 JSON 状态对象".to_string());
+    let probe_summary = summarize_gateway_health_probe(gateway_probe.as_ref());
     let version_label = version
         .map(|value| format!("版本：{value}。"))
         .unwrap_or_default();
     let status_detail = format!(
-        "status_effective={status_effective}, status_running={status_running}, port_ready={port_ready}, {status_summary}"
+        "status_effective={status_effective}, status_running={status_running}, port_ready={port_ready}, fallback_online={fallback_online}, {status_summary}, {probe_summary}"
     );
     let detail_core = if healthy {
         format!("OpenClaw 运行状态正常。{version_label} {status_detail}")
@@ -12233,16 +12738,24 @@ fn start_openclaw_channel_qr_binding(
 
     let session_id = generate_ephemeral_openclaw_gateway_token()
         .unwrap_or_else(|_| format!("qr-{}", current_timestamp_millis()));
-    let command_line = if normalized_channel == "weixin" {
-        "npx -y @tencent-weixin/openclaw-weixin-cli@latest install".to_string()
+    let openclaw_state_dir = resolve_openclaw_home_path().display().to_string();
+    let openclaw_config_path = resolve_openclaw_config_path().display().to_string();
+    let login_command = if normalized_channel == "weixin" {
+        "(openclaw channels login --channel openclaw-weixin) || (openclaw channels login --channel weixin)".to_string()
     } else {
-        // WeCom CLI 默认首项即“扫码接入（推荐）”，通过换行可自动确认。
-        if cfg!(target_os = "windows") {
-            "echo.| npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
-        } else {
-            "printf '\\n' | npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
-        }
+        "(openclaw channels login --channel wecom) || (openclaw channels login --channel openclaw-wecom)".to_string()
     };
+    let install_command = if normalized_channel == "weixin" {
+        "npx -y @tencent-weixin/openclaw-weixin-cli@latest install".to_string()
+    } else if cfg!(target_os = "windows") {
+        // WeCom CLI 默认首项即“扫码接入（推荐）”，通过换行可自动确认。
+        "echo.| npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
+    } else {
+        "printf '\\n' | npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
+    };
+    let command_line = format!(
+        "({login_command}) || (({install_command}) && ({login_command}))"
+    );
 
     let now = current_timestamp_millis();
     let session_state = Arc::new(Mutex::new(OpenClawChannelQrBindingSessionState {
@@ -12258,7 +12771,10 @@ fn start_openclaw_channel_qr_binding(
                 "企业微信"
             }
         )),
-        logs: vec![format!("启动命令：{command_line}")],
+        logs: vec![
+            format!("启动命令：{command_line}"),
+            format!("配置路径：{openclaw_config_path}"),
+        ],
         started_at_ms: now,
         updated_at_ms: now,
     }));
@@ -12283,7 +12799,31 @@ fn start_openclaw_channel_qr_binding(
             cmd
         };
         suppress_windows_command_window(&mut command);
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let bundled_cli_path_prefix = prepend_openclaw_cli_wrapper_to_command_path(&mut command);
+        command
+            .env("OPENCLAW_NO_RESPAWN", "1")
+            .env("OPENCLAW_EMBEDDED_IN", "DragonClaw")
+            .env("OPENCLAW_HOME", &openclaw_state_dir)
+            .env("OPENCLAW_STATE_DIR", &openclaw_state_dir)
+            .env("CLAWDBOT_STATE_DIR", &openclaw_state_dir)
+            .env("OPENCLAW_CONFIG_PATH", &openclaw_config_path)
+            .env("OPENCLAW_CONFIG", &openclaw_config_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Ok(mut state) = session_state_for_thread.lock() {
+            state.updated_at_ms = current_timestamp_millis();
+            if let Some(path_prefix) = bundled_cli_path_prefix {
+                state.logs.push(format!(
+                    "已将 bundled OpenClaw CLI 置于 PATH 前缀：{path_prefix}"
+                ));
+            } else {
+                state.logs.push(
+                    "未找到 bundled OpenClaw CLI 包装器，当前将回退使用系统 PATH 中的 openclaw。"
+                        .to_string(),
+                );
+            }
+        }
 
         let mut child = match command.spawn() {
             Ok(value) => value,
@@ -12340,22 +12880,36 @@ fn start_openclaw_channel_qr_binding(
 
         if let Ok(mut state) = session_state_for_thread.lock() {
             state.updated_at_ms = current_timestamp_millis();
+            let config_sync_result = wait_for_channel_config_sync(&state.channel_type);
             match wait_result {
-                Ok(status) if status.success() => {
-                    state.status = "success".to_string();
-                    if state.detail.is_none() {
-                        state.detail = Some("绑定流程已完成。".to_string());
-                    }
-                }
                 Ok(status) => {
-                    state.status = "error".to_string();
                     let code_text = status
                         .code()
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
-                    if state.detail.is_none() {
-                        state.detail =
-                            Some(format!("绑定流程执行失败（exit code: {code_text}）。"));
+                    match config_sync_result {
+                        Ok(true) => {
+                            state.status = "success".to_string();
+                            if !status.success() {
+                                state.logs.push(format!(
+                                    "命令退出码 {code_text}，但已检测到频道配置写入。"
+                                ));
+                            }
+                            if state.detail.is_none() {
+                                state.detail = Some("绑定流程已完成，并检测到频道配置。".to_string());
+                            }
+                        }
+                        Ok(false) => {
+                            state.status = "error".to_string();
+                            state.detail = Some(format!(
+                                "扫码流程结束（exit code: {code_text}），但未在 openclaw 配置中检测到 {} 频道可用账号。请点击“重新获取二维码”重试；如仍失败，请检查 CLI 输出日志。",
+                                if state.channel_type == "weixin" { "微信" } else { "企业微信" }
+                            ));
+                        }
+                        Err(error) => {
+                            state.status = "error".to_string();
+                            state.detail = Some(format!("绑定流程结束后校验频道配置失败：{error}"));
+                        }
                     }
                 }
                 Err(error) => {
@@ -13311,6 +13865,31 @@ mod tests {
         let payload = extract_last_json_object_from_streams(stdout, stderr).unwrap();
         assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(false));
     }
+
+    #[test]
+    fn extract_last_json_object_from_streams_strips_ansi_and_noise() {
+        let stdout = "\u{1b}[35m[plugins]\u{1b}[39m init\n";
+        let stderr = "prefix \u{1b}[36m{\"ok\":true,\"service\":{\"loaded\":true,\"runtime\":{\"status\":\"running\"}}}\u{1b}[39m tail";
+        let payload = extract_last_json_object_from_streams(stdout, stderr).unwrap();
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            payload
+                .get("service")
+                .and_then(Value::as_object)
+                .and_then(|service| service.get("loaded"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn extract_last_json_object_from_streams_supports_multiline_payload() {
+        let stdout = "progress line\n";
+        let stderr =
+            "boot logs\n{\n  \"ok\": true,\n  \"service\": { \"loaded\": true }\n}\nmore logs";
+        let payload = extract_last_json_object_from_streams(stdout, stderr).unwrap();
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -13343,6 +13922,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             quit_app,
             start_main_window_drag,
+            toggle_main_window_maximize,
             openclaw_chat,
             sync_local_proxy,
             load_lobster_snapshot,
