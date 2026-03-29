@@ -687,6 +687,14 @@ struct OpenClawChannelAccountPayload {
     account_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawChannelAccountRenamePayload {
+    channel_type: String,
+    account_id: String,
+    name: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenClawMessageLogItem {
@@ -1989,7 +1997,7 @@ fn is_channel_section_reserved_key(key: &str) -> bool {
 
 fn channel_payload_has_content(payload: &serde_json::Map<String, Value>) -> bool {
     payload.iter().any(|(key, value)| {
-        if key == "enabled" {
+        if key == "enabled" || key == "name" {
             return false;
         }
         match value {
@@ -2478,6 +2486,7 @@ fn extract_channel_form_values(
         if key == "enabled"
             || key == "accounts"
             || key == "defaultAccount"
+            || key == "name"
             || key == "guilds"
             || key == "allowFrom"
             || key == "groupPolicy"
@@ -6262,14 +6271,23 @@ fn load_openclaw_channel_accounts_snapshot_blocking(
                         .get(&binding_key)
                         .cloned()
                         .or_else(|| channel_to_agent.get(&normalized_channel).cloned());
+                    let display_name = account_obj
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            if account_id.eq_ignore_ascii_case("default") {
+                                "主账号".to_string()
+                            } else {
+                                account_id.to_string()
+                            }
+                        });
 
                     accounts.push(OpenClawChannelAccountSnapshotItem {
                         account_id: account_id.to_string(),
-                        name: if account_id.eq_ignore_ascii_case("default") {
-                            "主账号".to_string()
-                        } else {
-                            account_id.to_string()
-                        },
+                        name: display_name,
                         configured,
                         status,
                         is_default: account_id.eq_ignore_ascii_case(&default_account_id),
@@ -6597,6 +6615,49 @@ fn delete_openclaw_channel_account_config(
         upsert_channel_binding(root, &normalized_channel, None, None);
     }
     upsert_channel_binding(root, &normalized_channel, Some(&normalized_account), None);
+    write_openclaw_config_value(&source_path, &parsed)
+}
+
+#[tauri::command]
+fn rename_openclaw_channel_account(payload: OpenClawChannelAccountRenamePayload) -> Result<(), String> {
+    let source_path = resolve_openclaw_config_path();
+    let raw = std::fs::read_to_string(&source_path).map_err(|error| format!("读取 openclaw.json 失败: {error}"))?;
+    let mut parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+
+    let normalized_channel = normalize_channel_identifier(&payload.channel_type);
+    let normalized_account = payload.account_id.trim().to_string();
+    let normalized_name = payload.name.trim().to_string();
+    if normalized_channel.is_empty() || normalized_account.is_empty() {
+        return Err("channelType 与 accountId 不能为空".to_string());
+    }
+    if normalized_name.is_empty() {
+        return Err("名称不能为空".to_string());
+    }
+
+    let channels_obj = root
+        .get_mut("channels")
+        .and_then(Value::as_object_mut)
+        .ok_or("channels 不存在或格式错误")?;
+    let section_obj = channels_obj
+        .get_mut(&normalized_channel)
+        .and_then(Value::as_object_mut)
+        .ok_or("未找到对应频道配置")?;
+    migrate_legacy_channel_section_to_accounts(section_obj);
+    let accounts_obj = section_obj
+        .get_mut("accounts")
+        .and_then(Value::as_object_mut)
+        .ok_or("频道账号配置缺失")?;
+    let account_obj = accounts_obj
+        .get_mut(&normalized_account)
+        .and_then(Value::as_object_mut)
+        .ok_or("未找到对应账号配置")?;
+
+    account_obj.insert("name".to_string(), Value::String(normalized_name));
+    mirror_default_account_to_channel_section(section_obj);
     write_openclaw_config_value(&source_path, &parsed)
 }
 
@@ -13299,6 +13360,7 @@ pub fn run() {
             append_openclaw_channel_mirror_failure_log,
             save_openclaw_channel_binding,
             delete_openclaw_channel_account_config,
+            rename_openclaw_channel_account,
             delete_openclaw_channel_config,
             save_openclaw_provider_base_url,
             delete_openclaw_provider_config,
