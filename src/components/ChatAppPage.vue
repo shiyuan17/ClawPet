@@ -1153,6 +1153,7 @@ const CHAT_MENTION_ALL_AGENT_ID = "__mention_all__";
 const CHAT_MENTION_ALL_DISPLAY_NAME = "all";
 const CHAT_MENTION_ALL_KEYWORDS = ["all", "everyone", "所有", "全体", "全部"] as const;
 const isSending = ref(false);
+const isSubmittingChat = ref(false);
 const agents = ref<AgentListItem[]>([]);
 const selectedAgentId = ref<string | null>(null);
 const activeChannelChatSession = ref<ChannelPaneChatItem | null>(null);
@@ -3679,6 +3680,46 @@ function createSessionId() {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function stripRuntimeSessionInstanceSuffix(value: string) {
+  const source = value.trim();
+  if (!source) {
+    return "";
+  }
+  return source.replace(/::session-[a-z0-9-]+$/i, "");
+}
+
+function normalizeRuntimeSessionKeyForAgent(sessionKeyRaw: string, agentId: string) {
+  const sessionKey = sessionKeyRaw.trim().toLowerCase();
+  if (!sessionKey) {
+    return "";
+  }
+  const normalizedAgentId = normalizeConversationKeyPart(agentId);
+  const expectedPrefix = `agent:${normalizedAgentId}:`;
+  if (!sessionKey.startsWith(expectedPrefix)) {
+    return "";
+  }
+  return sessionKey;
+}
+
+function buildScopedRuntimeSessionKey(conversationScopeKey: string, agentId: string) {
+  const normalizedAgentId = normalizeConversationKeyPart(agentId);
+  const baseSessionKey = resolveOpenClawRuntimeSessionKey(conversationScopeKey);
+  const sessionPrefix = `agent:${normalizedAgentId}:`;
+  const baseTargetRaw =
+    baseSessionKey && baseSessionKey.startsWith(sessionPrefix) ? baseSessionKey.slice(sessionPrefix.length) : normalizedAgentId;
+  const baseTarget = stripRuntimeSessionInstanceSuffix(baseTargetRaw) || normalizedAgentId;
+  const nextSessionId = normalizeConversationKeyPart(createSessionId());
+  return `agent:${normalizedAgentId}:${baseTarget}::${nextSessionId}`;
+}
+
+function resolveRuntimeSessionKeyForConversation(conversationScopeKey: string, agentId: string) {
+  const explicitSessionKey = normalizeRuntimeSessionKeyForAgent(currentSessionId.value, agentId);
+  if (explicitSessionKey) {
+    return explicitSessionKey;
+  }
+  return resolveOpenClawRuntimeSessionKey(conversationScopeKey);
+}
+
 function normalizeConversationKeyPart(value: string) {
   return value.trim().toLowerCase() || "unknown";
 }
@@ -3964,6 +4005,53 @@ function formatAttachmentSummaryForPrompt(attachments: ChatComposerAttachment[])
   }
   const details = attachments.map((attachment) => `${attachment.name} (${formatAttachmentSize(attachment.size)})`);
   return `[附件: ${details.join("；")}]`;
+}
+
+const CHAT_LOCAL_USER_DUPLICATE_WINDOW_MS = 4 * 1000;
+
+function buildLocalAttachmentSignature(attachments: ChatComposerAttachment[]) {
+  if (attachments.length === 0) {
+    return "";
+  }
+  return attachments
+    .map((attachment) => `${attachment.name.trim().toLowerCase()}|${Math.max(0, Math.floor(attachment.size))}`)
+    .sort()
+    .join(";");
+}
+
+function normalizeLocalUserMessageDedupText(text: string, attachments: ChatComposerAttachment[]) {
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+  if (normalizedText) {
+    return normalizedText;
+  }
+  return attachments.length > 0 ? "(附件)" : "";
+}
+
+function isRecentDuplicateUserSubmit(text: string, attachments: ChatComposerAttachment[], nowMs: number) {
+  const dedupText = normalizeLocalUserMessageDedupText(text, attachments);
+  if (!dedupText) {
+    return false;
+  }
+  const dedupAttachmentSignature = buildLocalAttachmentSignature(attachments);
+  for (let index = chatMessages.value.length - 1; index >= 0; index -= 1) {
+    const item = chatMessages.value[index];
+    if (!item || item.role !== "user" || item.status !== "done") {
+      continue;
+    }
+    const createdAt = typeof item.createdAt === "number" && Number.isFinite(item.createdAt) ? item.createdAt : 0;
+    if (createdAt <= 0 || nowMs - createdAt > CHAT_LOCAL_USER_DUPLICATE_WINDOW_MS) {
+      if (createdAt > 0) {
+        break;
+      }
+      continue;
+    }
+    const existingText = normalizeLocalUserMessageDedupText(item.text, item.attachments ?? []);
+    const existingAttachmentSignature = buildLocalAttachmentSignature(item.attachments ?? []);
+    if (existingText === dedupText && existingAttachmentSignature === dedupAttachmentSignature) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function stripLeadingUntrustedMetadataEnvelope(text: string) {
@@ -4796,7 +4884,11 @@ function handleNewChat() {
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
+  const parsedScope = parseConversationScope(conversationScopeKey);
+  currentSessionId.value =
+    parsedScope?.kind === "agent" ? buildScopedRuntimeSessionKey(conversationScopeKey, activeId) : createSessionId();
   persistChatHistory(conversationScopeKey);
+  agentHistories.value[conversationScopeKey] = [...chatMessages.value];
   refreshAgentMetaFromHistory(activeId, chatMessages.value, active?.currentWork || "暂无会话");
   void scrollMessagesToBottom();
 }
@@ -6249,12 +6341,23 @@ async function submitChat() {
   const conversationScopeKey = resolveConversationScopeKey(activeAgent?.agentId ?? null, activeChannelChatSession.value);
   const activeConversationGroup = findChatConversationGroupByAgentId(activeAgent?.agentId ?? null);
 
-  if ((!text && pendingAttachments.length === 0) || isSending.value || !activeAgent || !conversationScopeKey) {
+  if (
+    (!text && pendingAttachments.length === 0) ||
+    isSending.value ||
+    isSubmittingChat.value ||
+    !activeAgent ||
+    !conversationScopeKey
+  ) {
     return;
   }
 
-  const userContent = buildChannelMessageMirrorContent(text, pendingAttachments);
-  const startedAt = Date.now();
+  isSubmittingChat.value = true;
+  try {
+    const userContent = buildChannelMessageMirrorContent(text, pendingAttachments);
+    const startedAt = Date.now();
+    if (isRecentDuplicateUserSubmit(text, pendingAttachments, startedAt)) {
+      return;
+    }
   if (activeConversationGroup) {
     const groupMembers = getChatConversationGroupMembers(activeConversationGroup);
     if (groupMembers.length === 0) {
@@ -6467,7 +6570,7 @@ async function submitChat() {
   void scrollMessagesToBottom();
 
   try {
-    const runtimeSessionKey = resolveOpenClawRuntimeSessionKey(conversationScopeKey);
+    const runtimeSessionKey = resolveRuntimeSessionKeyForConversation(conversationScopeKey, activeAgent.agentId);
     const response = await sendOpenClawChat(
       [...history, { role: "user", content: userContent }],
       runtimeSessionKey
@@ -6519,6 +6622,9 @@ async function submitChat() {
     persistChatHistory(conversationScopeKey);
     agentHistories.value[conversationScopeKey] = [...chatMessages.value];
     void scrollMessagesToBottom();
+  }
+  } finally {
+    isSubmittingChat.value = false;
   }
 }
 
@@ -6741,6 +6847,35 @@ function handleSidebarDoubleClick(event: MouseEvent) {
 
 function getMessageTimeLabel(message: AgentChatMessage) {
   return formatTimeLabel(message.createdAt);
+}
+
+function areLikelyAdjacentDuplicateDisplayMessages(previous: AgentChatMessage, current: AgentChatMessage) {
+  if (previous.role !== current.role) {
+    return false;
+  }
+  if (previous.status === "pending" || current.status === "pending") {
+    return false;
+  }
+  if (isRuntimeToolMessage(previous) || isRuntimeToolMessage(current)) {
+    return false;
+  }
+  const previousText = normalizeOpenClawHistorySemanticText(getMessageDisplayText(previous));
+  const currentText = normalizeOpenClawHistorySemanticText(getMessageDisplayText(current));
+  if (!previousText || !currentText || previousText !== currentText) {
+    return false;
+  }
+  const previousAttachmentSignature = buildLocalAttachmentSignature(previous.attachments ?? []);
+  const currentAttachmentSignature = buildLocalAttachmentSignature(current.attachments ?? []);
+  if (previousAttachmentSignature !== currentAttachmentSignature) {
+    return false;
+  }
+  const previousAt = typeof previous.createdAt === "number" && Number.isFinite(previous.createdAt) ? previous.createdAt : 0;
+  const currentAt = typeof current.createdAt === "number" && Number.isFinite(current.createdAt) ? current.createdAt : 0;
+  const windowMs = resolveOpenClawNearDuplicateWindowMsByRole(current.role);
+  if (windowMs <= 0 || previousAt <= 0 || currentAt <= 0) {
+    return false;
+  }
+  return Math.abs(currentAt - previousAt) <= windowMs;
 }
 
 function getAgentStatusLabel(agent: AgentListItem) {
@@ -7902,7 +8037,7 @@ function shouldHideFeishuConversationTargetLabel(rawValue: string) {
 }
 
 function resolveAgentSessionTargetLabel(sessionTargetRaw: string) {
-  const sessionTarget = sessionTargetRaw.trim();
+  const sessionTarget = stripRuntimeSessionInstanceSuffix(sessionTargetRaw);
   if (!sessionTarget) {
     return "默认会话";
   }
@@ -7925,7 +8060,7 @@ function resolveConversationScopeLabel(scopeKey: string) {
     return "默认会话";
   }
   if (parsed.kind === "agent") {
-    const sessionTarget = parsed.sessionTarget?.trim().toLowerCase() || "";
+    const sessionTarget = stripRuntimeSessionInstanceSuffix(parsed.sessionTarget ?? "").toLowerCase();
     const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase();
     if (sessionTarget && sessionTarget !== "main" && sessionTarget !== ownerAgentId) {
       return resolveAgentSessionTargetLabel(parsed.sessionTarget ?? "");
@@ -7966,7 +8101,7 @@ function resolveRelatedHistoryRecordChannelId(record: ChatRelatedHistoryRecord) 
   if (parsed.kind === "channel") {
     return normalizeChannelPaneType(parsed.channelType) || "main";
   }
-  const target = parsed.sessionTarget?.trim().toLowerCase() || "";
+  const target = stripRuntimeSessionInstanceSuffix(parsed.sessionTarget ?? "").toLowerCase();
   const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase();
   if (!target || target === "main" || target === ownerAgentId) {
     return buildRelatedHistoryDefaultChannelId(ownerAgentId || "main");
@@ -8237,7 +8372,7 @@ function resolveChannelMessageMirrorTarget(
   };
 
   if (parsed.kind === "agent") {
-    const sessionTarget = parsed.sessionTarget?.trim() || "";
+    const sessionTarget = stripRuntimeSessionInstanceSuffix(parsed.sessionTarget ?? "");
     const normalizedTarget = sessionTarget.toLowerCase();
     const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase();
     if (!sessionTarget || normalizedTarget === "main" || normalizedTarget === ownerAgentId) {
@@ -8536,6 +8671,49 @@ function buildOpenClawHistoryMessageFingerprint(message: AgentChatMessage) {
   return `${message.role}|${createdAt}|${message.text}`;
 }
 
+const OPENCLAW_ASSISTANT_NEAR_DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
+const OPENCLAW_USER_NEAR_DUPLICATE_WINDOW_MS = 20 * 1000;
+
+function normalizeOpenClawHistorySemanticText(text: string) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function buildOpenClawMessageSemanticKey(message: AgentChatMessage) {
+  if (message.role !== "assistant" && message.role !== "user") {
+    return "";
+  }
+  const normalizedText = normalizeOpenClawHistorySemanticText(message.text);
+  if (!normalizedText) {
+    return "";
+  }
+  return `${message.role}|${normalizedText}`;
+}
+
+function resolveOpenClawNearDuplicateWindowMsByRole(role: ChatRole) {
+  if (role === "assistant") {
+    return OPENCLAW_ASSISTANT_NEAR_DUPLICATE_WINDOW_MS;
+  }
+  if (role === "user") {
+    return OPENCLAW_USER_NEAR_DUPLICATE_WINDOW_MS;
+  }
+  return 0;
+}
+
+function hasNearDuplicateMessage(existingTimes: number[], candidateCreatedAt: number, windowMs: number) {
+  if (windowMs <= 0) {
+    return false;
+  }
+  if (!Number.isFinite(candidateCreatedAt) || candidateCreatedAt <= 0) {
+    return existingTimes.length > 0;
+  }
+  return existingTimes.some(
+    (existingTime) =>
+      Number.isFinite(existingTime) &&
+      existingTime > 0 &&
+      Math.abs(existingTime - candidateCreatedAt) <= windowMs
+  );
+}
+
 function mergeOpenClawHistoryWithLocal(local: AgentChatMessage[], remote: AgentChatMessage[]) {
   if (local.length === 0) {
     return remote.map((message) => ({ ...message }));
@@ -8551,6 +8729,17 @@ function mergeOpenClawHistoryWithLocal(local: AgentChatMessage[], remote: AgentC
       .filter((message) => message.role === "assistant" || message.role === "user")
       .map((message) => buildOpenClawHistoryMessageFingerprint(message))
   );
+  const assistantSemanticTimes = new Map<string, number[]>();
+  for (const message of merged) {
+    const semanticKey = buildOpenClawMessageSemanticKey(message);
+    if (!semanticKey) {
+      continue;
+    }
+    const createdAt = typeof message.createdAt === "number" && Number.isFinite(message.createdAt) ? message.createdAt : 0;
+    const existingTimes = assistantSemanticTimes.get(semanticKey) ?? [];
+    existingTimes.push(createdAt);
+    assistantSemanticTimes.set(semanticKey, existingTimes);
+  }
 
   for (const message of remote) {
     const id = message.id.trim();
@@ -8558,12 +8747,27 @@ function mergeOpenClawHistoryWithLocal(local: AgentChatMessage[], remote: AgentC
     if ((id && seenIds.has(id)) || seenFingerprints.has(fingerprint)) {
       continue;
     }
+    const semanticKey = buildOpenClawMessageSemanticKey(message);
+    if (semanticKey) {
+      const createdAt = typeof message.createdAt === "number" && Number.isFinite(message.createdAt) ? message.createdAt : 0;
+      const windowMs = resolveOpenClawNearDuplicateWindowMsByRole(message.role);
+      const existingTimes = assistantSemanticTimes.get(semanticKey) ?? [];
+      if (hasNearDuplicateMessage(existingTimes, createdAt, windowMs)) {
+        continue;
+      }
+    }
     const clonedMessage = { ...message };
     merged.push(clonedMessage);
     if (id) {
       seenIds.add(id);
     }
     seenFingerprints.add(fingerprint);
+    if (semanticKey) {
+      const createdAt = typeof message.createdAt === "number" && Number.isFinite(message.createdAt) ? message.createdAt : 0;
+      const existingTimes = assistantSemanticTimes.get(semanticKey) ?? [];
+      existingTimes.push(createdAt);
+      assistantSemanticTimes.set(semanticKey, existingTimes);
+    }
   }
 
   return merged;
@@ -8572,14 +8776,16 @@ function mergeOpenClawHistoryWithLocal(local: AgentChatMessage[], remote: AgentC
 async function syncOpenClawSessionHistoryToLocal(
   agent: AgentListItem,
   scopeKey: string,
-  options: { applyToActiveConversation?: boolean } = {}
+  options: { applyToActiveConversation?: boolean; runtimeSessionKey?: string | null } = {}
 ) {
   const normalizedScopeKey = normalizeStoredConversationScopeKey(scopeKey);
   if (!normalizedScopeKey || !isOpenClawAgentSessionScope(normalizedScopeKey, agent.agentId)) {
     return [] as AgentChatMessage[];
   }
 
-  const latestHistory = await loadOpenClawSessionHistory(agent, normalizedScopeKey);
+  const resolvedRuntimeSessionKey =
+    normalizeRuntimeSessionKeyForAgent(options.runtimeSessionKey ?? "", agent.agentId) || normalizedScopeKey;
+  const latestHistory = await loadOpenClawSessionHistory(agent, resolvedRuntimeSessionKey);
   if (latestHistory.length === 0) {
     return [] as AgentChatMessage[];
   }
@@ -8623,7 +8829,11 @@ async function pollActiveOpenClawSessionHistory() {
   }
   openclawSessionSyncInFlight = true;
   try {
-    await syncOpenClawSessionHistoryToLocal(agent, scopeKey, { applyToActiveConversation: true });
+    const runtimeSessionKey = resolveRuntimeSessionKeyForConversation(scopeKey, agent.agentId);
+    await syncOpenClawSessionHistoryToLocal(agent, scopeKey, {
+      applyToActiveConversation: true,
+      runtimeSessionKey
+    });
   } finally {
     openclawSessionSyncInFlight = false;
   }
@@ -8858,7 +9068,7 @@ function resolveRelatedHistoryConversationId(record: ChatRelatedHistoryRecord) {
   }
   if (parsed.kind === "agent") {
     const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase() || "main";
-    const target = parsed.sessionTarget?.trim() || "";
+    const target = stripRuntimeSessionInstanceSuffix(parsed.sessionTarget ?? "");
     const normalizedTarget = target.toLowerCase();
     if (!target || normalizedTarget === "main" || normalizedTarget === ownerAgentId) {
       return "unknown";
@@ -8881,7 +9091,7 @@ function resolveRelatedHistoryScopeLabel(record: ChatRelatedHistoryRecord) {
   if (parsed.kind === "channel") {
     return normalizeChannelPaneType(parsed.channelType) || parsed.channelType.trim().toLowerCase() || "默认会话";
   }
-  const target = parsed.sessionTarget?.trim() || "";
+  const target = stripRuntimeSessionInstanceSuffix(parsed.sessionTarget ?? "");
   const ownerAgentId = parsed.ownerAgentId.trim().toLowerCase();
   const normalizedTarget = target.toLowerCase();
   if (!target || normalizedTarget === "main" || normalizedTarget === ownerAgentId) {
@@ -12559,7 +12769,11 @@ async function refreshUtilityModalData(type: UtilityModalType, options: RefreshU
       }
       const normalizedConversationScopeKey = normalizeStoredConversationScopeKey(conversationScopeKey);
       if (normalizedConversationScopeKey && isOpenClawAgentSessionScope(normalizedConversationScopeKey, agent.agentId)) {
-        await syncOpenClawSessionHistoryToLocal(agent, normalizedConversationScopeKey, { applyToActiveConversation: true });
+        const runtimeSessionKey = resolveRuntimeSessionKeyForConversation(normalizedConversationScopeKey, agent.agentId);
+        await syncOpenClawSessionHistoryToLocal(agent, normalizedConversationScopeKey, {
+          applyToActiveConversation: true,
+          runtimeSessionKey
+        });
       }
       if (refreshToken !== utilityModalRefreshToken) {
         return;
@@ -12682,7 +12896,10 @@ async function handleArchiveCurrentChat() {
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
-  currentSessionId.value = createSessionId();
+  currentSessionId.value =
+    parseConversationScope(conversationScopeKey)?.kind === "agent"
+      ? buildScopedRuntimeSessionKey(conversationScopeKey, agent.agentId)
+      : createSessionId();
   persistChatHistory(conversationScopeKey);
   agentHistories.value[conversationScopeKey] = [...chatMessages.value];
   refreshAgentMetaFromHistory(agent.agentId, chatMessages.value, agent.currentWork);
@@ -13842,8 +14059,8 @@ const chatComposerPlaceholder = computed(() => {
   }
   return `发送给 ${stripRoleLabel(agent.displayName)}`;
 });
-const chatMessagesForDisplay = computed(() =>
-  chatMessages.value.filter((item) => {
+const chatMessagesForDisplay = computed(() => {
+  const filtered = chatMessages.value.filter((item) => {
     if (isLegacyWelcomeMessage(item)) {
       return false;
     }
@@ -13854,8 +14071,20 @@ const chatMessagesForDisplay = computed(() =>
       return true;
     }
     return getMessageDisplayText(item).length > 0;
-  })
-);
+  });
+  if (filtered.length <= 1) {
+    return filtered;
+  }
+  const deduped: AgentChatMessage[] = [];
+  for (const item of filtered) {
+    const previous = deduped[deduped.length - 1];
+    if (previous && areLikelyAdjacentDuplicateDisplayMessages(previous, item)) {
+      continue;
+    }
+    deduped.push(item);
+  }
+  return deduped;
+});
 const isConversationEmpty = computed(() => chatMessagesForDisplay.value.length === 0);
 const proxyConfigPlatforms = computed(() => proxyConfigSnapshot.value?.platforms ?? []);
 const proxyConfigSelectedPlatform = computed(() => {
