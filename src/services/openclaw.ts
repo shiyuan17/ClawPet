@@ -23,6 +23,7 @@ export type OpenClawRequestOptions = {
   model?: string | null;
   protocol?: "openai" | "anthropic" | null;
   agentId?: string | null;
+  sessionKey?: string | null;
 };
 
 type OpenAIChatCompletionResponse = {
@@ -244,7 +245,8 @@ export async function sendOpenClawChat(messages: OpenClawMessage[], options: Ope
         apiKey: options.apiKey ?? null,
         model: options.model ?? null,
         protocol,
-        agentId
+        agentId,
+        sessionKey: options.sessionKey ?? null
       });
       return normalizeResponse(result);
     } catch (error) {

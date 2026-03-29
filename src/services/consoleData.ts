@@ -96,7 +96,9 @@ export type DocumentRecord = {
   updatedAt: number;
 };
 
-export type TaskStatus = "todo" | "in_progress" | "blocked" | "done";
+export const DEFAULT_TASK_PROJECT_NAME = "常规任务";
+
+export type TaskStatus = "todo" | "in_progress" | "in_review" | "done" | "cancelled";
 
 export type TaskRecord = {
   id: string;
@@ -536,16 +538,25 @@ function sanitizeTask(value: Partial<TaskRecord> | null | undefined): TaskRecord
     return null;
   }
 
+  const rawStatus = typeof (value as { status?: unknown }).status === "string" ? ((value as { status?: string }).status ?? "") : "";
+  const normalizedStatus =
+    rawStatus === "blocked"
+      ? "in_review"
+      : rawStatus === "todo" ||
+          rawStatus === "in_progress" ||
+          rawStatus === "in_review" ||
+          rawStatus === "done" ||
+          rawStatus === "cancelled"
+        ? rawStatus
+        : null;
+
   if (
     typeof value.id !== "string" ||
     typeof value.title !== "string" ||
     typeof value.project !== "string" ||
     typeof value.owner !== "string" ||
     (value.priority !== "p0" && value.priority !== "p1" && value.priority !== "p2") ||
-    (value.status !== "todo" &&
-      value.status !== "in_progress" &&
-      value.status !== "blocked" &&
-      value.status !== "done") ||
+    !normalizedStatus ||
     typeof value.dueAt !== "number" ||
     typeof value.summary !== "string" ||
     typeof value.updatedAt !== "number"
@@ -556,10 +567,10 @@ function sanitizeTask(value: Partial<TaskRecord> | null | undefined): TaskRecord
   return {
     id: value.id,
     title: value.title.trim() || "未命名任务",
-    project: value.project.trim() || "控制台升级",
+    project: value.project.trim(),
     owner: value.owner.trim() || "待分配",
     priority: value.priority,
-    status: value.status,
+    status: normalizedStatus,
     dueAt: value.dueAt,
     summary: value.summary.trim() || "暂无说明",
     updatedAt: value.updatedAt
@@ -1000,7 +1011,7 @@ export function seedDefaultTasks() {
     {
       id: createId("task"),
       title: "补齐代理配置入口",
-      project: "ClawPet Control Deck",
+      project: "",
       owner: "Commander",
       priority: "p0" as const,
       status: "in_progress" as const,
@@ -1011,7 +1022,7 @@ export function seedDefaultTasks() {
     {
       id: createId("task"),
       title: "建立员工管理面板",
-      project: "ClawPet Control Deck",
+      project: "",
       owner: "Archivist",
       priority: "p1" as const,
       status: "todo" as const,
@@ -1022,10 +1033,10 @@ export function seedDefaultTasks() {
     {
       id: createId("task"),
       title: "同步记忆与文档索引",
-      project: "ClawPet Control Deck",
+      project: "",
       owner: "Operator",
       priority: "p1" as const,
-      status: "blocked" as const,
+      status: "in_review" as const,
       dueAt: now + 24 * 60 * 60 * 1000,
       summary: "等待进一步接入真实文件源后完成联动。",
       updatedAt: now - 80 * 60 * 1000
@@ -1159,7 +1170,7 @@ export function createTaskDraft() {
   return {
     id: createId("task"),
     title: "",
-    project: "ClawPet Control Deck",
+    project: "",
     owner: "Commander",
     priority: "p1" as TaskRecord["priority"],
     status: "todo" as TaskStatus,

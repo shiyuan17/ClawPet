@@ -1,5 +1,50 @@
-import agencyRosterReadmeEnRaw from "../agent-data/en/README.md?raw";
-import agencyRosterReadmeZhRaw from "../agent-data/zh/README.md?raw";
+const agencyRosterReadmeEnModules = import.meta.glob("../agent-data/en/README*.md", {
+  eager: true,
+  query: "?raw",
+  import: "default"
+}) as Record<string, string>;
+const agencyRosterReadmeZhModules = import.meta.glob("../agent-data/zh/README*.md", {
+  eager: true,
+  query: "?raw",
+  import: "default"
+}) as Record<string, string>;
+
+function getReadmeCandidateScore(path: string, locale: "en" | "zh") {
+  const normalizedPath = path.toLowerCase();
+  if (normalizedPath.endsWith("/readme.md")) {
+    return 0;
+  }
+  if (locale === "zh" && (normalizedPath.includes("readme.zh-tw") || normalizedPath.includes("zh_tw"))) {
+    return 3;
+  }
+  if (normalizedPath.includes("/readme(")) {
+    return 1;
+  }
+  return 2;
+}
+
+function resolveRosterReadmeRaw(modules: Record<string, string>, locale: "en" | "zh") {
+  const candidates = Object.entries(modules).filter(([, raw]) => typeof raw === "string" && raw.trim().length > 0);
+  if (candidates.length === 0) {
+    return "";
+  }
+
+  return candidates
+    .sort(([leftPath], [rightPath]) => {
+      const leftScore = getReadmeCandidateScore(leftPath, locale);
+      const rightScore = getReadmeCandidateScore(rightPath, locale);
+      if (leftScore !== rightScore) {
+        return leftScore - rightScore;
+      }
+      if (leftPath.length !== rightPath.length) {
+        return leftPath.length - rightPath.length;
+      }
+      return leftPath.localeCompare(rightPath, "en");
+    })[0][1];
+}
+
+const agencyRosterReadmeEnRaw = resolveRosterReadmeRaw(agencyRosterReadmeEnModules, "en");
+const agencyRosterReadmeZhRaw = resolveRosterReadmeRaw(agencyRosterReadmeZhModules, "zh");
 
 export type AgencyRosterRole = {
   id: string;

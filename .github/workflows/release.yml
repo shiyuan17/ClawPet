@@ -53,7 +53,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'ClawPet ${{ github.ref_name }}'
+          releaseName: 'DragonClaw ${{ github.ref_name }}'
           releaseBody: 'See CHANGELOG.md for details.'
           releaseDraft: true
           prerelease: false
@@ -69,7 +69,7 @@ jobs:
       - name: Create Release Notes
         id: notes
         run: |
-          echo "## ClawPet ${{ github.ref_name }}" > release_notes.md
+          echo "## DragonClaw ${{ github.ref_name }}" > release_notes.md
           echo "" >> release_notes.md
           echo "### 新功能" >> release_notes.md
           echo "- 🐾 宠物远程绑定与聊天功能" >> release_notes.md

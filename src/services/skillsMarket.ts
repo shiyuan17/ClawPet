@@ -5,7 +5,7 @@ export type SkillMarketCategory =
   | "ai-intelligence"
   | "developer-tools"
   | "productivity"
-  | "data-analytics"
+  | "data-analysis"
   | "content-creation"
   | "security-compliance"
   | "communication-collaboration";
