@@ -780,6 +780,15 @@ struct AudioFilePayload {
     file_name: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalMediaFilePayload {
+    data_url: String,
+    mime_type: String,
+    file_name: String,
+    byte_length: usize,
+}
+
 #[derive(Debug, Clone)]
 struct EditableScope {
     facet_key: String,
@@ -5325,18 +5334,54 @@ fn load_openclaw_resource_snapshot(
 }
 
 fn guess_audio_mime_type(path: &Path) -> &'static str {
+    match guess_media_mime_type(path) {
+        "application/octet-stream" => "application/octet-stream",
+        resolved => resolved,
+    }
+}
+
+fn guess_media_mime_type(path: &Path) -> &'static str {
     match path
         .extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.to_ascii_lowercase())
         .as_deref()
     {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("svg") => "image/svg+xml",
+        Some("avif") => "image/avif",
+        Some("heic") | Some("heif") => "image/heic",
+        Some("tif") | Some("tiff") => "image/tiff",
+        Some("ico") => "image/x-icon",
         Some("mp3") => "audio/mpeg",
         Some("wav") => "audio/wav",
         Some("m4a") => "audio/mp4",
         Some("aac") => "audio/aac",
         Some("ogg") => "audio/ogg",
         Some("flac") => "audio/flac",
+        Some("opus") => "audio/opus",
+        Some("wma") => "audio/x-ms-wma",
+        Some("amr") => "audio/amr",
+        Some("aif") | Some("aiff") => "audio/aiff",
+        Some("caf") => "audio/x-caf",
+        Some("alac") => "audio/alac",
+        Some("mp4") | Some("m4v") => "video/mp4",
+        Some("mov") => "video/quicktime",
+        Some("webm") => "video/webm",
+        Some("mkv") => "video/x-matroska",
+        Some("avi") => "video/x-msvideo",
+        Some("wmv") => "video/x-ms-wmv",
+        Some("flv") => "video/x-flv",
+        Some("ogv") => "video/ogg",
+        Some("3gp") => "video/3gpp",
+        Some("mpeg") | Some("mpg") => "video/mpeg",
+        Some("ts") => "video/mp2t",
+        Some("m2ts") | Some("mts") => "video/mp2t",
+        Some("html") | Some("htm") => "text/html",
         _ => "application/octet-stream",
     }
 }
@@ -5367,6 +5412,56 @@ fn read_local_audio_file(path: String) -> Result<AudioFilePayload, String> {
         data_url,
         mime_type,
         file_name,
+    })
+}
+
+const LOCAL_MEDIA_PREVIEW_MAX_BYTES: usize = 36 * 1024 * 1024;
+
+#[tauri::command]
+fn read_local_media_file(path: String) -> Result<LocalMediaFilePayload, String> {
+    let normalized = path.trim();
+    if normalized.is_empty() {
+        return Err("本地文件路径不能为空。".to_string());
+    }
+
+    let expanded = expand_home_path(normalized);
+    let resolved = if expanded.exists() {
+        std::fs::canonicalize(&expanded).unwrap_or(expanded)
+    } else {
+        expanded
+    };
+
+    if !resolved.exists() || !resolved.is_file() {
+        return Err(format!("本地文件不存在：{}", resolved.display()));
+    }
+
+    let metadata = std::fs::metadata(&resolved)
+        .map_err(|error| format!("读取文件信息失败（{}）：{error}", resolved.display()))?;
+    let byte_length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+    if byte_length > LOCAL_MEDIA_PREVIEW_MAX_BYTES {
+        let max_mb = LOCAL_MEDIA_PREVIEW_MAX_BYTES / (1024 * 1024);
+        return Err(format!(
+            "文件过大（{} MB），暂不支持内存预览，请点击文件夹图标打开。",
+            max_mb
+        ));
+    }
+
+    let bytes = std::fs::read(&resolved)
+        .map_err(|error| format!("读取本地文件失败（{}）：{error}", resolved.display()))?;
+    let mime_type = guess_media_mime_type(&resolved).to_string();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let data_url = format!("data:{mime_type};base64,{encoded}");
+    let file_name = resolved
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("media")
+        .to_string();
+
+    Ok(LocalMediaFilePayload {
+        data_url,
+        mime_type,
+        file_name,
+        byte_length,
     })
 }
 
@@ -13608,6 +13703,67 @@ fn open_external_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_local_path_in_folder(path: String) -> Result<String, String> {
+    let normalized = path.trim();
+    if normalized.is_empty() {
+        return Err("本地路径不能为空。".to_string());
+    }
+
+    let expanded = expand_home_path(normalized);
+    let resolved = if expanded.exists() {
+        std::fs::canonicalize(&expanded).unwrap_or(expanded)
+    } else {
+        expanded
+    };
+    if !resolved.exists() {
+        return Err(format!("目标路径不存在：{}", resolved.display()));
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        if resolved.is_file() {
+            command.arg("-R").arg(&resolved);
+        } else {
+            command.arg(&resolved);
+        }
+        command
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        suppress_windows_command_window(&mut command);
+        if resolved.is_file() {
+            command.arg("/select,").arg(&resolved);
+        } else {
+            command.arg(&resolved);
+        }
+        command
+    };
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        let target_dir = if resolved.is_dir() {
+            resolved.clone()
+        } else {
+            resolved
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| resolved.clone())
+        };
+        command.arg(target_dir);
+        command
+    };
+
+    command
+        .spawn()
+        .map_err(|error| format!("打开文件夹失败：{error}"))?;
+    Ok(resolved.display().to_string())
+}
+
+#[tauri::command]
 fn show_system_notification(
     app: tauri::AppHandle,
     title: String,
@@ -14306,6 +14462,7 @@ pub fn run() {
             run_lobster_action,
             check_openclaw_gateway,
             read_local_audio_file,
+            read_local_media_file,
             load_openclaw_platforms_snapshot,
             load_openclaw_channel_accounts_snapshot,
             load_openclaw_channel_form_values,
@@ -14344,6 +14501,7 @@ pub fn run() {
             request_feishu_openclaw_qr,
             poll_feishu_openclaw_qr_result,
             open_external_url,
+            open_local_path_in_folder,
             show_system_notification,
             build_openclaw_control_ui_url,
             open_openclaw_control_ui,

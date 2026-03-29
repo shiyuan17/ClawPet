@@ -25,6 +25,7 @@ export type ControlIconName =
   | "tool"
   | "edit"
   | "bolt"
+  | "folder-open"
   | "send"
   | "mic"
   | "eye"
@@ -186,6 +187,11 @@ withDefaults(
     <g v-else-if="name === 'bolt'">
       <path d="M13.2 2.8 6.2 12h4.2l-1.2 9.2 8.6-11.2h-4.4z" />
       <path class="accent-stroke" d="M9.4 12h3.1" />
+    </g>
+
+    <g v-else-if="name === 'folder-open'">
+      <path d="M3.8 7.2h5.1l1.8 1.8h9.5a1.8 1.8 0 0 1 1.8 1.8v7.4a1.8 1.8 0 0 1-1.8 1.8H5.6a1.8 1.8 0 0 1-1.8-1.8V9a1.8 1.8 0 0 1 1.8-1.8Z" />
+      <path class="accent-stroke" d="m10.1 15 2.2-2.2 2.2 2.2" />
     </g>
 
     <g v-else-if="name === 'send'">

@@ -268,6 +268,22 @@ type AgentChatMessage = {
   toolOutput?: string;
 };
 
+type ChatDetectedFileKind = "image" | "audio" | "video" | "html" | "other";
+type ChatDetectedFile = {
+  id: string;
+  normalizedPath: string;
+  extension: string;
+  kind: ChatDetectedFileKind;
+  previewUrls: string[];
+};
+
+type LocalMediaFilePayload = {
+  dataUrl: string;
+  mimeType: string;
+  fileName: string;
+  byteLength: number;
+};
+
 type RuntimeToolSyncContext = {
   pendingMessageId: string;
   startedAtMs: number;
@@ -726,6 +742,7 @@ type TauriWindowApi = {
 type TauriNamespace = {
   core?: {
     invoke?: TauriInvoke;
+    convertFileSrc?: (filePath: string, protocol?: string) => string;
   };
   window?: {
     getCurrentWindow?: () => TauriWindowApi;
@@ -999,6 +1016,61 @@ const CHAT_CONVERSATION_GROUP_DEFAULT_ACTIVATION_COMMAND = "/activation";
 const CHAT_CONVERSATION_GROUP_MIN_HISTORY_LIMIT = 8;
 const CHAT_CONVERSATION_GROUP_MAX_HISTORY_LIMIT = 80;
 const CHAT_CONVERSATION_GROUP_DEFAULT_HISTORY_LIMIT = 40;
+const CHAT_MARKDOWN_RENDER_CACHE_MAX = 220;
+const CHAT_FILE_DETECTION_CACHE_MAX = 220;
+const CHAT_FILE_UNIX_PATH_PATTERN = /(?:^|[\s"'`([{<])((?:\/|~\/)[^\s"'`<>|]+?\.[a-z0-9]{1,12})(?=$|[\s"')\]}>.,;:!?，。；：！？`])/gim;
+const CHAT_FILE_WINDOWS_PATH_PATTERN = /(?:^|[\s"'`([{<])([a-z]:\\[^\s"'`<>|]+?\.[a-z0-9]{1,12})(?=$|[\s"')\]}>.,;:!?，。；：！？`])/gim;
+const CHAT_FILE_URL_PATTERN = /(?:^|[\s"'`([{<])(file:\/\/\/?[^\s"'`<>|]+?\.[a-z0-9]{1,12})(?=$|[\s"')\]}>.,;:!?，。；：！？`])/gim;
+const CHAT_FILE_PATH_TRAILING_TOKENS = new Set([".", ",", ";", ":", "!", "?", "，", "。", "；", "：", "！", "？", ")", "]", "}", ">", "`"]);
+const CHAT_FILE_IMAGE_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "avif",
+  "svg",
+  "heic",
+  "heif",
+  "tif",
+  "tiff",
+  "ico",
+  "jfif"
+]);
+const CHAT_FILE_AUDIO_EXTENSIONS = new Set([
+  "mp3",
+  "wav",
+  "ogg",
+  "m4a",
+  "aac",
+  "flac",
+  "opus",
+  "wma",
+  "amr",
+  "aif",
+  "aiff",
+  "caf",
+  "alac"
+]);
+const CHAT_FILE_VIDEO_EXTENSIONS = new Set([
+  "mp4",
+  "webm",
+  "mov",
+  "m4v",
+  "mkv",
+  "avi",
+  "wmv",
+  "flv",
+  "mpg",
+  "mpeg",
+  "3gp",
+  "ogv",
+  "ts",
+  "m2ts",
+  "mts"
+]);
+const CHAT_FILE_HTML_EXTENSIONS = new Set(["html", "htm"]);
 const ROLE_WORKFLOW_OVERRIDES_STORAGE_KEY = "keai.desktop-pet.role-workflow-overrides";
 const RECRUITMENT_DIVISION_FILTER_ALL = "__all__";
 const CREATE_EMPLOYEE_IDENTITY_OPTIONS: CreateEmployeeIdentityOption[] = [
@@ -1167,6 +1239,12 @@ const agents = ref<AgentListItem[]>([]);
 const selectedAgentId = ref<string | null>(null);
 const activeChannelChatSession = ref<ChannelPaneChatItem | null>(null);
 const chatMessages = ref<AgentChatMessage[]>([]);
+const chatFilePreviewLoadErrors = ref<Record<string, boolean>>({});
+const chatFilePreviewUrlIndexes = ref<Record<string, number>>({});
+const chatVideoPreviewHoverStates = ref<Record<string, boolean>>({});
+const chatFilePreviewBackendDataUrls = ref<Record<string, string>>({});
+const chatFilePreviewBackendLoading = ref<Record<string, boolean>>({});
+const chatFilePreviewBackendErrorMessages = ref<Record<string, string>>({});
 const runtimeToolSyncContext = ref<RuntimeToolSyncContext | null>(null);
 const expandedRuntimeToolMessages = ref<Record<string, boolean>>({});
 const agentHistories = ref<Record<string, AgentChatMessage[]>>({});
@@ -3127,6 +3205,19 @@ function getTauriInvoke(): TauriInvoke | null {
   return runtime.__TAURI__?.core?.invoke ?? runtime.__TAURI_INTERNALS__?.invoke ?? null;
 }
 
+function getTauriConvertFileSrc(): ((filePath: string, protocol?: string) => string) | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const runtime = window as Window & {
+    __TAURI__?: TauriNamespace;
+    __TAURI_INTERNALS__?: {
+      convertFileSrc?: (filePath: string, protocol?: string) => string;
+    };
+  };
+  return runtime.__TAURI__?.core?.convertFileSrc ?? runtime.__TAURI_INTERNALS__?.convertFileSrc ?? null;
+}
+
 function getTauriWindow(): TauriWindowApi | null {
   return getTauriNamespace()?.window?.getCurrentWindow?.() ?? null;
 }
@@ -4158,6 +4249,760 @@ function sanitizeMessageTextForDisplay(rawText: string) {
   return stripChatContextEnvelope(
     stripLeadingChannelSenderIdLabel(stripLeadingMessageIdLabel(stripLeadingUntrustedMetadataEnvelope(rawText)))
   ).trim();
+}
+
+const chatMarkdownRenderCache = new Map<string, string>();
+const chatDetectedFilesCache = new Map<string, ChatDetectedFile[]>();
+
+function setLimitedCacheEntry<T>(cache: Map<string, T>, key: string, value: T, maxEntries: number) {
+  cache.set(key, value);
+  if (cache.size <= maxEntries) {
+    return value;
+  }
+  const firstKey = cache.keys().next().value;
+  if (typeof firstKey === "string") {
+    cache.delete(firstKey);
+  }
+  return value;
+}
+
+function escapeHtml(raw: string) {
+  return raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeHtmlAttribute(raw: string) {
+  return escapeHtml(raw).replace(/`/g, "&#96;");
+}
+
+function encodeTextForHtmlDataAttribute(raw: string) {
+  return escapeHtmlAttribute(encodeURIComponent(raw));
+}
+
+function sanitizeMarkdownHref(rawHref: string) {
+  const candidate = rawHref.trim().replace(/&amp;/g, "&");
+  if (!candidate) {
+    return null;
+  }
+  if (
+    candidate.startsWith("http://") ||
+    candidate.startsWith("https://") ||
+    candidate.startsWith("mailto:") ||
+    candidate.startsWith("file://")
+  ) {
+    return candidate;
+  }
+  return null;
+}
+
+function renderInlineMarkdown(raw: string) {
+  const codeTokens: string[] = [];
+  const withTokens = raw.replace(/`([^`]+?)`/g, (_match: string, codeText: string) => {
+    const token = `@@CODE_${codeTokens.length}@@`;
+    const encodedCodeText = encodeTextForHtmlDataAttribute(codeText);
+    codeTokens.push(
+      `<span class="message-md-inline-code"><code>${escapeHtml(codeText)}</code><button type="button" class="message-md-copy message-md-inline-code__copy" data-copy-code="${encodedCodeText}">复制</button></span>`
+    );
+    return token;
+  });
+  let html = escapeHtml(withTokens);
+  html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_match: string, label: string, href: string) => {
+    const normalizedHref = sanitizeMarkdownHref(href);
+    if (!normalizedHref) {
+      return label;
+    }
+    return `<a href="${escapeHtmlAttribute(normalizedHref)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  });
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  html = html.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  for (let index = 0; index < codeTokens.length; index += 1) {
+    html = html.replace(`@@CODE_${index}@@`, codeTokens[index]);
+  }
+  return html;
+}
+
+function sanitizeMarkdownLanguage(raw: string) {
+  return raw.trim().replace(/[^a-z0-9_-]+/gi, "").slice(0, 24);
+}
+
+function renderMarkdownToHtml(markdown: string) {
+  const normalized = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const cached = chatMarkdownRenderCache.get(normalized);
+  if (typeof cached === "string") {
+    return cached;
+  }
+
+  const lines = normalized.split("\n");
+  const blocks: string[] = [];
+  const paragraphLines: string[] = [];
+  const quoteLines: string[] = [];
+  let listType: "ul" | "ol" | null = null;
+  let listItems: string[] = [];
+  let inCodeBlock = false;
+  let codeLanguage = "";
+  let codeLines: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraphLines.length === 0) {
+      return;
+    }
+    const text = paragraphLines.map((line) => renderInlineMarkdown(line.trim())).join("<br />");
+    blocks.push(`<p>${text}</p>`);
+    paragraphLines.length = 0;
+  };
+
+  const flushQuote = () => {
+    if (quoteLines.length === 0) {
+      return;
+    }
+    const content = quoteLines.map((line) => renderInlineMarkdown(line)).join("<br />");
+    blocks.push(`<blockquote><p>${content}</p></blockquote>`);
+    quoteLines.length = 0;
+  };
+
+  const flushList = () => {
+    if (!listType || listItems.length === 0) {
+      listType = null;
+      listItems = [];
+      return;
+    }
+    blocks.push(`<${listType}>${listItems.map((item) => `<li>${item}</li>`).join("")}</${listType}>`);
+    listType = null;
+    listItems = [];
+  };
+
+  const flushCodeBlock = () => {
+    if (!inCodeBlock) {
+      return;
+    }
+    const languageClass = codeLanguage ? ` class="language-${escapeHtmlAttribute(codeLanguage)}"` : "";
+    const codeText = codeLines.join("\n");
+    const encodedCodeText = encodeTextForHtmlDataAttribute(codeText);
+    blocks.push(
+      `<div class="message-md-codeblock"><button type="button" class="message-md-copy message-md-codeblock__copy" data-copy-code="${encodedCodeText}">复制</button><pre><code${languageClass}>${escapeHtml(codeText)}</code></pre></div>`
+    );
+    inCodeBlock = false;
+    codeLanguage = "";
+    codeLines = [];
+  };
+
+  const flushTextBlocks = () => {
+    flushParagraph();
+    flushQuote();
+    flushList();
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (inCodeBlock) {
+      if (/^```/.test(trimmed)) {
+        flushCodeBlock();
+      } else {
+        codeLines.push(line);
+      }
+      continue;
+    }
+
+    const fenceMatch = trimmed.match(/^```([a-z0-9_-]+)?\s*$/i);
+    if (fenceMatch) {
+      flushTextBlocks();
+      inCodeBlock = true;
+      codeLanguage = sanitizeMarkdownLanguage(fenceMatch[1] ?? "");
+      codeLines = [];
+      continue;
+    }
+
+    if (!trimmed) {
+      flushTextBlocks();
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushTextBlocks();
+      const level = headingMatch[1].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(headingMatch[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      flushTextBlocks();
+      blocks.push("<hr />");
+      continue;
+    }
+
+    const quoteMatch = line.match(/^\s*>\s?(.*)$/);
+    if (quoteMatch) {
+      flushParagraph();
+      flushList();
+      quoteLines.push(quoteMatch[1].trim());
+      continue;
+    }
+    flushQuote();
+
+    const orderedMatch = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      if (listType !== "ol") {
+        flushList();
+        listType = "ol";
+      }
+      listItems.push(renderInlineMarkdown(orderedMatch[1].trim()));
+      continue;
+    }
+
+    const unorderedMatch = line.match(/^\s*[-*+]\s+(.+)$/);
+    if (unorderedMatch) {
+      flushParagraph();
+      if (listType !== "ul") {
+        flushList();
+        listType = "ul";
+      }
+      listItems.push(renderInlineMarkdown(unorderedMatch[1].trim()));
+      continue;
+    }
+
+    flushList();
+    paragraphLines.push(line);
+  }
+
+  flushTextBlocks();
+  flushCodeBlock();
+  const rendered = blocks.join("");
+  return setLimitedCacheEntry(chatMarkdownRenderCache, normalized, rendered, CHAT_MARKDOWN_RENDER_CACHE_MAX);
+}
+
+function shouldRenderMessageAsMarkdown(message: AgentChatMessage) {
+  return message.role === "assistant" || message.role === "system";
+}
+
+function stripTrailingPathTokens(rawPath: string) {
+  let result = rawPath.trim();
+  while (result.length > 0) {
+    const tail = result.slice(-1);
+    if (!CHAT_FILE_PATH_TRAILING_TOKENS.has(tail)) {
+      break;
+    }
+    result = result.slice(0, -1);
+  }
+  return result;
+}
+
+function normalizeDetectedFilePath(rawPath: string) {
+  let normalized = rawPath.trim();
+  if (
+    normalized.length >= 2 &&
+    ((normalized.startsWith('"') && normalized.endsWith('"')) || (normalized.startsWith("'") && normalized.endsWith("'")))
+  ) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return stripTrailingPathTokens(normalized);
+}
+
+function isAbsoluteLocalPath(path: string) {
+  return path.startsWith("/") || /^[a-z]:[\\/]/i.test(path);
+}
+
+function resolveDetectedFileKind(extension: string): ChatDetectedFileKind {
+  const normalized = extension.trim().toLowerCase();
+  if (CHAT_FILE_IMAGE_EXTENSIONS.has(normalized)) {
+    return "image";
+  }
+  if (CHAT_FILE_AUDIO_EXTENSIONS.has(normalized)) {
+    return "audio";
+  }
+  if (CHAT_FILE_VIDEO_EXTENSIONS.has(normalized)) {
+    return "video";
+  }
+  if (CHAT_FILE_HTML_EXTENSIONS.has(normalized)) {
+    return "html";
+  }
+  return "other";
+}
+
+function encodePathForFileUrl(path: string) {
+  return path
+    .split("/")
+    .map((segment, index) => {
+      if (index === 0 && segment === "") {
+        return "";
+      }
+      if (/^[a-z]:$/i.test(segment)) {
+        return segment;
+      }
+      return encodeURIComponent(segment);
+    })
+    .join("/");
+}
+
+function buildLocalFilePreviewUrls(path: string) {
+  const normalized = path.trim();
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const pushCandidate = (value: string | null | undefined) => {
+    const candidate = (value ?? "").trim();
+    if (!candidate || seen.has(candidate)) {
+      return;
+    }
+    seen.add(candidate);
+    candidates.push(candidate);
+  };
+
+  const convertFileSrc = getTauriConvertFileSrc();
+  if (convertFileSrc) {
+    try {
+      pushCandidate(convertFileSrc(normalized));
+    } catch {
+      // Keep fallback previews below.
+    }
+    try {
+      pushCandidate(convertFileSrc(normalized, "asset"));
+    } catch {
+      // Keep fallback previews below.
+    }
+  }
+
+  if (normalized.startsWith("/")) {
+    pushCandidate(`file://${encodePathForFileUrl(normalized)}`);
+    pushCandidate(`file://${normalized}`);
+    return candidates;
+  }
+  if (/^[a-z]:[\\/]/i.test(normalized)) {
+    const windowsPath = normalized.replace(/\\/g, "/");
+    pushCandidate(`file:///${encodePathForFileUrl(windowsPath)}`);
+    pushCandidate(`file:///${windowsPath}`);
+    return candidates;
+  }
+  return candidates;
+}
+
+function decodeFileUrlToPath(rawUrl: string) {
+  const source = stripTrailingPathTokens(rawUrl.trim());
+  if (!/^file:\/\//i.test(source)) {
+    return null;
+  }
+  try {
+    const url = new URL(source);
+    if (url.protocol !== "file:") {
+      return null;
+    }
+    let pathname = decodeURIComponent(url.pathname || "");
+    if (/^\/[a-z]:/i.test(pathname)) {
+      pathname = pathname.slice(1);
+    }
+    if (url.hostname && url.hostname !== "localhost") {
+      const hostPath = pathname.startsWith("/") ? pathname : `/${pathname}`;
+      return `//${url.hostname}${hostPath}`;
+    }
+    return pathname || null;
+  } catch {
+    const fallback = source.replace(/^file:\/\/+/, "/");
+    try {
+      return decodeURIComponent(fallback);
+    } catch {
+      return fallback;
+    }
+  }
+}
+
+function extractDetectedFilesFromText(text: string) {
+  const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (!normalizedText.trim()) {
+    return [] as ChatDetectedFile[];
+  }
+  const cached = chatDetectedFilesCache.get(normalizedText);
+  if (cached) {
+    return cached;
+  }
+
+  const files: ChatDetectedFile[] = [];
+  const seen = new Set<string>();
+  const addDetectedPath = (rawPath: string) => {
+    const normalizedPath = normalizeDetectedFilePath(rawPath);
+    if (!normalizedPath || !isAbsoluteLocalPath(normalizedPath)) {
+      return;
+    }
+    const extension = normalizedPath.includes(".") ? normalizedPath.split(".").pop()?.toLowerCase() ?? "" : "";
+    if (!extension) {
+      return;
+    }
+    const id = normalizedPath.toLowerCase();
+    if (seen.has(id)) {
+      return;
+    }
+    seen.add(id);
+    const kind = resolveDetectedFileKind(extension);
+    files.push({
+      id,
+      normalizedPath,
+      extension,
+      kind,
+      previewUrls: buildLocalFilePreviewUrls(normalizedPath)
+    });
+  };
+
+  CHAT_FILE_UNIX_PATH_PATTERN.lastIndex = 0;
+  let unixMatch: RegExpExecArray | null = null;
+  while ((unixMatch = CHAT_FILE_UNIX_PATH_PATTERN.exec(normalizedText)) !== null) {
+    if (unixMatch[1]) {
+      addDetectedPath(unixMatch[1]);
+    }
+  }
+
+  CHAT_FILE_WINDOWS_PATH_PATTERN.lastIndex = 0;
+  let windowsMatch: RegExpExecArray | null = null;
+  while ((windowsMatch = CHAT_FILE_WINDOWS_PATH_PATTERN.exec(normalizedText)) !== null) {
+    if (windowsMatch[1]) {
+      addDetectedPath(windowsMatch[1]);
+    }
+  }
+
+  CHAT_FILE_URL_PATTERN.lastIndex = 0;
+  let fileUrlMatch: RegExpExecArray | null = null;
+  while ((fileUrlMatch = CHAT_FILE_URL_PATTERN.exec(normalizedText)) !== null) {
+    const decodedPath = decodeFileUrlToPath(fileUrlMatch[1] ?? "");
+    if (decodedPath) {
+      addDetectedPath(decodedPath);
+    }
+  }
+
+  return setLimitedCacheEntry(chatDetectedFilesCache, normalizedText, files, CHAT_FILE_DETECTION_CACHE_MAX);
+}
+
+function getMessageDisplayHtml(message: AgentChatMessage) {
+  const displayText = getMessageDisplayText(message);
+  if (!displayText) {
+    return "";
+  }
+  if (shouldRenderMessageAsMarkdown(message)) {
+    return renderMarkdownToHtml(displayText);
+  }
+  return `<p>${escapeHtml(displayText).replace(/\n/g, "<br />")}</p>`;
+}
+
+function markMarkdownCopyButtonCopied(button: HTMLButtonElement) {
+  const originalText = button.textContent ?? "复制";
+  button.textContent = "已复制";
+  button.classList.add("is-copied");
+  window.setTimeout(() => {
+    button.textContent = originalText;
+    button.classList.remove("is-copied");
+  }, 1200);
+}
+
+function decodeMarkdownCopyPayload(raw: string) {
+  if (!raw) {
+    return "";
+  }
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return "";
+  }
+}
+
+async function handleMessageBubbleActionClick(event: MouseEvent) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const button = target.closest(".message-md-copy[data-copy-code]");
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  const payload = decodeMarkdownCopyPayload(button.getAttribute("data-copy-code") ?? "");
+  if (!payload.trim()) {
+    showChatAgentDeleteNotice("当前代码块暂无可复制内容。");
+    return;
+  }
+
+  try {
+    await writeTextToClipboard(payload);
+    markMarkdownCopyButtonCopied(button);
+  } catch {
+    showChatAgentDeleteNotice("复制失败，请重试。");
+  }
+}
+
+function getMessageDetectedFiles(message: AgentChatMessage) {
+  if (message.status === "pending" || isRuntimeToolMessage(message)) {
+    return [] as ChatDetectedFile[];
+  }
+  return extractDetectedFilesFromText(getMessageDisplayText(message));
+}
+
+function getDetectedFilePreviewErrorKey(file: ChatDetectedFile) {
+  return `${file.kind}:${file.normalizedPath}`;
+}
+
+function supportsDetectedFilePreviewKind(file: ChatDetectedFile) {
+  return file.kind !== "other";
+}
+
+function shouldPreferBackendPreview(file: ChatDetectedFile) {
+  return file.kind === "image" || file.kind === "audio" || file.kind === "video";
+}
+
+function doesDetectedVideoSupportHoverControl() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
+  }
+  return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+}
+
+function hasDetectedFilePreviewError(file: ChatDetectedFile) {
+  return Boolean(chatFilePreviewLoadErrors.value[getDetectedFilePreviewErrorKey(file)]);
+}
+
+function setDetectedFilePreviewErrorState(file: ChatDetectedFile, next: boolean) {
+  const key = getDetectedFilePreviewErrorKey(file);
+  if (next) {
+    chatFilePreviewLoadErrors.value = {
+      ...chatFilePreviewLoadErrors.value,
+      [key]: true
+    };
+    return;
+  }
+  if (!chatFilePreviewLoadErrors.value[key]) {
+    return;
+  }
+  const snapshot = { ...chatFilePreviewLoadErrors.value };
+  delete snapshot[key];
+  chatFilePreviewLoadErrors.value = snapshot;
+}
+
+function getDetectedFileBackendPreviewUrl(file: ChatDetectedFile) {
+  return chatFilePreviewBackendDataUrls.value[getDetectedFilePreviewErrorKey(file)] ?? null;
+}
+
+function isDetectedFileBackendPreviewLoading(file: ChatDetectedFile) {
+  return Boolean(chatFilePreviewBackendLoading.value[getDetectedFilePreviewErrorKey(file)]);
+}
+
+function getDetectedFileBackendPreviewErrorMessage(file: ChatDetectedFile) {
+  return chatFilePreviewBackendErrorMessages.value[getDetectedFilePreviewErrorKey(file)] ?? "";
+}
+
+function setDetectedVideoPreviewHover(file: ChatDetectedFile, next: boolean) {
+  if (!isVideoDetectedFile(file)) {
+    return;
+  }
+  const key = getDetectedFilePreviewErrorKey(file);
+  const shouldShow = doesDetectedVideoSupportHoverControl() ? next : true;
+  if (Boolean(chatVideoPreviewHoverStates.value[key]) === shouldShow) {
+    return;
+  }
+  chatVideoPreviewHoverStates.value = {
+    ...chatVideoPreviewHoverStates.value,
+    [key]: shouldShow
+  };
+}
+
+function isDetectedVideoPreviewControlsVisible(file: ChatDetectedFile) {
+  if (!isVideoDetectedFile(file)) {
+    return false;
+  }
+  if (!doesDetectedVideoSupportHoverControl()) {
+    return true;
+  }
+  return Boolean(chatVideoPreviewHoverStates.value[getDetectedFilePreviewErrorKey(file)]);
+}
+
+function ensureDetectedVideoFirstFrame(video: HTMLVideoElement) {
+  if (video.dataset.previewFrameReady === "1") {
+    return;
+  }
+  if (!Number.isFinite(video.duration) || video.duration <= 0) {
+    return;
+  }
+  if (video.currentTime > 0.0001) {
+    video.dataset.previewFrameReady = "1";
+    return;
+  }
+  const targetTime = Math.min(0.05, Math.max(video.duration - 0.01, 0.001));
+  const handleSeeked = () => {
+    video.pause();
+    video.dataset.previewFrameReady = "1";
+  };
+  video.addEventListener("seeked", handleSeeked, { once: true });
+  try {
+    video.currentTime = targetTime;
+  } catch {
+    video.dataset.previewFrameReady = "1";
+  }
+}
+
+function handleDetectedVideoLoadedData(event: Event) {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLVideoElement)) {
+    return;
+  }
+  ensureDetectedVideoFirstFrame(target);
+}
+
+async function requestDetectedFileBackendPreview(file: ChatDetectedFile) {
+  const key = getDetectedFilePreviewErrorKey(file);
+  if (
+    file.kind === "other" ||
+    chatFilePreviewBackendDataUrls.value[key] ||
+    chatFilePreviewBackendLoading.value[key] ||
+    chatFilePreviewBackendErrorMessages.value[key]
+  ) {
+    return;
+  }
+
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    chatFilePreviewBackendErrorMessages.value = {
+      ...chatFilePreviewBackendErrorMessages.value,
+      [key]: "当前环境不支持本地预览权限通道。"
+    };
+    setDetectedFilePreviewErrorState(file, true);
+    return;
+  }
+
+  chatFilePreviewBackendLoading.value = {
+    ...chatFilePreviewBackendLoading.value,
+    [key]: true
+  };
+
+  try {
+    const payload = (await invoke("read_local_media_file", {
+      path: file.normalizedPath
+    })) as LocalMediaFilePayload;
+    const dataUrl = typeof payload.dataUrl === "string" ? payload.dataUrl.trim() : "";
+    if (!dataUrl.startsWith("data:")) {
+      throw new Error("预览数据为空。");
+    }
+
+    chatFilePreviewBackendDataUrls.value = {
+      ...chatFilePreviewBackendDataUrls.value,
+      [key]: dataUrl
+    };
+
+    if (chatFilePreviewBackendErrorMessages.value[key]) {
+      const nextMessages = { ...chatFilePreviewBackendErrorMessages.value };
+      delete nextMessages[key];
+      chatFilePreviewBackendErrorMessages.value = nextMessages;
+    }
+    setDetectedFilePreviewErrorState(file, false);
+  } catch (error) {
+    chatFilePreviewBackendErrorMessages.value = {
+      ...chatFilePreviewBackendErrorMessages.value,
+      [key]: resolveUnknownErrorMessage(error, "预览加载失败，请确认文件存在并且应用有读取权限。")
+    };
+    setDetectedFilePreviewErrorState(file, true);
+  } finally {
+    if (chatFilePreviewBackendLoading.value[key]) {
+      const nextLoading = { ...chatFilePreviewBackendLoading.value };
+      delete nextLoading[key];
+      chatFilePreviewBackendLoading.value = nextLoading;
+    }
+  }
+}
+
+function getDetectedFilePreviewUrl(file: ChatDetectedFile) {
+  if (file.kind === "other") {
+    return null;
+  }
+
+  const backendPreviewUrl = getDetectedFileBackendPreviewUrl(file);
+  if (backendPreviewUrl) {
+    return backendPreviewUrl;
+  }
+
+  const key = getDetectedFilePreviewErrorKey(file);
+  const hasBackendError = Boolean(chatFilePreviewBackendErrorMessages.value[key]);
+  if (shouldPreferBackendPreview(file) && !hasBackendError) {
+    void requestDetectedFileBackendPreview(file);
+    return null;
+  }
+
+  if (file.previewUrls.length === 0) {
+    void requestDetectedFileBackendPreview(file);
+    return null;
+  }
+
+  const currentIndex = Math.max(0, Math.floor(chatFilePreviewUrlIndexes.value[key] ?? 0));
+  if (currentIndex >= file.previewUrls.length) {
+    void requestDetectedFileBackendPreview(file);
+    return null;
+  }
+  return file.previewUrls[currentIndex] ?? null;
+}
+
+function markDetectedFilePreviewError(file: ChatDetectedFile) {
+  const key = getDetectedFilePreviewErrorKey(file);
+
+  if (getDetectedFileBackendPreviewUrl(file)) {
+    setDetectedFilePreviewErrorState(file, true);
+    return;
+  }
+
+  const currentIndex = Math.max(0, Math.floor(chatFilePreviewUrlIndexes.value[key] ?? 0));
+  const nextIndex = currentIndex + 1;
+  if (nextIndex < file.previewUrls.length) {
+    chatFilePreviewUrlIndexes.value = {
+      ...chatFilePreviewUrlIndexes.value,
+      [key]: nextIndex
+    };
+    return;
+  }
+  chatFilePreviewUrlIndexes.value = {
+    ...chatFilePreviewUrlIndexes.value,
+    [key]: file.previewUrls.length
+  };
+  void requestDetectedFileBackendPreview(file);
+}
+
+function canPreviewDetectedFile(file: ChatDetectedFile) {
+  return Boolean(getDetectedFilePreviewUrl(file));
+}
+
+function getDetectedFilePreviewHint(file: ChatDetectedFile) {
+  if (file.kind === "other") {
+    return `暂不支持 .${file.extension} 预览。`;
+  }
+  if (isDetectedFileBackendPreviewLoading(file)) {
+    return "正在尝试通过本地权限通道加载预览...";
+  }
+  const backendErrorMessage = getDetectedFileBackendPreviewErrorMessage(file);
+  if (backendErrorMessage) {
+    return backendErrorMessage;
+  }
+  if (hasDetectedFilePreviewError(file)) {
+    return "预览加载失败，请确认文件存在并且应用有读取权限。";
+  }
+  return "当前文件暂不可预览。";
+}
+
+function isImageDetectedFile(file: ChatDetectedFile) {
+  return file.kind === "image";
+}
+
+function isAudioDetectedFile(file: ChatDetectedFile) {
+  return file.kind === "audio";
+}
+
+function isVideoDetectedFile(file: ChatDetectedFile) {
+  return file.kind === "video";
+}
+
+function isHtmlDetectedFile(file: ChatDetectedFile) {
+  return file.kind === "html";
 }
 
 function buildOpenClawMessageContent(message: AgentChatMessage) {
@@ -10457,6 +11302,19 @@ async function openExternalUrl(url: string) {
 
   if (typeof window !== "undefined") {
     window.open(trimmed, "_blank", "noopener,noreferrer");
+  }
+}
+
+async function handleOpenDetectedFileFolder(file: ChatDetectedFile) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    showChatAgentDeleteNotice("当前环境不支持打开本地文件夹。");
+    return;
+  }
+  try {
+    await invoke("open_local_path_in_folder", { path: file.normalizedPath });
+  } catch (error) {
+    showChatAgentDeleteNotice(resolveUnknownErrorMessage(error, "打开文件夹失败。"));
   }
 }
 
@@ -17013,13 +17871,89 @@ watch(
                         <span class="typing-indicator__dot" />
                       </span>
                     </div>
-                    <div v-else class="message-bubble">
+                    <div v-else class="message-bubble" @click="handleMessageBubbleActionClick">
                       <div v-if="message.attachments && message.attachments.length > 0" class="message-bubble__attachments">
                         <span v-for="attachment in message.attachments" :key="`${message.id}-${attachment.id}`" class="message-bubble__attachment">
                           {{ attachment.name }} · {{ formatAttachmentSize(attachment.size) }}
                         </span>
                       </div>
-                      <span v-if="getMessageDisplayText(message)">{{ getMessageDisplayText(message) }}</span>
+                      <div
+                        v-if="getMessageDisplayHtml(message)"
+                        class="message-bubble__markdown"
+                        v-html="getMessageDisplayHtml(message)"
+                      />
+                      <section v-if="getMessageDetectedFiles(message).length > 0" class="message-file-output-list" aria-label="消息中的文件输出">
+                        <article
+                          v-for="file in getMessageDetectedFiles(message)"
+                          :key="`${message.id}-${file.id}`"
+                          class="message-file-output"
+                        >
+                          <header class="message-file-output__head">
+                            <p class="message-file-output__path" :title="file.normalizedPath">{{ file.normalizedPath }}</p>
+                            <button
+                              class="message-file-output__open-btn"
+                              type="button"
+                              title="打开所在文件夹"
+                              aria-label="打开所在文件夹"
+                              @click="handleOpenDetectedFileFolder(file)"
+                            >
+                              <ControlIcon name="folder-open" />
+                            </button>
+                          </header>
+                          <div
+                            v-if="supportsDetectedFilePreviewKind(file)"
+                            class="message-file-output__preview"
+                            :class="{
+                              'is-image': isImageDetectedFile(file),
+                              'is-video': isVideoDetectedFile(file)
+                            }"
+                            @mouseenter="setDetectedVideoPreviewHover(file, true)"
+                            @mouseleave="setDetectedVideoPreviewHover(file, false)"
+                          >
+                            <img
+                              v-if="isImageDetectedFile(file) && getDetectedFilePreviewUrl(file)"
+                              class="message-file-output__image"
+                              :src="getDetectedFilePreviewUrl(file) ?? undefined"
+                              :alt="`图片预览：${file.normalizedPath}`"
+                              loading="lazy"
+                              decoding="async"
+                              @error="markDetectedFilePreviewError(file)"
+                            />
+                            <audio
+                              v-else-if="isAudioDetectedFile(file) && getDetectedFilePreviewUrl(file)"
+                              class="message-file-output__audio"
+                              controls
+                              preload="metadata"
+                              :src="getDetectedFilePreviewUrl(file) ?? undefined"
+                              @error="markDetectedFilePreviewError(file)"
+                            />
+                            <video
+                              v-else-if="isVideoDetectedFile(file) && getDetectedFilePreviewUrl(file)"
+                              class="message-file-output__video"
+                              :controls="isDetectedVideoPreviewControlsVisible(file)"
+                              preload="auto"
+                              playsinline
+                              :src="getDetectedFilePreviewUrl(file) ?? undefined"
+                              @loadeddata="handleDetectedVideoLoadedData"
+                              @error="markDetectedFilePreviewError(file)"
+                            />
+                            <iframe
+                              v-else-if="isHtmlDetectedFile(file) && getDetectedFilePreviewUrl(file)"
+                              class="message-file-output__iframe"
+                              :src="getDetectedFilePreviewUrl(file) ?? undefined"
+                              sandbox="allow-same-origin allow-scripts"
+                              loading="lazy"
+                              @error="markDetectedFilePreviewError(file)"
+                            />
+                            <p
+                              v-if="!canPreviewDetectedFile(file) && !isVideoDetectedFile(file)"
+                              class="message-file-output__empty message-file-output__empty--inline"
+                            >
+                              {{ getDetectedFilePreviewHint(file) }}
+                            </p>
+                          </div>
+                        </article>
+                      </section>
                     </div>
                     <span v-if="!isRuntimeToolMessage(message)" class="message-time">{{ getMessageTimeLabel(message) }}</span>
                   </article>
@@ -24214,16 +25148,177 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .message-bubble {
   border-radius: 18px;
   padding: 12px 14px;
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.58;
   color: #1f2a44;
   background: #ffffff;
   border: 1px solid #e6edf8;
   box-shadow: 0 8px 16px rgba(61, 89, 130, 0.06);
-  white-space: pre-wrap;
+  white-space: normal;
   word-break: break-word;
+  overflow-wrap: anywhere;
   user-select: text;
   -webkit-user-select: text;
+}
+
+.message-bubble__markdown {
+  color: inherit;
+}
+
+.message-bubble__markdown :deep(*) {
+  margin: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
+.message-bubble__markdown :deep(p) {
+  line-height: 1.62;
+}
+
+.message-bubble__markdown :deep(p + p) {
+  margin-top: 8px;
+}
+
+.message-bubble__markdown :deep(ul),
+.message-bubble__markdown :deep(ol) {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.message-bubble__markdown :deep(li + li) {
+  margin-top: 4px;
+}
+
+.message-bubble__markdown :deep(h1),
+.message-bubble__markdown :deep(h2),
+.message-bubble__markdown :deep(h3),
+.message-bubble__markdown :deep(h4),
+.message-bubble__markdown :deep(h5),
+.message-bubble__markdown :deep(h6) {
+  margin: 0 0 8px;
+  color: inherit;
+  line-height: 1.35;
+  font-weight: 650;
+}
+
+.message-bubble__markdown :deep(h1) {
+  font-size: 1.15em;
+}
+
+.message-bubble__markdown :deep(h2) {
+  font-size: 1.08em;
+}
+
+.message-bubble__markdown :deep(h3) {
+  font-size: 1.03em;
+}
+
+.message-bubble__markdown :deep(h4),
+.message-bubble__markdown :deep(h5),
+.message-bubble__markdown :deep(h6) {
+  font-size: 1em;
+}
+
+.message-bubble__markdown :deep(blockquote) {
+  margin: 8px 0 0;
+  padding-left: 10px;
+  border-left: 3px solid rgba(118, 145, 188, 0.45);
+  color: #3a5176;
+}
+
+.message-bubble__markdown :deep(.message-md-codeblock) {
+  position: relative;
+  margin-top: 8px;
+}
+
+.message-bubble__markdown :deep(.message-md-copy) {
+  border: 1px solid #c6d3e6;
+  background: rgba(255, 255, 255, 0.92);
+  color: #3f5d89;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.message-bubble__markdown :deep(.message-md-copy:hover) {
+  border-color: #8aa8d3;
+  color: #1f4f93;
+}
+
+.message-bubble__markdown :deep(.message-md-copy.is-copied) {
+  border-color: #67b58b;
+  color: #177245;
+}
+
+.message-bubble__markdown :deep(.message-md-codeblock__copy) {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  height: 24px;
+  min-width: 44px;
+  border-radius: 999px;
+  padding: 0 10px;
+}
+
+.message-bubble__markdown :deep(.message-md-inline-code) {
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.message-bubble__markdown :deep(.message-md-inline-code__copy) {
+  height: 18px;
+  min-width: 34px;
+  border-radius: 6px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.message-bubble__markdown :deep(pre) {
+  margin: 0;
+  max-width: 100%;
+  padding: 34px 12px 10px;
+  border-radius: 10px;
+  border: 1px solid #d9e4f5;
+  background: #f5f8ff;
+  color: #2d3b55;
+  font-size: 11.5px;
+  line-height: 1.6;
+  overflow: auto;
+}
+
+.message-bubble__markdown :deep(code) {
+  border-radius: 6px;
+  padding: 1px 5px;
+  background: rgba(59, 96, 153, 0.12);
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+.message-bubble__markdown :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  word-break: normal;
+}
+
+.message-bubble__markdown :deep(a) {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+
+.message-bubble__markdown :deep(hr) {
+  margin: 10px 0;
+  border: 0;
+  border-top: 1px dashed #c8d7ef;
 }
 
 .message-bubble__attachments {
@@ -24260,6 +25355,191 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   border-color: rgba(255, 255, 255, 0.42);
   background: rgba(255, 255, 255, 0.18);
   color: rgba(255, 255, 255, 0.95);
+}
+
+.message-row--user .message-bubble__markdown :deep(a) {
+  color: #eef4ff;
+}
+
+.message-row--user .message-bubble__markdown :deep(blockquote) {
+  border-left-color: rgba(255, 255, 255, 0.55);
+  color: rgba(236, 244, 255, 0.94);
+}
+
+.message-row--user .message-bubble__markdown :deep(pre) {
+  border-color: rgba(255, 255, 255, 0.36);
+  background: rgba(5, 35, 89, 0.36);
+  color: rgba(244, 248, 255, 0.97);
+}
+
+.message-row--user .message-bubble__markdown :deep(code) {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.message-row--user .message-bubble__markdown :deep(.message-md-copy) {
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(244, 249, 255, 0.96);
+}
+
+.message-row--user .message-bubble__markdown :deep(.message-md-copy:hover) {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.message-row--user .message-bubble__markdown :deep(.message-md-copy.is-copied) {
+  border-color: rgba(109, 219, 165, 0.75);
+  color: #d8ffe9;
+}
+
+.message-file-output-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.message-file-output {
+  border-radius: 12px;
+  border: 1px solid #d7e3f6;
+  background: #f8fbff;
+  padding: 8px;
+}
+
+.message-file-output__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-file-output__path {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #2c4365;
+  word-break: break-all;
+}
+
+.message-file-output__open-btn {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid #c8daef;
+  background: #ffffff;
+  color: #365f97;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.message-file-output__open-btn:hover {
+  border-color: #88afe3;
+  background: #edf5ff;
+  color: #1d4f93;
+}
+
+.message-file-output__open-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.message-file-output__preview {
+  margin-top: 8px;
+  width: 100%;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  gap: 0;
+}
+
+.message-file-output__preview.is-image,
+.message-file-output__preview.is-video {
+  padding: 0;
+  border: 1px solid #d9e5f6;
+  background: #0c1118;
+  overflow: hidden;
+}
+
+.message-file-output__image,
+.message-file-output__video {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: min(56vh, 460px);
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  display: block;
+  object-fit: contain;
+}
+
+.message-file-output__audio {
+  width: 100%;
+}
+
+.message-file-output__iframe {
+  width: 100%;
+  min-height: clamp(220px, 40vh, 420px);
+  max-height: min(62vh, 620px);
+  border-radius: 10px;
+  border: 1px solid #d9e5f6;
+  background: #ffffff;
+  display: block;
+}
+
+.message-file-output__empty {
+  margin: 8px 0 0;
+  color: #5f7596;
+  font-size: 12px;
+}
+
+.message-file-output__empty--inline {
+  margin: 0;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+.message-row--user .message-file-output {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(5, 35, 89, 0.24);
+}
+
+.message-row--user .message-file-output__path {
+  color: rgba(241, 247, 255, 0.96);
+}
+
+.message-row--user .message-file-output__open-btn {
+  border-color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(247, 250, 255, 0.98);
+}
+
+.message-row--user .message-file-output__open-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.message-row--user .message-file-output__image,
+.message-row--user .message-file-output__video {
+  background: transparent;
+}
+
+.message-row--user .message-file-output__preview.is-image,
+.message-row--user .message-file-output__preview.is-video,
+.message-row--user .message-file-output__iframe {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.message-row--user .message-file-output__empty {
+  color: rgba(240, 246, 255, 0.9);
 }
 
 .message-row--pending .message-bubble {
@@ -24399,6 +25679,45 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .message-row {
+    max-width: min(92%, 560px);
+  }
+
+  .message-bubble {
+    padding: 10px 12px;
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+
+  .message-bubble__markdown :deep(pre) {
+    padding: 32px 10px 9px;
+    font-size: 11px;
+  }
+
+  .message-bubble__markdown :deep(.message-md-codeblock__copy) {
+    top: 5px;
+    right: 5px;
+    min-width: 40px;
+    height: 22px;
+    padding: 0 8px;
+  }
+
+  .message-file-output__path {
+    font-size: 11px;
+  }
+
+  .message-file-output__image,
+  .message-file-output__video {
+    max-height: min(42vh, 320px);
+  }
+
+  .message-file-output__iframe {
+    min-height: clamp(190px, 34vh, 280px);
+    max-height: min(50vh, 360px);
+  }
 }
 
 @keyframes typing-dot-pulse {
@@ -31796,6 +33115,79 @@ html[data-app-theme-resolved="dark"] .utility-log-copy {
 html[data-app-theme-resolved="dark"] .composer-send:disabled {
   background: rgba(92, 109, 142, 0.72);
   color: rgba(227, 236, 250, 0.68);
+}
+
+html[data-app-theme-resolved="dark"] .message-bubble__markdown :deep(blockquote) {
+  border-left-color: rgba(130, 156, 197, 0.48);
+  color: rgba(198, 213, 238, 0.94);
+}
+
+html[data-app-theme-resolved="dark"] .message-bubble__markdown :deep(pre) {
+  border-color: rgba(109, 133, 175, 0.4);
+  background: rgba(25, 35, 54, 0.88);
+  color: rgba(225, 236, 255, 0.95);
+}
+
+html[data-app-theme-resolved="dark"] .message-bubble__markdown :deep(code) {
+  background: rgba(116, 140, 185, 0.22);
+  color: rgba(230, 239, 255, 0.98);
+}
+
+html[data-app-theme-resolved="dark"] .message-bubble__markdown :deep(.message-md-copy) {
+  border-color: rgba(119, 143, 184, 0.44);
+  background: rgba(27, 37, 54, 0.9);
+  color: rgba(214, 228, 250, 0.96);
+}
+
+html[data-app-theme-resolved="dark"] .message-bubble__markdown :deep(.message-md-copy:hover) {
+  border-color: rgba(151, 176, 220, 0.68);
+  background: rgba(37, 50, 73, 0.94);
+  color: rgba(237, 244, 255, 0.98);
+}
+
+html[data-app-theme-resolved="dark"] .message-bubble__markdown :deep(.message-md-copy.is-copied) {
+  border-color: rgba(92, 201, 143, 0.72);
+  color: rgba(201, 255, 224, 0.98);
+}
+
+html[data-app-theme-resolved="dark"] .message-bubble__markdown :deep(a) {
+  color: #9ec4ff;
+}
+
+html[data-app-theme-resolved="dark"] .message-bubble__markdown :deep(hr) {
+  border-top-color: rgba(118, 143, 184, 0.4);
+}
+
+html[data-app-theme-resolved="dark"] .message-file-output {
+  border-color: rgba(115, 136, 173, 0.36);
+  background: rgba(30, 39, 56, 0.78);
+}
+
+html[data-app-theme-resolved="dark"] .message-file-output__path {
+  color: rgba(214, 226, 246, 0.94);
+}
+
+html[data-app-theme-resolved="dark"] .message-file-output__open-btn {
+  border-color: rgba(117, 141, 184, 0.42);
+  background: rgba(18, 26, 40, 0.88);
+  color: rgba(206, 220, 245, 0.96);
+}
+
+html[data-app-theme-resolved="dark"] .message-file-output__open-btn:hover {
+  border-color: rgba(151, 175, 218, 0.62);
+  background: rgba(33, 45, 67, 0.94);
+  color: rgba(232, 239, 252, 0.98);
+}
+
+html[data-app-theme-resolved="dark"] .message-file-output__preview.is-image,
+html[data-app-theme-resolved="dark"] .message-file-output__preview.is-video,
+html[data-app-theme-resolved="dark"] .message-file-output__iframe {
+  border-color: rgba(112, 136, 180, 0.38);
+  background: rgba(14, 21, 34, 0.88);
+}
+
+html[data-app-theme-resolved="dark"] .message-file-output__empty {
+  color: rgba(185, 201, 229, 0.9);
 }
 
 html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-window__composer textarea::placeholder {
