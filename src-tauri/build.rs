@@ -1,11 +1,9 @@
-#[cfg(target_os = "macos")]
 use std::path::PathBuf;
-#[cfg(target_os = "macos")]
 use std::process::Command;
 
 fn main() {
-    #[cfg(target_os = "macos")]
-    {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "macos" {
         println!("cargo:rerun-if-changed=src/macos_notifications.m");
         println!("cargo:rerun-if-changed=src/macos_dev_notifier.applescript");
         cc::Build::new()

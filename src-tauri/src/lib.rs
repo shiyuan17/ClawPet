@@ -5416,6 +5416,7 @@ fn read_local_audio_file(path: String) -> Result<AudioFilePayload, String> {
 }
 
 const LOCAL_MEDIA_PREVIEW_MAX_BYTES: usize = 36 * 1024 * 1024;
+const CHAT_ATTACHMENT_PERSIST_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[tauri::command]
 fn read_local_media_file(path: String) -> Result<LocalMediaFilePayload, String> {
@@ -5463,6 +5464,144 @@ fn read_local_media_file(path: String) -> Result<LocalMediaFilePayload, String> 
         file_name,
         byte_length,
     })
+}
+
+fn guess_media_extension_from_mime_type(mime_type_raw: &str) -> &'static str {
+    match mime_type_raw.trim().to_ascii_lowercase().as_str() {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        "image/heic" => "heic",
+        "image/heif" => "heif",
+        "image/avif" => "avif",
+        "audio/mpeg" => "mp3",
+        "audio/wav" => "wav",
+        "audio/mp4" => "m4a",
+        "audio/aac" => "aac",
+        "audio/ogg" => "ogg",
+        "audio/flac" => "flac",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/quicktime" => "mov",
+        "video/x-msvideo" => "avi",
+        "video/x-matroska" => "mkv",
+        "text/html" => "html",
+        "application/xhtml+xml" => "html",
+        _ => "bin",
+    }
+}
+
+fn sanitize_chat_attachment_file_stem(file_name: &str) -> String {
+    let candidate = Path::new(file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("clipboard");
+    let sanitized: String = candidate
+        .chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch) {
+                ch
+            } else if ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('_').trim();
+    if trimmed.is_empty() {
+        "clipboard".to_string()
+    } else {
+        trimmed.chars().take(48).collect()
+    }
+}
+
+fn build_chat_attachment_output_root(workspace: Option<String>) -> PathBuf {
+    if let Some(candidate) = workspace {
+        let trimmed = candidate.trim();
+        if !trimmed.is_empty() {
+            let path = PathBuf::from(trimmed);
+            if path.is_absolute() {
+                return path.join(".dragonclaw").join("chat-attachments");
+            }
+        }
+    }
+    resolve_openclaw_home_path().join("chat-attachments")
+}
+
+#[tauri::command]
+fn persist_chat_attachment_data_url(
+    file_name: String,
+    data_url: String,
+    workspace: Option<String>,
+) -> Result<String, String> {
+    let normalized = data_url.trim();
+    if normalized.is_empty() {
+        return Err("附件内容为空，无法保存。".to_string());
+    }
+    if !normalized.starts_with("data:") {
+        return Err("仅支持 data URL 附件保存。".to_string());
+    }
+
+    let payload = &normalized["data:".len()..];
+    let Some((meta, encoded)) = payload.split_once(',') else {
+        return Err("附件 data URL 格式无效。".to_string());
+    };
+
+    if !meta.to_ascii_lowercase().contains(";base64") {
+        return Err("附件 data URL 必须为 base64 编码。".to_string());
+    }
+
+    let mime_type = meta
+        .split(';')
+        .next()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let extension = Path::new(&file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| guess_media_extension_from_mime_type(&mime_type).to_string());
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .map_err(|error| format!("附件数据解码失败：{error}"))?;
+    if bytes.is_empty() {
+        return Err("附件内容为空，无法保存。".to_string());
+    }
+    if bytes.len() > CHAT_ATTACHMENT_PERSIST_MAX_BYTES {
+        let max_mb = CHAT_ATTACHMENT_PERSIST_MAX_BYTES / (1024 * 1024);
+        return Err(format!("附件过大，超过 {max_mb} MB 限制。"));
+    }
+
+    let output_root = build_chat_attachment_output_root(workspace);
+    std::fs::create_dir_all(&output_root)
+        .map_err(|error| format!("创建附件目录失败（{}）：{error}", output_root.display()))?;
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let mut random_bytes = [0_u8; 4];
+    if getrandom(&mut random_bytes).is_err() {
+        random_bytes = [0x12, 0x34, 0x56, 0x78];
+    }
+    let random_hex = random_bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let safe_stem = sanitize_chat_attachment_file_stem(&file_name);
+    let output_name = format!("{safe_stem}-{now_ms}-{random_hex}.{extension}");
+    let output_path = output_root.join(output_name);
+
+    std::fs::write(&output_path, bytes)
+        .map_err(|error| format!("保存附件失败（{}）：{error}", output_path.display()))?;
+
+    Ok(output_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -14463,6 +14602,7 @@ pub fn run() {
             check_openclaw_gateway,
             read_local_audio_file,
             read_local_media_file,
+            persist_chat_attachment_data_url,
             load_openclaw_platforms_snapshot,
             load_openclaw_channel_accounts_snapshot,
             load_openclaw_channel_form_values,

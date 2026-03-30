@@ -15,8 +15,8 @@
     "tauri": "CI=false tauri",
     "tauri:dev": "CI=false tauri dev",
     "tauri:build": "CI=false tauri build",
-    "tauri:build:win": "CI=false NSIS_PATH=/opt/homebrew/bin/makensis PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json",
-    "tauri:build:win:arm64": "CI=false NSIS_PATH=/opt/homebrew/bin/makensis PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --runner cargo-xwin --target aarch64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json"
+    "tauri:build:win": "bash ./scripts/tauri-build-win.sh x86_64-pc-windows-msvc",
+    "tauri:build:win:arm64": "bash ./scripts/tauri-build-win.sh aarch64-pc-windows-msvc"
   },
   "dependencies": {
     "gsap": "^3.12.7",

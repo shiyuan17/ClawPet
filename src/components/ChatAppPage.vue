@@ -244,6 +244,16 @@ type ChatComposerAttachment = {
   name: string;
   size: number;
   type: string;
+  localPath?: string;
+};
+
+type ChatAttachmentLocalPreview = {
+  objectUrl: string;
+  kind: ChatDetectedFileKind;
+};
+
+type ChatComposerAppendFilesOptions = {
+  localPaths?: Array<string | null | undefined>;
 };
 
 type ChatMentionCandidate = {
@@ -1222,6 +1232,11 @@ const chatAttachmentInputRef = ref<HTMLInputElement | null>(null);
 const chatAttachments = ref<ChatComposerAttachment[]>([]);
 const chatComposerError = ref("");
 const chatComposerInputRef = ref<HTMLTextAreaElement | null>(null);
+const isChatComposerDragOver = ref(false);
+const chatComposerDragDepth = ref(0);
+const isVoiceRecording = ref(false);
+const isVoiceRecordingProcessing = ref(false);
+const voiceRecordingElapsedSeconds = ref(0);
 const chatMentionQuery = ref("");
 const chatMentionStartIndex = ref<number | null>(null);
 const chatMentionActiveIndex = ref(0);
@@ -1229,10 +1244,77 @@ const CHAT_COMPOSER_MIN_ROWS = 3;
 const CHAT_COMPOSER_MAX_ROWS = 8;
 const CHAT_COMPOSER_MAX_ATTACHMENT_COUNT = 5;
 const CHAT_COMPOSER_MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+const CHAT_VOICE_RECORDER_TIMESLICE_MS = 250;
+const CHAT_VOICE_MAX_DURATION_SECONDS = 180;
+const CHAT_VOICE_FILE_PREFIX = "语音";
+const CHAT_COMPOSER_FILE_ACCEPT = "image/*,video/*,audio/*,.pdf,.txt,.md,.csv,.json,.xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.7z";
+const CHAT_COMPOSER_ACCEPTED_EXTENSIONS = new Set([
+  "jpg",
+  "jpeg",
+  "png",
+  "gif",
+  "webp",
+  "bmp",
+  "svg",
+  "heic",
+  "heif",
+  "mp4",
+  "mov",
+  "m4v",
+  "webm",
+  "avi",
+  "mkv",
+  "mp3",
+  "wav",
+  "m4a",
+  "aac",
+  "ogg",
+  "flac",
+  "pdf",
+  "txt",
+  "md",
+  "csv",
+  "json",
+  "xml",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "ppt",
+  "pptx",
+  "zip",
+  "rar",
+  "7z"
+]);
+const CHAT_COMPOSER_ACCEPTED_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/json",
+  "application/xml",
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-rar-compressed",
+  "application/vnd.rar",
+  "application/x-7z-compressed",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "text/plain",
+  "text/markdown",
+  "text/csv"
+]);
 const CHAT_MENTION_MAX_CANDIDATES = 8;
 const CHAT_MENTION_ALL_AGENT_ID = "__mention_all__";
 const CHAT_MENTION_ALL_DISPLAY_NAME = "all";
 const CHAT_MENTION_ALL_KEYWORDS = ["all", "everyone", "所有", "全体", "全部"] as const;
+let voiceRecorder: MediaRecorder | null = null;
+let voiceRecorderStream: MediaStream | null = null;
+let voiceRecorderMimeType = "";
+let voiceRecorderChunks: Blob[] = [];
+let voiceRecordingStartedAtMs: number | null = null;
+let voiceRecordingTimer: number | null = null;
 const isSending = ref(false);
 const isSubmittingChat = ref(false);
 const agents = ref<AgentListItem[]>([]);
@@ -1242,6 +1324,7 @@ const chatMessages = ref<AgentChatMessage[]>([]);
 const chatFilePreviewLoadErrors = ref<Record<string, boolean>>({});
 const chatFilePreviewUrlIndexes = ref<Record<string, number>>({});
 const chatVideoPreviewHoverStates = ref<Record<string, boolean>>({});
+const chatAttachmentLocalPreviews = ref<Record<string, ChatAttachmentLocalPreview>>({});
 const chatFilePreviewBackendDataUrls = ref<Record<string, string>>({});
 const chatFilePreviewBackendLoading = ref<Record<string, boolean>>({});
 const chatFilePreviewBackendErrorMessages = ref<Record<string, string>>({});
@@ -4061,6 +4144,304 @@ function createChatAttachmentId() {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function normalizeChatComposerFileExtension(fileName: string) {
+  const normalized = fileName.trim().toLowerCase();
+  const dotIndex = normalized.lastIndexOf(".");
+  if (dotIndex < 0 || dotIndex >= normalized.length - 1) {
+    return "";
+  }
+  return normalized.slice(dotIndex + 1);
+}
+
+function resolveChatComposerFallbackFileName(file: File, index: number) {
+  const mimeType = file.type.trim().toLowerCase();
+  if (mimeType.startsWith("image/")) {
+    const extension = mimeType.split("/")[1] || "png";
+    return `粘贴图片-${Date.now()}-${index + 1}.${extension}`;
+  }
+  const extension = normalizeChatComposerFileExtension(file.name);
+  if (extension) {
+    return `附件-${Date.now()}-${index + 1}.${extension}`;
+  }
+  return `附件-${Date.now()}-${index + 1}`;
+}
+
+function resolveChatComposerFileDisplayName(file: File, index: number) {
+  const normalized = file.name.trim();
+  if (normalized) {
+    return normalized;
+  }
+  return resolveChatComposerFallbackFileName(file, index);
+}
+
+function resolveChatComposerFileLocalPath(file: File) {
+  const candidatePath = (file as File & { path?: unknown }).path;
+  if (typeof candidatePath !== "string") {
+    return "";
+  }
+  const normalized = normalizeDetectedFilePath(candidatePath);
+  if (!normalized || !isAbsoluteLocalPath(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
+function resolveDetectedFileKindFromMimeType(mimeTypeRaw: string) {
+  const mimeType = mimeTypeRaw.trim().toLowerCase();
+  if (!mimeType) {
+    return "other" as ChatDetectedFileKind;
+  }
+  if (mimeType.startsWith("image/")) {
+    return "image" as ChatDetectedFileKind;
+  }
+  if (mimeType.startsWith("audio/")) {
+    return "audio" as ChatDetectedFileKind;
+  }
+  if (mimeType.startsWith("video/")) {
+    return "video" as ChatDetectedFileKind;
+  }
+  if (mimeType === "text/html" || mimeType === "application/xhtml+xml") {
+    return "html" as ChatDetectedFileKind;
+  }
+  return "other" as ChatDetectedFileKind;
+}
+
+function resolveChatComposerAttachmentDetectedKind(attachment: Pick<ChatComposerAttachment, "name" | "type">) {
+  const fromMimeType = resolveDetectedFileKindFromMimeType(attachment.type);
+  if (fromMimeType !== "other") {
+    return fromMimeType;
+  }
+  const extension = normalizeChatComposerFileExtension(attachment.name);
+  return extension ? resolveDetectedFileKind(extension) : "other";
+}
+
+function revokeChatAttachmentLocalPreviewObjectUrl(objectUrl: string) {
+  if (!objectUrl || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
+    return;
+  }
+  try {
+    URL.revokeObjectURL(objectUrl);
+  } catch {
+    // Ignore object URL cleanup failures.
+  }
+}
+
+function setChatAttachmentLocalPreview(attachmentId: string, preview: ChatAttachmentLocalPreview | null) {
+  const current = chatAttachmentLocalPreviews.value[attachmentId];
+  if (current?.objectUrl && (!preview || current.objectUrl !== preview.objectUrl)) {
+    revokeChatAttachmentLocalPreviewObjectUrl(current.objectUrl);
+  }
+
+  if (!preview) {
+    if (!current) {
+      return;
+    }
+    const snapshot = { ...chatAttachmentLocalPreviews.value };
+    delete snapshot[attachmentId];
+    chatAttachmentLocalPreviews.value = snapshot;
+    return;
+  }
+
+  chatAttachmentLocalPreviews.value = {
+    ...chatAttachmentLocalPreviews.value,
+    [attachmentId]: preview
+  };
+}
+
+function registerChatAttachmentLocalPreview(attachmentId: string, attachment: ChatComposerAttachment, file: File) {
+  if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
+    return;
+  }
+  const kind = resolveChatComposerAttachmentDetectedKind(attachment);
+  if (kind !== "image" && kind !== "audio" && kind !== "video" && kind !== "html") {
+    return;
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  setChatAttachmentLocalPreview(attachmentId, {
+    objectUrl,
+    kind
+  });
+}
+
+function hasChatAttachmentReference(attachmentId: string) {
+  if (chatAttachments.value.some((attachment) => attachment.id === attachmentId)) {
+    return true;
+  }
+  return chatMessages.value.some((message) => (message.attachments ?? []).some((attachment) => attachment.id === attachmentId));
+}
+
+function pruneUnusedChatAttachmentLocalPreviews() {
+  const entries = Object.entries(chatAttachmentLocalPreviews.value);
+  if (entries.length === 0) {
+    return;
+  }
+  let changed = false;
+  const next: Record<string, ChatAttachmentLocalPreview> = {};
+  for (const [attachmentId, preview] of entries) {
+    if (!hasChatAttachmentReference(attachmentId)) {
+      revokeChatAttachmentLocalPreviewObjectUrl(preview.objectUrl);
+      changed = true;
+      continue;
+    }
+    next[attachmentId] = preview;
+  }
+  if (changed) {
+    chatAttachmentLocalPreviews.value = next;
+  }
+}
+
+function clearAllChatAttachmentLocalPreviews() {
+  for (const preview of Object.values(chatAttachmentLocalPreviews.value)) {
+    revokeChatAttachmentLocalPreviewObjectUrl(preview.objectUrl);
+  }
+  chatAttachmentLocalPreviews.value = {};
+}
+
+function isSupportedChatComposerFile(file: File) {
+  const mimeType = file.type.trim().toLowerCase();
+  if (mimeType.startsWith("image/") || mimeType.startsWith("audio/") || mimeType.startsWith("video/") || mimeType.startsWith("text/")) {
+    return true;
+  }
+  if (CHAT_COMPOSER_ACCEPTED_MIME_TYPES.has(mimeType)) {
+    return true;
+  }
+  const extension = normalizeChatComposerFileExtension(file.name);
+  return extension ? CHAT_COMPOSER_ACCEPTED_EXTENSIONS.has(extension) : false;
+}
+
+function formatUnsupportedChatComposerFileMessage(file: File, index: number) {
+  return `文件「${resolveChatComposerFileDisplayName(file, index)}」暂不支持发送。`;
+}
+
+function hasDataTransferFiles(dataTransfer: DataTransfer | null | undefined) {
+  if (!dataTransfer) {
+    return false;
+  }
+  if (dataTransfer.files && dataTransfer.files.length > 0) {
+    return true;
+  }
+  return Array.from(dataTransfer.types || []).includes("Files");
+}
+
+function collectFilesFromDataTransfer(dataTransfer: DataTransfer | null | undefined): File[] {
+  if (!dataTransfer) {
+    return [];
+  }
+  const deduped = new Set<string>();
+  const output: File[] = [];
+  const append = (file: File | null) => {
+    if (!file) {
+      return;
+    }
+    const identity = `${file.name}::${file.size}::${file.type}::${file.lastModified}`;
+    if (deduped.has(identity)) {
+      return;
+    }
+    deduped.add(identity);
+    output.push(file);
+  };
+  if (dataTransfer.items && dataTransfer.items.length > 0) {
+    for (const item of Array.from(dataTransfer.items)) {
+      if (item.kind !== "file") {
+        continue;
+      }
+      append(item.getAsFile());
+    }
+  }
+  if (dataTransfer.files && dataTransfer.files.length > 0) {
+    for (const file of Array.from(dataTransfer.files)) {
+      append(file);
+    }
+  }
+  return output;
+}
+
+function normalizeChatComposerLocalPathCandidate(rawPath: string | null | undefined) {
+  if (!rawPath) {
+    return "";
+  }
+  const normalized = normalizeDetectedFilePath(rawPath);
+  if (!normalized || !isAbsoluteLocalPath(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
+function sanitizeChatAttachmentWorkspaceHint(rawWorkspace: string | null | undefined) {
+  const normalized = (rawWorkspace ?? "").trim();
+  if (!normalized || normalized === "—" || normalized === "-") {
+    return "";
+  }
+  return normalizeChatComposerLocalPathCandidate(normalized);
+}
+
+function readAttachmentFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      if (!result.startsWith("data:")) {
+        reject(new Error("文件编码失败。"));
+        return;
+      }
+      resolve(result);
+    };
+    reader.onerror = () => {
+      reject(new Error("文件读取失败。"));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function persistChatClipboardFileToLocalPath(file: File, displayName: string) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return "";
+  }
+  if (file.size <= 0) {
+    return "";
+  }
+  const dataUrl = await readAttachmentFileAsDataUrl(file);
+  const workspace = sanitizeChatAttachmentWorkspaceHint(activeAgent.value?.workspace ?? "");
+  const savedPath = (await invoke("persist_chat_attachment_data_url", {
+    fileName: displayName,
+    dataUrl,
+    workspace: workspace || null
+  })) as string;
+  return normalizeChatComposerLocalPathCandidate(savedPath);
+}
+
+async function resolveClipboardAttachmentLocalPaths(files: File[]) {
+  if (files.length === 0) {
+    return [] as string[];
+  }
+  const results = await Promise.all(
+    files.map(async (file, index) => {
+      const existingLocalPath = resolveChatComposerFileLocalPath(file);
+      if (existingLocalPath) {
+        return existingLocalPath;
+      }
+      const kind = resolveDetectedFileKindFromMimeType(file.type);
+      if (kind !== "image") {
+        return "";
+      }
+      const displayName = resolveChatComposerFileDisplayName(file, index);
+      try {
+        return await persistChatClipboardFileToLocalPath(file, displayName);
+      } catch {
+        return "";
+      }
+    })
+  );
+  return results;
+}
+
+function resetChatComposerDragState() {
+  chatComposerDragDepth.value = 0;
+  isChatComposerDragOver.value = false;
+}
+
 function formatAttachmentSize(size: number) {
   if (!Number.isFinite(size) || size <= 0) {
     return "0 B";
@@ -4085,11 +4466,14 @@ function normalizeAttachment(raw: unknown): ChatComposerAttachment | null {
   }
   const size = typeof candidate.size === "number" && Number.isFinite(candidate.size) ? Math.max(0, candidate.size) : 0;
   const type = typeof candidate.type === "string" ? candidate.type : "";
+  const rawLocalPath = typeof candidate.localPath === "string" ? normalizeDetectedFilePath(candidate.localPath) : "";
+  const localPath = rawLocalPath && isAbsoluteLocalPath(rawLocalPath) ? rawLocalPath : undefined;
   return {
     id: typeof candidate.id === "string" && candidate.id.trim() ? candidate.id : createChatAttachmentId(),
     name,
     size,
-    type
+    type,
+    localPath
   };
 }
 
@@ -4105,7 +4489,14 @@ function formatAttachmentSummaryForPrompt(attachments: ChatComposerAttachment[])
   if (attachments.length === 0) {
     return "";
   }
-  const details = attachments.map((attachment) => `${attachment.name} (${formatAttachmentSize(attachment.size)})`);
+  const details = attachments.map((attachment) => {
+    const base = `${attachment.name} (${formatAttachmentSize(attachment.size)})`;
+    const localPath = normalizeChatComposerLocalPathCandidate(attachment.localPath);
+    if (!localPath) {
+      return base;
+    }
+    return `${base} [localPath: ${localPath}]`;
+  });
   return `[附件: ${details.join("；")}]`;
 }
 
@@ -4737,14 +5128,79 @@ async function handleMessageBubbleActionClick(event: MouseEvent) {
   }
 }
 
+function buildDetectedFileFromAttachment(attachment: ChatComposerAttachment): ChatDetectedFile | null {
+  const displayName = attachment.name.trim();
+  if (!displayName) {
+    return null;
+  }
+
+  const previewState = chatAttachmentLocalPreviews.value[attachment.id];
+  const localPath = attachment.localPath?.trim() ?? "";
+  const extension = normalizeChatComposerFileExtension(displayName) || normalizeChatComposerFileExtension(localPath) || "bin";
+  const kind = previewState?.kind ?? resolveChatComposerAttachmentDetectedKind(attachment);
+  if (kind === "other") {
+    return null;
+  }
+
+  const previewUrls: string[] = [];
+  if (previewState?.objectUrl) {
+    previewUrls.push(previewState.objectUrl);
+  } else if (localPath && isAbsoluteLocalPath(localPath)) {
+    previewUrls.push(...buildLocalFilePreviewUrls(localPath));
+  }
+
+  return {
+    id: `attachment:${attachment.id}`,
+    normalizedPath: localPath || displayName,
+    extension,
+    kind,
+    previewUrls
+  };
+}
+
 function getMessageDetectedFiles(message: AgentChatMessage) {
   if (message.status === "pending" || isRuntimeToolMessage(message)) {
     return [] as ChatDetectedFile[];
   }
-  return extractDetectedFilesFromText(getMessageDisplayText(message));
+  const files: ChatDetectedFile[] = [];
+  const dedupedIds = new Set<string>();
+  const dedupedPaths = new Set<string>();
+
+  for (const attachment of message.attachments ?? []) {
+    const detected = buildDetectedFileFromAttachment(attachment);
+    if (!detected) {
+      continue;
+    }
+    const normalizedPathKey = detected.normalizedPath.trim().toLowerCase();
+    if (dedupedIds.has(detected.id) || (normalizedPathKey && dedupedPaths.has(normalizedPathKey))) {
+      continue;
+    }
+    dedupedIds.add(detected.id);
+    if (normalizedPathKey) {
+      dedupedPaths.add(normalizedPathKey);
+    }
+    files.push(detected);
+  }
+
+  for (const detected of extractDetectedFilesFromText(getMessageDisplayText(message))) {
+    const normalizedPathKey = detected.normalizedPath.trim().toLowerCase();
+    if (dedupedIds.has(detected.id) || (normalizedPathKey && dedupedPaths.has(normalizedPathKey))) {
+      continue;
+    }
+    dedupedIds.add(detected.id);
+    if (normalizedPathKey) {
+      dedupedPaths.add(normalizedPathKey);
+    }
+    files.push(detected);
+  }
+
+  return files;
 }
 
 function getDetectedFilePreviewErrorKey(file: ChatDetectedFile) {
+  if (file.id.startsWith("attachment:")) {
+    return `${file.kind}:${file.id}`;
+  }
   return `${file.kind}:${file.normalizedPath}`;
 }
 
@@ -4752,7 +5208,18 @@ function supportsDetectedFilePreviewKind(file: ChatDetectedFile) {
   return file.kind !== "other";
 }
 
+function isAttachmentDetectedFile(file: ChatDetectedFile) {
+  return file.id.startsWith("attachment:");
+}
+
+function shouldShowDetectedFileHeader(file: ChatDetectedFile) {
+  return !isAttachmentDetectedFile(file);
+}
+
 function shouldPreferBackendPreview(file: ChatDetectedFile) {
+  if (file.previewUrls.some((url) => url.startsWith("blob:") || url.startsWith("data:"))) {
+    return false;
+  }
   return file.kind === "image" || file.kind === "audio" || file.kind === "video";
 }
 
@@ -7099,24 +7566,334 @@ function handleChatUserAgentDragEnd() {
 }
 
 function triggerChatAttachmentPicker() {
-  if (!activeAgent.value || isSending.value) {
+  if (!activeAgent.value || isSending.value || isVoiceRecording.value || isVoiceRecordingProcessing.value) {
     return;
   }
   chatAttachmentInputRef.value?.click();
 }
 
-function handleVoiceSendClick() {
-  if (!activeAgent.value || isSending.value) {
+function clearVoiceRecordingTimer() {
+  if (voiceRecordingTimer === null) {
     return;
   }
-  chatComposerError.value = "语音发送功能开发中，敬请期待。";
+  window.clearInterval(voiceRecordingTimer);
+  voiceRecordingTimer = null;
+}
+
+function stopVoiceRecorderStreamTracks() {
+  if (!voiceRecorderStream) {
+    return;
+  }
+  for (const track of voiceRecorderStream.getTracks()) {
+    try {
+      track.stop();
+    } catch {
+      // Ignore track stop failures.
+    }
+  }
+  voiceRecorderStream = null;
+}
+
+function resetVoiceRecorderRuntimeState() {
+  clearVoiceRecordingTimer();
+  stopVoiceRecorderStreamTracks();
+  voiceRecorder = null;
+  voiceRecorderMimeType = "";
+  voiceRecorderChunks = [];
+  voiceRecordingStartedAtMs = null;
+  voiceRecordingElapsedSeconds.value = 0;
+  isVoiceRecording.value = false;
+}
+
+function tickVoiceRecordingElapsedSeconds() {
+  if (voiceRecordingStartedAtMs === null) {
+    voiceRecordingElapsedSeconds.value = 0;
+    return;
+  }
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - voiceRecordingStartedAtMs) / 1000));
+  voiceRecordingElapsedSeconds.value = elapsedSeconds;
+  if (elapsedSeconds >= CHAT_VOICE_MAX_DURATION_SECONDS) {
+    void finishVoiceRecording();
+  }
+}
+
+function startVoiceRecordingTimer() {
+  clearVoiceRecordingTimer();
+  tickVoiceRecordingElapsedSeconds();
+  voiceRecordingTimer = window.setInterval(() => {
+    tickVoiceRecordingElapsedSeconds();
+  }, 300);
+}
+
+function resolveVoiceRecordingMimeType() {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/ogg;codecs=opus",
+    "audio/mp4",
+    "audio/webm",
+    "audio/ogg",
+    "audio/wav"
+  ];
+  return candidates.find((item) => MediaRecorder.isTypeSupported(item)) ?? "";
+}
+
+function resolveVoiceRecordingFileExtensionFromMimeType(mimeTypeRaw: string) {
+  const normalized = mimeTypeRaw.trim().toLowerCase().split(";")[0] ?? "";
+  if (normalized === "audio/mp4" || normalized === "audio/x-m4a" || normalized === "audio/m4a") {
+    return "m4a";
+  }
+  if (normalized === "audio/ogg") {
+    return "ogg";
+  }
+  if (normalized === "audio/wav" || normalized === "audio/x-wav") {
+    return "wav";
+  }
+  if (normalized === "audio/mpeg") {
+    return "mp3";
+  }
+  if (normalized === "audio/aac") {
+    return "aac";
+  }
+  if (normalized === "audio/flac") {
+    return "flac";
+  }
+  return "webm";
+}
+
+function readBlobAsDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      if (!result.startsWith("data:")) {
+        reject(new Error("语音编码失败。"));
+        return;
+      }
+      resolve(result);
+    };
+    reader.onerror = () => {
+      reject(new Error("语音读取失败。"));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function persistRecordedVoiceBlobToLocalPath(fileName: string, blob: Blob) {
+  const invoke = getTauriInvoke();
+  if (!invoke || blob.size <= 0) {
+    return "";
+  }
+  const dataUrl = await readBlobAsDataUrl(blob);
+  const workspace = sanitizeChatAttachmentWorkspaceHint(activeAgent.value?.workspace ?? "");
+  const savedPath = (await invoke("persist_chat_attachment_data_url", {
+    fileName,
+    dataUrl,
+    workspace: workspace || null
+  })) as string;
+  return normalizeChatComposerLocalPathCandidate(savedPath);
+}
+
+function resolveVoiceRecordingErrorMessage(error: unknown) {
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+      return "未获得麦克风权限，请在系统设置里允许后重试。";
+    }
+    if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
+      return "未检测到可用麦克风设备。";
+    }
+    if (error.name === "NotReadableError" || error.name === "TrackStartError") {
+      return "麦克风当前不可用，可能被其他应用占用。";
+    }
+    if (error.name === "NotSupportedError") {
+      return "当前环境暂不支持语音录制。";
+    }
+  }
+  return resolveUnknownErrorMessage(error, "无法开始录音，请检查麦克风权限后重试。");
+}
+
+async function finalizeVoiceRecordingAndSubmit(chunks: Blob[], mimeTypeHint: string) {
+  if (chunks.length === 0) {
+    isVoiceRecordingProcessing.value = false;
+    chatComposerError.value = "未捕获到语音内容，请重试。";
+    return;
+  }
+
+  isVoiceRecordingProcessing.value = true;
+  try {
+    const normalizedMimeType = (mimeTypeHint.trim() || chunks[0]?.type?.trim() || "audio/webm").trim();
+    const audioBlob = new Blob(chunks, { type: normalizedMimeType });
+    if (audioBlob.size <= 0) {
+      chatComposerError.value = "语音内容为空，请重试。";
+      return;
+    }
+    if (audioBlob.size > CHAT_COMPOSER_MAX_ATTACHMENT_SIZE) {
+      chatComposerError.value = "语音文件超过 10 MB 限制，请缩短录音时长后重试。";
+      return;
+    }
+
+    const extension = resolveVoiceRecordingFileExtensionFromMimeType(normalizedMimeType);
+    const fileName = `${CHAT_VOICE_FILE_PREFIX}-${Date.now()}.${extension}`;
+    const recordedFile = new File([audioBlob], fileName, {
+      type: normalizedMimeType,
+      lastModified: Date.now()
+    });
+
+    let localPath = "";
+    try {
+      localPath = await persistRecordedVoiceBlobToLocalPath(fileName, audioBlob);
+    } catch {
+      localPath = "";
+    }
+
+    const previousAttachmentCount = chatAttachments.value.length;
+    appendChatComposerFiles([recordedFile], {
+      localPaths: [localPath]
+    });
+    const appended = chatAttachments.value.length > previousAttachmentCount;
+    if (!appended) {
+      if (!chatComposerError.value) {
+        chatComposerError.value = "语音文件添加失败，请重试。";
+      }
+      return;
+    }
+
+    if (!activeAgent.value) {
+      chatComposerError.value = "语音已添加到附件，请先选择聊天对象后发送。";
+      return;
+    }
+    if (isSending.value || isSubmittingChat.value) {
+      chatComposerError.value = "语音已添加到附件，请在当前消息发送完成后再发送。";
+      return;
+    }
+
+    chatComposerError.value = "";
+    await submitChat();
+  } catch (error) {
+    chatComposerError.value = resolveUnknownErrorMessage(error, "语音处理失败，请重试。");
+  } finally {
+    isVoiceRecordingProcessing.value = false;
+  }
+}
+
+async function startVoiceRecording() {
+  if (isVoiceRecording.value || isVoiceRecordingProcessing.value) {
+    return;
+  }
+  if (chatAttachments.value.length >= CHAT_COMPOSER_MAX_ATTACHMENT_COUNT) {
+    chatComposerError.value = `最多添加 ${CHAT_COMPOSER_MAX_ATTACHMENT_COUNT} 个附件。`;
+    return;
+  }
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    chatComposerError.value = "当前环境不支持语音录制。";
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    chatComposerError.value = "当前环境暂不支持语音录制。";
+    return;
+  }
+
+  chatComposerError.value = "";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+    const preferredMimeType = resolveVoiceRecordingMimeType();
+    const recorder = preferredMimeType ? new MediaRecorder(stream, { mimeType: preferredMimeType }) : new MediaRecorder(stream);
+
+    voiceRecorder = recorder;
+    voiceRecorderStream = stream;
+    voiceRecorderMimeType = recorder.mimeType || preferredMimeType || "audio/webm";
+    voiceRecorderChunks = [];
+
+    recorder.ondataavailable = (event: BlobEvent) => {
+      if (event.data && event.data.size > 0) {
+        voiceRecorderChunks.push(event.data);
+      }
+    };
+    recorder.onerror = (event: Event) => {
+      const runtimeError = (event as Event & { error?: unknown }).error;
+      chatComposerError.value = resolveVoiceRecordingErrorMessage(runtimeError ?? null);
+      isVoiceRecordingProcessing.value = false;
+      resetVoiceRecorderRuntimeState();
+    };
+    recorder.onstop = () => {
+      const chunks = [...voiceRecorderChunks];
+      const mimeType = voiceRecorderMimeType;
+      resetVoiceRecorderRuntimeState();
+      void finalizeVoiceRecordingAndSubmit(chunks, mimeType);
+    };
+
+    recorder.start(CHAT_VOICE_RECORDER_TIMESLICE_MS);
+    voiceRecordingStartedAtMs = Date.now();
+    voiceRecordingElapsedSeconds.value = 0;
+    isVoiceRecording.value = true;
+    isVoiceRecordingProcessing.value = false;
+    startVoiceRecordingTimer();
+  } catch (error) {
+    isVoiceRecordingProcessing.value = false;
+    resetVoiceRecorderRuntimeState();
+    chatComposerError.value = resolveVoiceRecordingErrorMessage(error);
+  }
+}
+
+async function finishVoiceRecording() {
+  const recorder = voiceRecorder;
+  if (!recorder || recorder.state === "inactive") {
+    return;
+  }
+  clearVoiceRecordingTimer();
+  isVoiceRecordingProcessing.value = true;
+  try {
+    recorder.stop();
+  } catch (error) {
+    isVoiceRecordingProcessing.value = false;
+    resetVoiceRecorderRuntimeState();
+    chatComposerError.value = resolveUnknownErrorMessage(error, "结束录音失败，请重试。");
+  }
+}
+
+function cancelVoiceRecording() {
+  const recorder = voiceRecorder;
+  if (recorder) {
+    recorder.onstop = null;
+    recorder.ondataavailable = null;
+    recorder.onerror = null;
+    if (recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // Ignore stop failures during cleanup.
+      }
+    }
+  }
+  isVoiceRecordingProcessing.value = false;
+  resetVoiceRecorderRuntimeState();
+}
+
+function handleVoiceSendClick() {
+  if (!activeAgent.value || isSending.value || isSubmittingChat.value || isVoiceRecordingProcessing.value) {
+    return;
+  }
+  if (isVoiceRecording.value) {
+    void finishVoiceRecording();
+    return;
+  }
+  void startVoiceRecording();
 }
 
 function removeChatAttachment(attachmentId: string) {
   chatAttachments.value = chatAttachments.value.filter((attachment) => attachment.id !== attachmentId);
+  pruneUnusedChatAttachmentLocalPreviews();
 }
 
-function appendChatComposerFiles(files: FileList | File[]) {
+function appendChatComposerFiles(files: FileList | File[], options: ChatComposerAppendFilesOptions = {}) {
   const source = Array.from(files);
   if (source.length === 0) {
     return;
@@ -7129,23 +7906,50 @@ function appendChatComposerFiles(files: FileList | File[]) {
 
   const accepted: ChatComposerAttachment[] = [];
   const candidates = source.slice(0, remainCount);
-  for (const file of candidates) {
-    if (file.size > CHAT_COMPOSER_MAX_ATTACHMENT_SIZE) {
-      chatComposerError.value = `文件「${file.name}」超过 10 MB 限制。`;
+  let rejectedMessage = "";
+  for (const [index, file] of candidates.entries()) {
+    const attachmentName = resolveChatComposerFileDisplayName(file, index);
+    if (!isSupportedChatComposerFile(file)) {
+      if (!rejectedMessage) {
+        rejectedMessage = formatUnsupportedChatComposerFileMessage(file, index);
+      }
       continue;
     }
-    accepted.push({
-      id: createChatAttachmentId(),
-      name: file.name,
+    if (file.size > CHAT_COMPOSER_MAX_ATTACHMENT_SIZE) {
+      if (!rejectedMessage) {
+        rejectedMessage = `文件「${attachmentName}」超过 10 MB 限制。`;
+      }
+      continue;
+    }
+    const attachmentId = createChatAttachmentId();
+    const nextAttachment: ChatComposerAttachment = {
+      id: attachmentId,
+      name: attachmentName,
       size: file.size,
       type: file.type || ""
+    };
+    const localPathCandidate = options.localPaths?.[index] ?? "";
+    const localPath =
+      resolveChatComposerFileLocalPath(file) || normalizeChatComposerLocalPathCandidate(localPathCandidate);
+    if (localPath) {
+      nextAttachment.localPath = localPath;
+    }
+    registerChatAttachmentLocalPreview(attachmentId, nextAttachment, file);
+    accepted.push({
+      ...nextAttachment
     });
   }
+  if (source.length > remainCount && !rejectedMessage) {
+    rejectedMessage = `最多添加 ${CHAT_COMPOSER_MAX_ATTACHMENT_COUNT} 个附件。`;
+  }
   if (accepted.length === 0) {
+    if (rejectedMessage) {
+      chatComposerError.value = rejectedMessage;
+    }
     return;
   }
   chatAttachments.value = [...chatAttachments.value, ...accepted];
-  chatComposerError.value = "";
+  chatComposerError.value = rejectedMessage;
 }
 
 function handleChatAttachmentInputChange(event: Event) {
@@ -7157,6 +7961,62 @@ function handleChatAttachmentInputChange(event: Event) {
   if (input) {
     input.value = "";
   }
+}
+
+async function handleChatComposerPaste(event: ClipboardEvent) {
+  if (!activeAgent.value || isSending.value) {
+    return;
+  }
+  const files = collectFilesFromDataTransfer(event.clipboardData);
+  if (files.length === 0) {
+    return;
+  }
+  event.preventDefault();
+  const localPaths = await resolveClipboardAttachmentLocalPaths(files);
+  appendChatComposerFiles(files, {
+    localPaths
+  });
+}
+
+function handleChatComposerDragEnter(event: DragEvent) {
+  if (!activeAgent.value || isSending.value || !hasDataTransferFiles(event.dataTransfer)) {
+    return;
+  }
+  chatComposerDragDepth.value += 1;
+  isChatComposerDragOver.value = true;
+}
+
+function handleChatComposerDragOver(event: DragEvent) {
+  if (!activeAgent.value || isSending.value || !hasDataTransferFiles(event.dataTransfer)) {
+    resetChatComposerDragState();
+    return;
+  }
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "copy";
+  }
+  isChatComposerDragOver.value = true;
+}
+
+function handleChatComposerDragLeave(event: DragEvent) {
+  if (!hasDataTransferFiles(event.dataTransfer)) {
+    return;
+  }
+  chatComposerDragDepth.value = Math.max(0, chatComposerDragDepth.value - 1);
+  if (chatComposerDragDepth.value === 0) {
+    isChatComposerDragOver.value = false;
+  }
+}
+
+function handleChatComposerDrop(event: DragEvent) {
+  if (!activeAgent.value || isSending.value) {
+    resetChatComposerDragState();
+    return;
+  }
+  const files = collectFilesFromDataTransfer(event.dataTransfer);
+  if (files.length > 0) {
+    appendChatComposerFiles(files);
+  }
+  resetChatComposerDragState();
 }
 
 function resizeChatComposerInput() {
@@ -11306,6 +12166,10 @@ async function openExternalUrl(url: string) {
 }
 
 async function handleOpenDetectedFileFolder(file: ChatDetectedFile) {
+  if (!isAbsoluteLocalPath(file.normalizedPath)) {
+    showChatAgentDeleteNotice("当前附件不包含可打开的本地路径。");
+    return;
+  }
   const invoke = getTauriInvoke();
   if (!invoke) {
     showChatAgentDeleteNotice("当前环境不支持打开本地文件夹。");
@@ -11316,6 +12180,10 @@ async function handleOpenDetectedFileFolder(file: ChatDetectedFile) {
   } catch (error) {
     showChatAgentDeleteNotice(resolveUnknownErrorMessage(error, "打开文件夹失败。"));
   }
+}
+
+function canOpenDetectedFileFolder(file: ChatDetectedFile) {
+  return isAbsoluteLocalPath(file.normalizedPath);
 }
 
 function stopFeishuQrCountdown() {
@@ -15189,7 +16057,30 @@ const activeConversationChannelLabel = computed(() => {
   return resolveAgentChannelDisplayLabel(activeAgent.value);
 });
 const sidebarDisplayName = computed(() => (activeAgent.value ? stripRoleLabel(activeAgent.value.displayName) : "DragonClaw"));
+const voiceRecordingDurationLabel = computed(() => {
+  const total = Math.max(0, Math.floor(voiceRecordingElapsedSeconds.value));
+  const minutes = Math.floor(total / 60)
+    .toString()
+    .padStart(2, "0");
+  const seconds = (total % 60).toString().padStart(2, "0");
+  return `${minutes}:${seconds}`;
+});
+const voiceActionButtonLabel = computed(() => {
+  if (isVoiceRecordingProcessing.value) {
+    return "语音处理中...";
+  }
+  if (isVoiceRecording.value) {
+    return `结束录音并发送（${voiceRecordingDurationLabel.value}）`;
+  }
+  return "语音发送";
+});
 const chatComposerPlaceholder = computed(() => {
+  if (isVoiceRecording.value) {
+    return `录音中 ${voiceRecordingDurationLabel.value}，再次点击麦克风结束并发送`;
+  }
+  if (isVoiceRecordingProcessing.value) {
+    return "正在处理语音，请稍候...";
+  }
   const agent = activeAgent.value;
   if (!agent) {
     return "发送给 DragonClaw";
@@ -16426,6 +17317,8 @@ onBeforeUnmount(() => {
   stopTaskReminderMonitor();
   stopOpenClawSessionSyncMonitor();
   clearChatAgentDeleteNoticeTimer();
+  cancelVoiceRecording();
+  clearAllChatAttachmentLocalPreviews();
 });
 
 watch(
@@ -16434,6 +17327,31 @@ watch(
     syncOpenClawSessionSyncMonitorState();
   },
   { immediate: true }
+);
+
+watch(
+  () =>
+    [
+      chatAttachments.value.map((attachment) => attachment.id).join("|"),
+      chatMessages.value
+        .map((message) => (message.attachments ?? []).map((attachment) => attachment.id).join(","))
+        .join("|")
+    ] as const,
+  () => {
+    pruneUnusedChatAttachmentLocalPreviews();
+  }
+);
+
+watch(
+  [() => activeSection.value, () => activeAgent.value?.agentId ?? "", () => isSending.value],
+  ([section, agentId, sending]) => {
+    if (section !== "chat" || !agentId) {
+      cancelVoiceRecording();
+    }
+    if (section !== "chat" || !agentId || sending || isVoiceRecording.value || isVoiceRecordingProcessing.value) {
+      resetChatComposerDragState();
+    }
+  }
 );
 
 watch(
@@ -17888,9 +18806,10 @@ watch(
                           :key="`${message.id}-${file.id}`"
                           class="message-file-output"
                         >
-                          <header class="message-file-output__head">
+                          <header v-if="shouldShowDetectedFileHeader(file)" class="message-file-output__head">
                             <p class="message-file-output__path" :title="file.normalizedPath">{{ file.normalizedPath }}</p>
                             <button
+                              v-if="canOpenDetectedFileFolder(file)"
                               class="message-file-output__open-btn"
                               type="button"
                               title="打开所在文件夹"
@@ -17905,7 +18824,8 @@ watch(
                             class="message-file-output__preview"
                             :class="{
                               'is-image': isImageDetectedFile(file),
-                              'is-video': isVideoDetectedFile(file)
+                              'is-video': isVideoDetectedFile(file),
+                              'is-standalone': !shouldShowDetectedFileHeader(file)
                             }"
                             @mouseenter="setDetectedVideoPreviewHover(file, true)"
                             @mouseleave="setDetectedVideoPreviewHover(file, false)"
@@ -18402,19 +19322,36 @@ watch(
             </div>
 
             <footer class="chat-window__composer">
-              <div class="composer-panel">
+              <div
+                class="composer-panel"
+                :class="{ 'is-drag-over': isChatComposerDragOver }"
+                @dragenter="handleChatComposerDragEnter"
+                @dragover.prevent="handleChatComposerDragOver"
+                @dragleave="handleChatComposerDragLeave"
+                @drop.prevent="handleChatComposerDrop"
+              >
+                <div v-if="chatAttachments.length > 0" class="composer-attachments">
+                  <span v-for="attachment in chatAttachments" :key="attachment.id" class="composer-attachment-chip" :title="attachment.name">
+                    <span class="composer-attachment-chip__name">{{ attachment.name }}</span>
+                    <small>{{ formatAttachmentSize(attachment.size) }}</small>
+                    <button type="button" aria-label="移除附件" @click="removeChatAttachment(attachment.id)">
+                      ×
+                    </button>
+                  </span>
+                </div>
                 <div class="composer-input-shell">
                   <textarea
                     ref="chatComposerInputRef"
                     v-model="chatInput"
                     rows="3"
                     :placeholder="chatComposerPlaceholder"
-                    :disabled="!activeAgent"
+                    :disabled="!activeAgent || isVoiceRecording || isVoiceRecordingProcessing"
                     @input="handleChatComposerInput"
                     @click="handleChatComposerCursorActivity"
                     @keyup="handleChatComposerCursorActivity"
                     @blur="handleChatComposerBlur"
                     @keydown="handleChatComposerKeydown"
+                    @paste="handleChatComposerPaste"
                   />
                   <div v-if="isChatMentionDropdownVisible" class="composer-mention-panel" data-no-window-drag>
                     <div v-if="chatMentionCandidates.length === 0" class="composer-mention-empty">没有匹配成员</div>
@@ -18443,15 +19380,6 @@ watch(
                   </button>
                 </div>
                 </div>
-                <div v-if="chatAttachments.length > 0" class="composer-attachments">
-                  <span v-for="attachment in chatAttachments" :key="attachment.id" class="composer-attachment-chip" :title="attachment.name">
-                    <span class="composer-attachment-chip__name">{{ attachment.name }}</span>
-                    <small>{{ formatAttachmentSize(attachment.size) }}</small>
-                    <button type="button" aria-label="移除附件" @click="removeChatAttachment(attachment.id)">
-                      ×
-                    </button>
-                  </span>
-                </div>
                 <p v-if="chatComposerError" class="composer-error">{{ chatComposerError }}</p>
                 <div class="composer-meta">
                   <div class="composer-meta__left">
@@ -18460,7 +19388,7 @@ watch(
                       type="button"
                       title="附件"
                       aria-label="添加附件"
-                      :disabled="!activeAgent || isSending"
+                      :disabled="!activeAgent || isSending || isVoiceRecording || isVoiceRecordingProcessing"
                       @click="triggerChatAttachmentPicker"
                     >
                       <ControlIcon name="plus" />
@@ -18481,7 +19409,7 @@ watch(
                       type="button"
                       title="新建聊天"
                       aria-label="新建聊天"
-                      :disabled="!activeAgent || isSending"
+                      :disabled="!activeAgent || isSending || isVoiceRecording || isVoiceRecordingProcessing"
                       @click="handleNewChat"
                     >
                       <ControlIcon name="chat-plus" />
@@ -18489,10 +19417,11 @@ watch(
                     </button>
                     <button
                       class="composer-input-action composer-voice-action"
+                      :class="{ 'is-recording': isVoiceRecording, 'is-processing': isVoiceRecordingProcessing }"
                       type="button"
-                      title="语音发送（开发中）"
-                      aria-label="语音发送（开发中）"
-                      :disabled="!activeAgent || isSending"
+                      :title="voiceActionButtonLabel"
+                      :aria-label="voiceActionButtonLabel"
+                      :disabled="!activeAgent || isSending || isSubmittingChat || isVoiceRecordingProcessing"
                       @click="handleVoiceSendClick"
                     >
                       <ControlIcon name="mic" />
@@ -18500,7 +19429,7 @@ watch(
                     <button
                       class="composer-send"
                       type="button"
-                      :disabled="!activeAgent || isSending || (!chatInput.trim() && chatAttachments.length === 0)"
+                      :disabled="!activeAgent || isSending || isVoiceRecording || isVoiceRecordingProcessing || (!chatInput.trim() && chatAttachments.length === 0)"
                       @click="submitChat"
                     >
                       <ControlIcon name="send" />
@@ -18512,6 +19441,7 @@ watch(
                   class="composer-file-input"
                   type="file"
                   multiple
+                  :accept="CHAT_COMPOSER_FILE_ACCEPT"
                   @change="handleChatAttachmentInputChange"
                 />
               </div>
@@ -21570,6 +22500,10 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-p
   .chat-action-toast-pop-leave-active {
     transition: opacity 120ms linear !important;
   }
+
+  .composer-voice-action.is-recording {
+    animation: none !important;
+  }
 }
 
 .window-shell {
@@ -24166,19 +25100,23 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .chat-window__content {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 0;
+  grid-template-columns: minmax(0, 1fr);
   position: relative;
   background: #ffffff;
-  transition: grid-template-columns 220ms ease;
+  overflow: hidden;
 }
 
 .chat-window__content--settings-open {
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .chat-settings-sidebar {
-  grid-column: 2;
-  grid-row: 1;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  max-width: min(100%, 360px);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -24186,6 +25124,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   background: linear-gradient(180deg, #fbfdff 0%, #f7fbff 100%);
   display: flex;
   flex-direction: column;
+  z-index: 4;
 }
 
 .chat-settings-sidebar-slide-enter-active,
@@ -25459,6 +26398,10 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   gap: 0;
 }
 
+.message-file-output__preview.is-standalone {
+  margin-top: 0;
+}
+
 .message-file-output__preview.is-image,
 .message-file-output__preview.is-video {
   padding: 0;
@@ -25827,6 +26770,12 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   box-shadow: 0 5px 14px rgba(87, 103, 126, 0.12);
 }
 
+.composer-panel.is-drag-over {
+  border-color: #8ca7d4;
+  background: linear-gradient(180deg, #f3f7ff, #edf3ff);
+  box-shadow: 0 0 0 1px rgba(120, 151, 206, 0.25), 0 8px 18px rgba(92, 120, 172, 0.12);
+}
+
 .composer-input-shell {
   position: relative;
   min-width: 0;
@@ -26118,6 +27067,18 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   background: #f4f6fa;
 }
 
+.composer-voice-action.is-recording {
+  border-color: #e28b9f;
+  background: #ffe9ee;
+  color: #c53b58;
+  box-shadow: 0 0 0 3px rgba(229, 109, 139, 0.14);
+  animation: composer-voice-pulse 1.2s ease-in-out infinite;
+}
+
+.composer-voice-action.is-processing {
+  opacity: 0.7;
+}
+
 .composer-voice-action svg,
 .composer-send svg {
   width: 14px;
@@ -26130,6 +27091,16 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 
 .composer-send svg {
   stroke-width: 2.2;
+}
+
+@keyframes composer-voice-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(229, 109, 139, 0.16);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(229, 109, 139, 0.08);
+  }
 }
 
 .composer-meta {
@@ -32705,6 +33676,12 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   box-shadow: 0 8px 16px var(--cp-shadow);
 }
 
+.composer-panel.is-drag-over {
+  border-color: var(--cp-border-strong);
+  background: linear-gradient(180deg, var(--cp-surface-elevated), var(--cp-hover-bg));
+  box-shadow: 0 10px 20px var(--cp-shadow);
+}
+
 .chat-window__composer textarea {
   color: var(--cp-text);
 }
@@ -32764,6 +33741,12 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .composer-voice-action {
   border-color: var(--cp-border);
   background: var(--cp-surface-elevated);
+}
+
+.composer-voice-action.is-recording {
+  border-color: #e9a1b2;
+  background: rgba(224, 82, 117, 0.16);
+  color: #c74c6a;
 }
 
 .composer-attachment-chip button:hover,
@@ -33219,8 +34202,9 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .chat-window__content--settings-open {
-    grid-template-columns: minmax(0, 1fr) 316px;
+  .chat-settings-sidebar {
+    width: 316px;
+    max-width: min(100%, 316px);
   }
 
   .related-memory-layout {
@@ -33540,17 +34524,11 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
     min-height: 78px;
   }
 
-  .chat-window__content--settings-open {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .chat-settings-sidebar {
-    grid-column: 1;
-    justify-self: end;
     width: min(100%, 320px);
     border-left: 1px solid #dfe7f4;
     box-shadow: -8px 0 24px rgba(57, 78, 114, 0.16);
-    z-index: 4;
+    max-width: min(100%, 320px);
   }
 
   .chat-settings-agent-card__identity strong {
