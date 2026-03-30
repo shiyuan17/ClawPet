@@ -99,16 +99,32 @@ export type DocumentRecord = {
 export const DEFAULT_TASK_PROJECT_NAME = "常规任务";
 
 export type TaskStatus = "todo" | "in_progress" | "in_review" | "done" | "cancelled";
+export type TaskOwnerType = "agent" | "team";
+export type TaskExecutionStepStatus = "pending" | "running" | "done" | "blocked";
+export type TaskExecutionStep = {
+  id: string;
+  title: string;
+  status: TaskExecutionStepStatus;
+  detail: string;
+  updatedAt: number;
+};
 
 export type TaskRecord = {
   id: string;
   title: string;
   project: string;
   owner: string;
+  ownerType: TaskOwnerType;
+  ownerTeam: string;
   priority: "p0" | "p1" | "p2";
   status: TaskStatus;
   dueAt: number;
   summary: string;
+  currentStepNo: number;
+  totalSteps: number;
+  steps: TaskExecutionStep[];
+  isScheduled: boolean;
+  scheduleKind: string;
   updatedAt: number;
 };
 
@@ -120,6 +136,11 @@ const memoryStorageKey = "keai.desktop-pet.memory";
 const documentsStorageKey = "keai.desktop-pet.documents";
 const tasksStorageKey = "keai.desktop-pet.tasks";
 const maxLogCount = 180;
+const LEGACY_SEED_TASK_SIGNATURES = new Set([
+  "补齐代理配置入口|统一平台配置、默认入口和接入说明。|Commander",
+  "建立员工管理面板|可查看员工角色、职责焦点和当前状态。|Archivist",
+  "同步记忆与文档索引|等待进一步接入真实文件源后完成联动。|Operator"
+]);
 
 const defaultPlatformPresets: PlatformPreset[] = [
   {
@@ -550,6 +571,48 @@ function sanitizeTask(value: Partial<TaskRecord> | null | undefined): TaskRecord
         ? rawStatus
         : null;
 
+  const normalizeTaskStepStatus = (raw: unknown): TaskExecutionStepStatus | null => {
+    if (raw === "pending" || raw === "running" || raw === "done" || raw === "blocked") {
+      return raw;
+    }
+    return null;
+  };
+
+  const getStatusStepIndex = (status: TaskStatus) => {
+    if (status === "todo") return 1;
+    if (status === "in_progress") return 2;
+    if (status === "in_review") return 3;
+    if (status === "done") return 4;
+    return 1;
+  };
+
+  const buildDefaultSteps = (status: TaskStatus, updatedAt: number): TaskExecutionStep[] => {
+    const titles = ["需求梳理", "开发实现", "联调验证", "发布复盘"];
+    const activeIndex = getStatusStepIndex(status);
+    return titles.map((title, index) => {
+      const stepNo = index + 1;
+      const stepStatus: TaskExecutionStepStatus =
+        status === "cancelled"
+          ? stepNo <= activeIndex
+            ? "blocked"
+            : "pending"
+          : stepNo < activeIndex
+            ? "done"
+            : stepNo === activeIndex
+              ? status === "done"
+                ? "done"
+                : "running"
+              : "pending";
+      return {
+        id: `step-${stepNo}`,
+        title,
+        status: stepStatus,
+        detail: "",
+        updatedAt
+      };
+    });
+  };
+
   if (
     typeof value.id !== "string" ||
     typeof value.title !== "string" ||
@@ -564,17 +627,83 @@ function sanitizeTask(value: Partial<TaskRecord> | null | undefined): TaskRecord
     return null;
   }
 
+  const ownerType: TaskOwnerType = value.ownerType === "team" ? "team" : "agent";
+  const ownerTeam = typeof value.ownerTeam === "string" ? value.ownerTeam.trim() : "";
+  const steps = Array.isArray(value.steps)
+    ? value.steps
+        .map((rawStep, index) => {
+          if (!rawStep || typeof rawStep !== "object") {
+            return null;
+          }
+          const candidate = rawStep as Partial<TaskExecutionStep>;
+          if (typeof candidate.title !== "string") {
+            return null;
+          }
+          const status = normalizeTaskStepStatus(candidate.status);
+          if (!status) {
+            return null;
+          }
+          return {
+            id:
+              typeof candidate.id === "string" && candidate.id.trim()
+                ? candidate.id.trim()
+                : `step-${index + 1}`,
+            title: candidate.title.trim() || `步骤 ${index + 1}`,
+            status,
+            detail: typeof candidate.detail === "string" ? candidate.detail.trim() : "",
+            updatedAt:
+              typeof candidate.updatedAt === "number" && Number.isFinite(candidate.updatedAt)
+                ? candidate.updatedAt
+                : value.updatedAt
+          } as TaskExecutionStep;
+        })
+        .filter((item): item is TaskExecutionStep => item !== null)
+    : [];
+  const normalizedSteps = steps.length > 0 ? steps : buildDefaultSteps(normalizedStatus, value.updatedAt);
+  const totalSteps =
+    typeof value.totalSteps === "number" && Number.isFinite(value.totalSteps)
+      ? Math.max(1, Math.round(value.totalSteps))
+      : normalizedSteps.length;
+  const statusStepIndex = getStatusStepIndex(normalizedStatus);
+  const currentStepNoRaw =
+    typeof value.currentStepNo === "number" && Number.isFinite(value.currentStepNo)
+      ? Math.round(value.currentStepNo)
+      : statusStepIndex;
+  const currentStepNo = Math.min(totalSteps, Math.max(1, currentStepNoRaw));
+  const isScheduled = typeof value.isScheduled === "boolean" ? value.isScheduled : false;
+  const scheduleKind =
+    typeof value.scheduleKind === "string" && value.scheduleKind.trim()
+      ? value.scheduleKind.trim()
+      : isScheduled
+        ? "cron"
+        : "manual";
+
   return {
     id: value.id,
     title: value.title.trim() || "未命名任务",
     project: value.project.trim(),
     owner: value.owner.trim() || "待分配",
+    ownerType,
+    ownerTeam,
     priority: value.priority,
     status: normalizedStatus,
     dueAt: value.dueAt,
     summary: value.summary.trim() || "暂无说明",
+    currentStepNo,
+    totalSteps,
+    steps: normalizedSteps,
+    isScheduled,
+    scheduleKind,
     updatedAt: value.updatedAt
   };
+}
+
+function buildTaskSignature(task: Pick<TaskRecord, "title" | "summary" | "owner">) {
+  return `${task.title.trim()}|${task.summary.trim()}|${task.owner.trim()}`;
+}
+
+function isLegacySeedTask(task: TaskRecord) {
+  return LEGACY_SEED_TASK_SIGNATURES.has(buildTaskSignature(task));
 }
 
 export function normalizeBaseUrl(value: string) {
@@ -1007,16 +1136,39 @@ export function seedDefaultDocuments() {
 
 export function seedDefaultTasks() {
   const now = Date.now();
+  const buildDefaultSteps = (status: TaskStatus, updatedAt: number): TaskExecutionStep[] => {
+    const titles = ["需求梳理", "开发实现", "联调验证", "发布复盘"];
+    const activeIndex = status === "todo" ? 1 : status === "in_progress" ? 2 : status === "in_review" ? 3 : 4;
+    return titles.map((title, index) => {
+      const stepNo = index + 1;
+      const stepStatus: TaskExecutionStepStatus =
+        stepNo < activeIndex ? "done" : stepNo === activeIndex ? (status === "done" ? "done" : "running") : "pending";
+      return {
+        id: `step-${stepNo}`,
+        title,
+        status: stepStatus,
+        detail: "",
+        updatedAt
+      };
+    });
+  };
   return [
     {
       id: createId("task"),
       title: "补齐代理配置入口",
       project: "",
       owner: "Commander",
+      ownerType: "agent" as const,
+      ownerTeam: "control-center",
       priority: "p0" as const,
       status: "in_progress" as const,
       dueAt: now + 2 * 60 * 60 * 1000,
       summary: "统一平台配置、默认入口和接入说明。",
+      currentStepNo: 2,
+      totalSteps: 4,
+      steps: buildDefaultSteps("in_progress", now - 10 * 60 * 1000),
+      isScheduled: false,
+      scheduleKind: "manual",
       updatedAt: now - 10 * 60 * 1000
     },
     {
@@ -1024,10 +1176,17 @@ export function seedDefaultTasks() {
       title: "建立员工管理面板",
       project: "",
       owner: "Archivist",
+      ownerType: "agent" as const,
+      ownerTeam: "employee-studio",
       priority: "p1" as const,
       status: "todo" as const,
       dueAt: now + 8 * 60 * 60 * 1000,
       summary: "可查看员工角色、职责焦点和当前状态。",
+      currentStepNo: 1,
+      totalSteps: 4,
+      steps: buildDefaultSteps("todo", now - 50 * 60 * 1000),
+      isScheduled: false,
+      scheduleKind: "manual",
       updatedAt: now - 50 * 60 * 1000
     },
     {
@@ -1035,10 +1194,17 @@ export function seedDefaultTasks() {
       title: "同步记忆与文档索引",
       project: "",
       owner: "Operator",
+      ownerType: "agent" as const,
+      ownerTeam: "tasks",
       priority: "p1" as const,
       status: "in_review" as const,
       dueAt: now + 24 * 60 * 60 * 1000,
       summary: "等待进一步接入真实文件源后完成联动。",
+      currentStepNo: 3,
+      totalSteps: 4,
+      steps: buildDefaultSteps("in_review", now - 80 * 60 * 1000),
+      isScheduled: false,
+      scheduleKind: "manual",
       updatedAt: now - 80 * 60 * 1000
     }
   ];
@@ -1110,7 +1276,7 @@ export function loadDocuments() {
 export function loadTasks() {
   const storage = getStorage();
   if (!storage) {
-    return seedDefaultTasks();
+    return [];
   }
 
   const parsed = safeParse<unknown[]>(storage.getItem(tasksStorageKey), []);
@@ -1119,13 +1285,15 @@ export function loadTasks() {
     .filter((item): item is TaskRecord => item !== null)
     .sort((left, right) => right.updatedAt - left.updatedAt);
 
-  if (tasks.length > 0) {
-    return tasks;
+  if (tasks.length === 0) {
+    return [];
   }
 
-  const seeded = seedDefaultTasks();
-  saveTasks(seeded);
-  return seeded;
+  const realTasks = tasks.filter((task) => !isLegacySeedTask(task));
+  if (realTasks.length !== tasks.length) {
+    saveTasks(realTasks);
+  }
+  return realTasks;
 }
 
 export function createStaffDraft() {
@@ -1167,15 +1335,28 @@ export function createDocumentDraft() {
 }
 
 export function createTaskDraft() {
+  const now = Date.now();
   return {
     id: createId("task"),
     title: "",
     project: "",
     owner: "Commander",
+    ownerType: "agent" as TaskOwnerType,
+    ownerTeam: "control-center",
     priority: "p1" as TaskRecord["priority"],
     status: "todo" as TaskStatus,
-    dueAt: Date.now() + 4 * 60 * 60 * 1000,
-    summary: ""
+    dueAt: now + 4 * 60 * 60 * 1000,
+    summary: "",
+    currentStepNo: 1,
+    totalSteps: 4,
+    steps: [
+      { id: "step-1", title: "需求梳理", status: "running", detail: "", updatedAt: now },
+      { id: "step-2", title: "开发实现", status: "pending", detail: "", updatedAt: now },
+      { id: "step-3", title: "联调验证", status: "pending", detail: "", updatedAt: now },
+      { id: "step-4", title: "发布复盘", status: "pending", detail: "", updatedAt: now }
+    ],
+    isScheduled: false,
+    scheduleKind: "manual"
   };
 }
 

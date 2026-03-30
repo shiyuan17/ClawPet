@@ -8,12 +8,12 @@ import channelDiscordIcon from "../images/channels/discord.svg";
 import channelFeishuIcon from "../images/channels/feishu.svg";
 import channelQqIcon from "../images/channels/qq.svg";
 import channelTelegramIcon from "../images/channels/telegram.svg";
+import channelWhatsappIcon from "../images/channels/whatsapp.svg";
 import channelWecomIcon from "../images/channels/wecom.svg";
 import channelWeixinIcon from "../images/channels/weixin.svg";
 import QRCode from "qrcode";
 import packageJson from "../../package.json";
 import {
-  DEFAULT_TASK_PROJECT_NAME,
   createTaskDraft,
   deleteStaff,
   loadMemories,
@@ -128,8 +128,50 @@ type ChatSettingsTextPreviewModalState = {
   content: string;
 };
 
-type TaskModuleView = "projects" | "board";
 type TaskBoardStatus = TaskRecord["status"];
+type TaskBoardGroupMode = "status" | "agent" | "team";
+type TaskBoardOwnerType = "agent" | "team";
+type TaskBoardSourceKind = "local" | "scheduled";
+type TaskBoardSourceFilter = "all" | "manual" | "scheduled";
+type TaskBoardTaskItem = {
+  boardKey: string;
+  id: string;
+  source: TaskBoardSourceKind;
+  title: string;
+  summary: string;
+  owner: string;
+  ownerType: TaskBoardOwnerType;
+  team: string;
+  priority: TaskRecord["priority"];
+  status: TaskBoardStatus;
+  dueAt: number | null;
+  updatedAt: number | null;
+  currentStepNo: number;
+  totalSteps: number;
+  currentStepLabel: string;
+  progressPct: number;
+  steps: Array<{
+    id: string;
+    title: string;
+    status: "pending" | "running" | "done" | "blocked";
+    detail: string;
+    updatedAt: number | null;
+  }>;
+  isScheduled: boolean;
+  scheduleKind: string;
+  nextRunAtMs: number | null;
+  enabled: boolean;
+  ownerAvatarUrl: string | null;
+  ownerAvatarInitial: string;
+  ownerAvatarAlt: string;
+  detailText: string;
+};
+type TaskBoardOwnerGroup = {
+  id: string;
+  label: string;
+  count: number;
+  tasks: TaskBoardTaskItem[];
+};
 type SidebarItem = {
   id: SidebarSection;
   label: string;
@@ -588,6 +630,7 @@ type OpenClawChannelQrBindingSessionSnapshot = {
   channelType: string;
   status: string;
   qrUrl: string | null;
+  qrAscii: string | null;
   detail: string | null;
   logs: string[];
   startedAtMs: number;
@@ -672,16 +715,6 @@ type TaskBoardColumn = {
   label: string;
   subtitle: string;
   emptyText: string;
-};
-
-type TaskProjectCard = {
-  name: string;
-  count: number;
-  activeCount: number;
-  doneCount: number;
-  reviewCount: number;
-  updatedAt: number | null;
-  isDefault: boolean;
 };
 
 type ChatArchiveRecord = {
@@ -813,9 +846,15 @@ const FEISHU_DOCS_URL = "https://www.feishu.cn/content/article/76137114146114633
 const FEISHU_APP_ID_PLACEHOLDER = "cli_xxxxxxxxxxxxxxxx";
 const FEISHU_APP_SECRET_PLACEHOLDER = "请输入飞书应用的 Secret";
 const CHANNEL_QR_BINDING_POLL_INTERVAL_MS = 2000;
+const WHATSAPP_QR_BINDING_RETRY_HINT_DELAY_MS = 60 * 1000;
 
-const taskProjectStorageKey = "keai.desktop-pet.task-projects";
 const taskStatusFlow: TaskBoardStatus[] = ["todo", "in_progress", "in_review", "done", "cancelled"];
+const TASK_BOARD_FILTER_ALL = "__all__";
+const taskBoardGroupModeOptions: Array<{ id: TaskBoardGroupMode; label: string }> = [
+  { id: "status", label: "按状态" },
+  { id: "agent", label: "按 Agent" },
+  { id: "team", label: "按团队" }
+];
 const taskBoardColumns: TaskBoardColumn[] = [
   { id: "todo", label: "To do", subtitle: "待办事项", emptyText: "暂无待办任务。" },
   { id: "in_progress", label: "In progress", subtitle: "进行中", emptyText: "暂无进行中的任务。" },
@@ -916,6 +955,17 @@ const chatChannelCatalog: ChannelPaneCatalogItem[] = [
     ]
   },
   {
+    id: "whatsapp",
+    name: "WhatsApp",
+    description: "WhatsApp 消息收发与会话接入",
+    icon: channelWhatsappIcon,
+    connectionMode: "qr",
+    aliases: ["wa", "wacli", "openclaw-whatsapp", "openclaw_whatsapp"],
+    docsUrl: "https://docs.openclaw.ai/channels/whatsapp",
+    instructions: [],
+    fields: []
+  },
+  {
     id: "discord",
     name: "Discord",
     description: "Guild / Channel 事件联动",
@@ -964,6 +1014,9 @@ for (const alias of ["qqbot"]) {
 for (const alias of ["lark"]) {
   chatChannelAliasMap.set(alias, "feishu");
 }
+for (const alias of ["whats-app"]) {
+  chatChannelAliasMap.set(alias, "whatsapp");
+}
 const agentAvatarModules = import.meta.glob("../../images/avatar/*.{png,jpg,jpeg,webp,avif,svg}", {
   eager: true,
   import: "default"
@@ -1010,6 +1063,7 @@ const sidebarAvatarPresetOptions = buildSidebarAvatarPresetOptions();
 const CHAT_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-history";
 const SESSION_STORAGE_PREFIX = "keai.desktop-pet.openclaw.session-id";
 const CHAT_ARCHIVE_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-archives";
+const STARTUP_OPENCLAW_HEALTHY_MARK_STORAGE_KEY = "keai.desktop-pet.openclaw.startup-healthy.v1";
 const VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE = "__openclaw_session__";
 const CHAT_USER_GROUPS_STORAGE_KEY = "keai.desktop-pet.chat-user-groups";
 const CHAT_USER_GROUP_MEMBERSHIP_STORAGE_KEY = "keai.desktop-pet.chat-user-group-membership";
@@ -1317,6 +1371,10 @@ let voiceRecordingStartedAtMs: number | null = null;
 let voiceRecordingTimer: number | null = null;
 const isSending = ref(false);
 const isSubmittingChat = ref(false);
+const activeChatSubmitRunId = ref<number | null>(null);
+let chatSubmitRunSeed = 0;
+let activeChatAbortController: AbortController | null = null;
+const interruptedChatSubmitRunIds = new Set<number>();
 const agents = ref<AgentListItem[]>([]);
 const selectedAgentId = ref<string | null>(null);
 const activeChannelChatSession = ref<ChannelPaneChatItem | null>(null);
@@ -1337,16 +1395,25 @@ const missionStatement = ref("构建可持续自治的 AI 员工体系，持续�
 const staffSourceDetail = ref("正在读取 Agent 列表...");
 const messageScroller = ref<HTMLElement | null>(null);
 const taskItems = ref<TaskRecord[]>([]);
-const taskModuleView = ref<TaskModuleView>("projects");
-const taskProjectNames = ref<string[]>([DEFAULT_TASK_PROJECT_NAME]);
-const taskProjectInput = ref("");
+const taskBoardSnapshot = ref<TaskSnapshotResponse | null>(null);
+const isTaskBoardRefreshing = ref(false);
+const taskBoardRefreshError = ref("");
+const taskBoardGroupMode = ref<TaskBoardGroupMode>("status");
+const taskBoardSearch = ref("");
+const taskBoardSourceFilter = ref<TaskBoardSourceFilter>("all");
+const taskBoardAgentFilter = ref(TASK_BOARD_FILTER_ALL);
+const taskBoardTeamFilter = ref(TASK_BOARD_FILTER_ALL);
+const taskBoardSelectedTaskKey = ref<string | null>(null);
 const taskModuleNotice = ref("");
 const taskModuleError = ref("");
-const activeTaskProject = ref(DEFAULT_TASK_PROJECT_NAME);
 const taskDraftTitle = ref("");
 const taskDraftSummary = ref("");
 const taskDraftOwner = ref("Commander");
+const taskDraftOwnerType = ref<TaskBoardOwnerType>("agent");
+const taskDraftTeam = ref("");
 const taskDraftPriority = ref<TaskRecord["priority"]>("p1");
+const taskDraftDueAt = ref("");
+const isTaskCreateModalOpen = ref(false);
 const taskDragTaskId = ref<string | null>(null);
 const taskDragOverStatus = ref<TaskBoardStatus | null>(null);
 const isAgentSettingsOpen = ref(false);
@@ -1754,6 +1821,14 @@ function safeStorageSet(key: string, value: string) {
   }
 }
 
+function safeStorageRemove(key: string) {
+  try {
+    getStorage()?.removeItem(key);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 function safeStorageKeysByPrefix(prefix: string) {
   try {
     const storage = getStorage();
@@ -1771,6 +1846,38 @@ function safeStorageKeysByPrefix(prefix: string) {
   } catch {
     return [] as string[];
   }
+}
+
+function hasStartupOpenClawHealthyMark() {
+  const raw = safeStorageGet(STARTUP_OPENCLAW_HEALTHY_MARK_STORAGE_KEY);
+  if (!raw) {
+    return false;
+  }
+  if (raw === "1") {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { healthy?: unknown };
+    return parsed.healthy === true;
+  } catch {
+    return false;
+  }
+}
+
+function markStartupOpenClawHealthy(version: string | null = null) {
+  const normalizedVersion = version?.trim() ? version.trim() : null;
+  safeStorageSet(
+    STARTUP_OPENCLAW_HEALTHY_MARK_STORAGE_KEY,
+    JSON.stringify({
+      healthy: true,
+      checkedAt: Date.now(),
+      version: normalizedVersion
+    })
+  );
+}
+
+function clearStartupOpenClawHealthyMark() {
+  safeStorageRemove(STARTUP_OPENCLAW_HEALTHY_MARK_STORAGE_KEY);
 }
 
 function loadSidebarAvatarOverrides() {
@@ -3151,49 +3258,77 @@ function persistRoleWorkflowOverrides() {
   safeStorageSet(ROLE_WORKFLOW_OVERRIDES_STORAGE_KEY, JSON.stringify(roleWorkflowOverrides.value));
 }
 
-function normalizeTaskProjectName(value: string) {
-  return value.trim();
+function normalizeTaskBoardOwnerType(value: TaskRecord["ownerType"] | undefined): TaskBoardOwnerType {
+  return value === "team" ? "team" : "agent";
 }
 
-function buildTaskProjectList(items: string[]) {
-  const unique = new Set<string>();
-  const result = [DEFAULT_TASK_PROJECT_NAME];
-  for (const item of items) {
-    const normalized = normalizeTaskProjectName(item);
-    if (!normalized || normalized === DEFAULT_TASK_PROJECT_NAME || unique.has(normalized)) {
-      continue;
-    }
-    unique.add(normalized);
-    result.push(normalized);
+function normalizeTaskBoardTeamLabel(value: string | null | undefined) {
+  const normalized = (value ?? "").trim();
+  return normalized || "未分组";
+}
+
+function findAgentByOwner(owner: string) {
+  const normalizedOwner = owner.trim().toLowerCase();
+  if (!normalizedOwner) {
+    return null;
   }
-  return result;
+  return (
+    agents.value.find((agent) => {
+      const byId = agent.agentId.trim().toLowerCase();
+      const byName = stripRoleLabel(agent.displayName).trim().toLowerCase();
+      return byId === normalizedOwner || byName === normalizedOwner;
+    }) ?? null
+  );
 }
 
-function loadTaskProjectsFromStorage() {
-  const parsed = (() => {
-    try {
-      return JSON.parse(safeStorageGet(taskProjectStorageKey) ?? "[]");
-    } catch {
-      return [];
-    }
-  })();
-  if (!Array.isArray(parsed)) {
-    return [DEFAULT_TASK_PROJECT_NAME];
+function resolveTaskOwnerAvatarMeta(owner: string, ownerType: TaskBoardOwnerType) {
+  const trimmedOwner = owner.trim();
+  const fallbackName = trimmedOwner || (ownerType === "team" ? "团队" : "Agent");
+  const fallbackInitial = fallbackName.charAt(0).toUpperCase() || (ownerType === "team" ? "组" : "A");
+  if (ownerType === "team") {
+    return {
+      ownerAvatarUrl: null,
+      ownerAvatarInitial: fallbackInitial,
+      ownerAvatarAlt: `${fallbackName} 头像`
+    };
   }
-  return buildTaskProjectList(parsed.filter((item): item is string => typeof item === "string"));
-}
-
-function saveTaskProjectsToStorage(projects: string[]) {
-  const payload = buildTaskProjectList(projects).filter((project) => project !== DEFAULT_TASK_PROJECT_NAME);
-  safeStorageSet(taskProjectStorageKey, JSON.stringify(payload));
-}
-
-function isTaskInProject(task: TaskRecord, projectName: string) {
-  const normalizedProject = normalizeTaskProjectName(task.project);
-  if (projectName === DEFAULT_TASK_PROJECT_NAME) {
-    return !normalizedProject || normalizedProject === DEFAULT_TASK_PROJECT_NAME;
+  const matchedAgent = findAgentByOwner(owner);
+  if (!matchedAgent) {
+    return {
+      ownerAvatarUrl: null,
+      ownerAvatarInitial: fallbackInitial,
+      ownerAvatarAlt: `${fallbackName} 头像`
+    };
   }
-  return normalizedProject === projectName;
+  const displayName = stripRoleLabel(matchedAgent.displayName).trim() || matchedAgent.agentId || fallbackName;
+  return {
+    ownerAvatarUrl: getAgentAvatarUrl(matchedAgent),
+    ownerAvatarInitial: getAgentInitial(matchedAgent),
+    ownerAvatarAlt: `${displayName} 头像`
+  };
+}
+
+function resolveTaskOwnerTeam(owner: string, ownerType: TaskBoardOwnerType, ownerTeam: string) {
+  if (ownerType === "team") {
+    return normalizeTaskBoardTeamLabel(owner || ownerTeam);
+  }
+  const normalizedTeam = normalizeTaskBoardTeamLabel(ownerTeam);
+  if (normalizedTeam !== "未分组") {
+    return normalizedTeam;
+  }
+  const matchedAgent = findAgentByOwner(owner);
+  if (!matchedAgent) {
+    return "未分组";
+  }
+  return normalizeTaskBoardTeamLabel(matchedAgent.workspace);
+}
+
+function getTaskStatusStepNo(status: TaskBoardStatus, totalSteps: number) {
+  if (status === "todo") return 1;
+  if (status === "in_progress") return Math.min(totalSteps, 2);
+  if (status === "in_review") return Math.min(totalSteps, 3);
+  if (status === "done") return totalSteps;
+  return 1;
 }
 
 function getTaskStatusWeight(status: TaskBoardStatus) {
@@ -3230,42 +3365,82 @@ function sortTaskRecords(items: TaskRecord[]) {
   });
 }
 
-function sortTaskRecordsForColumn(items: TaskRecord[]) {
+function sortTaskRecordsForColumn<T extends { priority: TaskRecord["priority"]; dueAt: number | null; updatedAt: number | null }>(items: T[]) {
   return [...items].sort((left, right) => {
     const priorityWeight = getTaskPriorityWeight(left.priority) - getTaskPriorityWeight(right.priority);
     if (priorityWeight !== 0) {
       return priorityWeight;
     }
-    if (left.dueAt !== right.dueAt) {
-      return left.dueAt - right.dueAt;
+    const leftDueAt = typeof left.dueAt === "number" && Number.isFinite(left.dueAt) ? left.dueAt : Number.MAX_SAFE_INTEGER;
+    const rightDueAt = typeof right.dueAt === "number" && Number.isFinite(right.dueAt) ? right.dueAt : Number.MAX_SAFE_INTEGER;
+    if (leftDueAt !== rightDueAt) {
+      return leftDueAt - rightDueAt;
     }
-    return right.updatedAt - left.updatedAt;
+    const leftUpdatedAt = typeof left.updatedAt === "number" && Number.isFinite(left.updatedAt) ? left.updatedAt : 0;
+    const rightUpdatedAt = typeof right.updatedAt === "number" && Number.isFinite(right.updatedAt) ? right.updatedAt : 0;
+    return rightUpdatedAt - leftUpdatedAt;
   });
 }
 
-function syncTaskProjectNamesFromTasks() {
-  const storageProjects = loadTaskProjectsFromStorage();
-  const taskProjects = taskItems.value
-    .map((task) => normalizeTaskProjectName(task.project))
-    .filter((item) => item && item !== DEFAULT_TASK_PROJECT_NAME);
-  const nextProjects = buildTaskProjectList([...storageProjects, ...taskProjects]);
-  taskProjectNames.value = nextProjects;
-  saveTaskProjectsToStorage(nextProjects);
-  if (!taskProjectNames.value.includes(activeTaskProject.value)) {
-    activeTaskProject.value = DEFAULT_TASK_PROJECT_NAME;
-  }
+function syncTaskStepsWithStatus(
+  task: { steps: TaskRecord["steps"]; totalSteps: number; updatedAt?: number },
+  nextStatus: TaskBoardStatus
+): TaskRecord["steps"] {
+  const totalSteps = Math.max(1, task.totalSteps || task.steps.length || 4);
+  const activeStepNo = getTaskStatusStepNo(nextStatus, totalSteps);
+  const updatedAt = typeof task.updatedAt === "number" && Number.isFinite(task.updatedAt) ? task.updatedAt : Date.now();
+  const sourceSteps =
+    task.steps.length > 0
+      ? task.steps
+      : Array.from({ length: totalSteps }, (_, index) => ({
+          id: `step-${index + 1}`,
+          title: `步骤 ${index + 1}`,
+          status: "pending" as const,
+          detail: "",
+          updatedAt
+        }));
+
+  return sourceSteps.map((step, index) => {
+    const stepNo = index + 1;
+    if (nextStatus === "cancelled") {
+      return {
+        ...step,
+        status: stepNo <= activeStepNo ? ("blocked" as const) : ("pending" as const)
+      };
+    }
+    if (stepNo < activeStepNo) {
+      return { ...step, status: "done" as const };
+    }
+    if (stepNo === activeStepNo) {
+      return { ...step, status: nextStatus === "done" ? ("done" as const) : ("running" as const) };
+    }
+    return { ...step, status: "pending" as const };
+  });
 }
 
 function resetTaskDraftForm() {
   taskDraftTitle.value = "";
   taskDraftSummary.value = "";
   taskDraftOwner.value = "Commander";
+  taskDraftOwnerType.value = "agent";
+  taskDraftTeam.value = "";
   taskDraftPriority.value = "p1";
+  taskDraftDueAt.value = "";
+}
+
+function openTaskCreateModal() {
+  taskModuleError.value = "";
+  isTaskCreateModalOpen.value = true;
+}
+
+function closeTaskCreateModal() {
+  isTaskCreateModalOpen.value = false;
+  taskModuleError.value = "";
+  resetTaskDraftForm();
 }
 
 function updateTaskRecord(nextTask: Omit<TaskRecord, "updatedAt">) {
   taskItems.value = upsertTask(taskItems.value, nextTask);
-  syncTaskProjectNamesFromTasks();
 }
 
 function getTauriNamespace(): TauriNamespace | null {
@@ -3357,13 +3532,6 @@ function markStartupOpenClawStepDone(stepIndex: number) {
 
 function markStartupOpenClawStepFailed(stepIndex: number) {
   setStartupOpenClawStepStatus(stepIndex, "failed");
-}
-
-function markStartupOpenClawAllDone() {
-  startupOpenClawSteps.value = startupOpenClawSteps.value.map((step) => ({
-    ...step,
-    status: "done" as StartupInstallStepStatus
-  }));
 }
 
 function getStartupOpenClawStepBadge(step: StartupInstallStep) {
@@ -3514,18 +3682,19 @@ async function runStartupOpenClawRepair(
       }
     }
 
+    const gateway = await waitForStartupGatewayOnline(invoke, 12, 600);
+    if (!gateway || gateway.status.trim().toLowerCase() !== "online") {
+      throw new Error(gateway?.detail?.trim() || "OpenClaw 网关未就绪。");
+    }
+
     const repairedStatus = await checkStartupOpenClawRuntimeStatus(invoke);
     appendStartupRuntimeStatusLogs(appendStartupOpenClawRuntimeLogs, "status-check-after-repair", repairedStatus);
     if (!repairedStatus.installed || !repairedStatus.healthy) {
       throw new Error(repairedStatus.detail || "OpenClaw 修复后状态仍异常。");
     }
-
-    const gateway = await waitForStartupGatewayOnline(invoke, 12, 600);
-    if (!gateway || gateway.status.trim().toLowerCase() !== "online") {
-      throw new Error(gateway?.detail?.trim() || "OpenClaw 网关未就绪。");
-    }
     markStartupOpenClawStepDone(4);
 
+    markStartupOpenClawHealthy();
     startupOpenClawStatusText.value = "OpenClaw 状态已修复并连接完成。";
     startupOpenClawOverlayVisible.value = false;
   } catch (error) {
@@ -3533,6 +3702,7 @@ async function runStartupOpenClawRepair(
     if (activeStepIndex >= 0) {
       markStartupOpenClawStepFailed(activeStepIndex);
     }
+    clearStartupOpenClawHealthyMark();
     startupOpenClawInstallError.value = error instanceof Error ? error.message : "OpenClaw 修复失败。";
     startupOpenClawStatusText.value = "OpenClaw 自动修复失败，请重试。";
     startupOpenClawOverlayVisible.value = true;
@@ -3699,6 +3869,7 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke, options: StartupOp
     }
     markStartupOpenClawStepDone(4);
 
+    markStartupOpenClawHealthy(snapshot.openclawVersion ?? null);
     startupOpenClawStatusText.value = "OpenClaw 已安装并连接完成。";
     startupOpenClawOverlayVisible.value = false;
   } catch (error) {
@@ -3706,6 +3877,7 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke, options: StartupOp
     if (activeStepIndex >= 0) {
       markStartupOpenClawStepFailed(activeStepIndex);
     }
+    clearStartupOpenClawHealthyMark();
     startupOpenClawInstallError.value = error instanceof Error ? error.message : "OpenClaw 安装失败。";
     startupOpenClawStatusText.value = "OpenClaw 自动安装失败，请重试。";
     startupOpenClawOverlayVisible.value = true;
@@ -3714,30 +3886,54 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke, options: StartupOp
   }
 }
 
+function prepareStartupOpenClawForegroundCheck() {
+  startupOpenClawOverlayVisible.value = true;
+  startupOpenClawInstalling.value = true;
+  startupOpenClawInstallError.value = "";
+  startupOpenClawRuntimeLogs.value = "";
+  startupOpenClawShowManualActions.value = false;
+  startupOpenClawStatusText.value = "正在检测 OpenClaw 安装状态...";
+  resetStartupOpenClawSteps();
+  setStartupOpenClawStepInstalling(0);
+}
+
 async function ensureStartupOpenClawReady(options: StartupOpenClawRunOptions = {}) {
   const runInBackground = options.background === true;
   const invoke = getTauriInvoke();
   if (!invoke) {
     return;
   }
+  if (!runInBackground) {
+    prepareStartupOpenClawForegroundCheck();
+  }
 
   let snapshot: LobsterSnapshotResponse;
   try {
     snapshot = (await invoke("load_lobster_snapshot")) as LobsterSnapshotResponse;
   } catch (error) {
+    clearStartupOpenClawHealthyMark();
     startupOpenClawInstallError.value = error instanceof Error ? error.message : "无法检测 OpenClaw 安装状态。";
     startupOpenClawStatusText.value = "OpenClaw 安装检测失败，请重试。";
     startupOpenClawShowManualActions.value = false;
     startupOpenClawOverlayVisible.value = true;
+    startupOpenClawInstalling.value = false;
+    resetStartupOpenClawSteps();
     return;
   }
 
-  const openInstallUiEveryLaunch = snapshot.installWizardOpenEveryLaunch === true;
   if (!snapshot.openclawInstalled) {
+    clearStartupOpenClawHealthyMark();
     startupOpenClawShowManualActions.value = false;
-    startupOpenClawStatusText.value = "检测到未安装 OpenClaw，正在自动安装...";
-    await runStartupOpenClawInstall(invoke, options);
+    startupOpenClawStatusText.value = "检测到未安装 OpenClaw，正在执行安装引导...";
+    await runStartupOpenClawInstall(invoke, { background: false });
     return;
+  }
+  if (!runInBackground) {
+    markStartupOpenClawStepDone(0);
+    setStartupOpenClawStepInstalling(1);
+    await sleepMs(120);
+    markStartupOpenClawStepDone(1);
+    setStartupOpenClawStepInstalling(2);
   }
 
   try {
@@ -3764,41 +3960,39 @@ async function ensureStartupOpenClawReady(options: StartupOpenClawRunOptions = {
   }
 
   if (runtimeStatus.installed && runtimeStatus.healthy) {
-    if (openInstallUiEveryLaunch && !runInBackground) {
-      const versionText = snapshot.openclawVersion?.trim() ? snapshot.openclawVersion.trim() : "未知";
-      startupOpenClawStatusText.value = "已启用每次启动显示安装界面。";
+    markStartupOpenClawHealthy(snapshot.openclawVersion ?? null);
+    if (!runInBackground) {
+      markStartupOpenClawStepDone(2);
+      markStartupOpenClawStepDone(3);
+      markStartupOpenClawStepDone(4);
+      startupOpenClawStatusText.value = "OpenClaw 状态正常，正在进入应用...";
       startupOpenClawInstallError.value = "";
-      startupOpenClawRuntimeLogs.value = [
-        `检测结果：OpenClaw 已安装（版本 ${versionText}）。`,
-        `运行状态：${runtimeStatus.detail}`,
-        runtimeStatus.command ? `状态命令：${runtimeStatus.command}` : "",
-        "你可以点击“重新安装”再次执行安装流程，或点击“继续使用”进入应用。"
-      ]
-        .filter((line) => Boolean(line && line.trim()))
-        .join("\n");
-      startupOpenClawShowManualActions.value = true;
-      startupOpenClawOverlayVisible.value = true;
+      startupOpenClawRuntimeLogs.value = "";
       startupOpenClawInstalling.value = false;
-      markStartupOpenClawAllDone();
+      await sleepMs(180);
+      startupOpenClawOverlayVisible.value = false;
     }
     return;
   }
 
   if (!runtimeStatus.installed) {
+    clearStartupOpenClawHealthyMark();
     startupOpenClawShowManualActions.value = false;
-    startupOpenClawStatusText.value = "检测到未安装 OpenClaw，正在自动安装...";
-    await runStartupOpenClawInstall(invoke, options);
+    startupOpenClawStatusText.value = "检测到未安装 OpenClaw，正在执行安装引导...";
+    await runStartupOpenClawInstall(invoke, { background: false });
     return;
   }
 
+  clearStartupOpenClawHealthyMark();
   startupOpenClawShowManualActions.value = false;
-  startupOpenClawStatusText.value = "检测到 OpenClaw 状态异常，正在自动修复...";
-  await runStartupOpenClawRepair(invoke, runtimeStatus, options);
+  startupOpenClawStatusText.value = "检测到 OpenClaw 状态异常，正在执行修复引导...";
+  await runStartupOpenClawRepair(invoke, runtimeStatus, { background: false });
 }
 
 function scheduleStartupOpenClawReadyCheck() {
   const runCheck = () => {
-    void ensureStartupOpenClawReady({ background: true });
+    const runInBackground = hasStartupOpenClawHealthyMark();
+    void ensureStartupOpenClawReady({ background: runInBackground });
   };
   if (typeof window === "undefined") {
     runCheck();
@@ -8239,6 +8433,76 @@ function buildGroupMemberPromptMessages(
   ];
 }
 
+function isChatAbortError(error: unknown) {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return error.name === "AbortError" || message.includes("abort") || message.includes("中断");
+  }
+  return false;
+}
+
+function buildInterruptedPendingMessageText(text: string, guided: boolean) {
+  const trimmed = text.trim();
+  const base = trimmed.replace(/\s*正在思考中\.\.\.$/, "").trim();
+  const suffix = guided ? "已中断，正在按你的新引导继续。" : "已中断，可继续输入引导。";
+  return base ? `${base} ${suffix}` : suffix;
+}
+
+function markPendingChatMessagesInterrupted(guided: boolean) {
+  const interruptedAt = Date.now();
+  for (const message of chatMessages.value) {
+    if (message.role !== "assistant" || message.status !== "pending") {
+      continue;
+    }
+    message.text = buildInterruptedPendingMessageText(message.text, guided);
+    message.status = "error";
+    message.createdAt = interruptedAt;
+  }
+}
+
+function interruptActiveChatReply(options: { guided?: boolean } = {}) {
+  const guided = options.guided === true;
+  const activeRunId = activeChatSubmitRunId.value;
+  if (activeRunId === null && !isSending.value && !isSubmittingChat.value) {
+    return false;
+  }
+
+  if (activeRunId !== null) {
+    interruptedChatSubmitRunIds.add(activeRunId);
+    activeChatSubmitRunId.value = null;
+  }
+  if (activeChatAbortController) {
+    activeChatAbortController.abort();
+    activeChatAbortController = null;
+  }
+
+  runtimeToolSyncContext.value = null;
+  clearRuntimeToolSyncRetryTimer();
+  markPendingChatMessagesInterrupted(guided);
+  isSending.value = false;
+  isSubmittingChat.value = false;
+
+  const currentAgent = agents.value.find((item) => item.agentId === selectedAgentId.value) ?? null;
+  const conversationScopeKey = resolveConversationScopeKey(currentAgent?.agentId ?? null, activeChannelChatSession.value);
+  const interruptedAt = Date.now();
+
+  if (currentAgent) {
+    setAgentMeta(currentAgent.agentId, {
+      preview: guided ? "已接收新引导，重新回复中" : "已中断回复",
+      timeLabel: formatTimeLabel(interruptedAt),
+      unread: 0
+    });
+  }
+
+  if (conversationScopeKey) {
+    persistChatHistory(conversationScopeKey);
+    agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+  }
+
+  void scrollMessagesToBottom();
+  return true;
+}
+
 async function submitChat() {
   const text = chatInput.value.trim();
   const pendingAttachments = [...chatAttachments.value];
@@ -8246,15 +8510,23 @@ async function submitChat() {
   const conversationScopeKey = resolveConversationScopeKey(activeAgent?.agentId ?? null, activeChannelChatSession.value);
   const activeConversationGroup = findChatConversationGroupByAgentId(activeAgent?.agentId ?? null);
 
-  if (
-    (!text && pendingAttachments.length === 0) ||
-    isSending.value ||
-    isSubmittingChat.value ||
-    !activeAgent ||
-    !conversationScopeKey
-  ) {
+  if ((!text && pendingAttachments.length === 0) || !activeAgent || !conversationScopeKey) {
     return;
   }
+
+  if (isSending.value || isSubmittingChat.value) {
+    const interrupted = interruptActiveChatReply({ guided: true });
+    if (!interrupted) {
+      return;
+    }
+  }
+
+  const submitRunId = ++chatSubmitRunSeed;
+  activeChatSubmitRunId.value = submitRunId;
+  interruptedChatSubmitRunIds.delete(submitRunId);
+  const runAbortController = typeof AbortController === "undefined" ? null : new AbortController();
+  activeChatAbortController = runAbortController;
+  const isRunInterrupted = () => interruptedChatSubmitRunIds.has(submitRunId) || activeChatSubmitRunId.value !== submitRunId;
 
   isSubmittingChat.value = true;
   try {
@@ -8263,27 +8535,192 @@ async function submitChat() {
     if (isRecentDuplicateUserSubmit(text, pendingAttachments, startedAt)) {
       return;
     }
-  if (activeConversationGroup) {
-    const groupMembers = getChatConversationGroupMembers(activeConversationGroup);
-    if (groupMembers.length === 0) {
-      chatComposerError.value = "该团队暂无可用成员，请先重新创建团队。";
+    if (isRunInterrupted()) {
       return;
     }
-    const groupSourceKey = resolveGroupMessageSourceKey(activeChannelChatSession.value);
-    if (!isConversationGroupSourceAllowed(activeConversationGroup, groupSourceKey)) {
-      chatComposerError.value = `当前群策略拒绝来源「${groupSourceKey}」，请在群设置 allowFrom 中放行。`;
+
+    if (activeConversationGroup) {
+      const groupMembers = getChatConversationGroupMembers(activeConversationGroup);
+      if (groupMembers.length === 0) {
+        chatComposerError.value = "该团队暂无可用成员，请先重新创建团队。";
+        return;
+      }
+      const groupSourceKey = resolveGroupMessageSourceKey(activeChannelChatSession.value);
+      if (!isConversationGroupSourceAllowed(activeConversationGroup, groupSourceKey)) {
+        chatComposerError.value = `当前群策略拒绝来源「${groupSourceKey}」，请在群设置 allowFrom 中放行。`;
+        return;
+      }
+      const mentionedMembers = resolveMentionedGroupMembers(text, groupMembers);
+      const activationTriggered = isConversationGroupActivationCommand(text, activeConversationGroup);
+      const replyMembers =
+        mentionedMembers.length > 0
+          ? mentionedMembers
+          : activeConversationGroup.requireMention
+            ? activationTriggered
+              ? groupMembers
+              : []
+            : groupMembers;
+
+      chatMessages.value.push({
+        id: createMessageId("user"),
+        role: "user",
+        text: text || "(附件)",
+        status: "done",
+        createdAt: startedAt,
+        attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
+      });
+      void dispatchChannelMessageMirror(conversationScopeKey, userContent, activeChannelChatSession.value);
+
+      if (replyMembers.length === 0) {
+        const noticeAt = Date.now();
+        const activationCommand = normalizeChatConversationGroupActivationCommand(activeConversationGroup.activationCommand);
+        chatMessages.value.push({
+          id: createMessageId("assistant"),
+          role: "assistant",
+          text: `群组当前为「仅@触发」。请先 @目标成员，或输入 ${activationCommand} 触发全员响应。`,
+          status: "done",
+          createdAt: noticeAt
+        });
+        chatInput.value = "";
+        chatAttachments.value = [];
+        chatComposerError.value = "";
+        resetChatMentionState();
+        void nextTick(() => {
+          resizeChatComposerInput();
+        });
+        setAgentMeta(activeAgent.agentId, {
+          preview: "已发送（等待 @ 或激活命令）",
+          timeLabel: formatTimeLabel(noticeAt),
+          unread: 0
+        });
+        persistChatHistory(conversationScopeKey);
+        agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+        void scrollMessagesToBottom();
+        return;
+      }
+
+      const pendingRows = replyMembers.map((member) => {
+        const pendingId = createMessageId("assistant");
+        chatMessages.value.push({
+          id: pendingId,
+          role: "assistant",
+          text: `${stripRoleLabel(member.displayName)} 正在思考中...`,
+          status: "pending",
+          createdAt: Date.now()
+        });
+        return {
+          member,
+          pendingId
+        };
+      });
+
+      runtimeToolSyncContext.value = null;
+      clearRuntimeToolSyncRetryTimer();
+
+      chatInput.value = "";
+      chatAttachments.value = [];
+      chatComposerError.value = "";
+      resetChatMentionState();
+      void nextTick(() => {
+        resizeChatComposerInput();
+      });
+
+      const previewText =
+        text ||
+        (pendingAttachments.length > 0
+          ? `[附件 ${pendingAttachments.length} 个]`
+          : "已发送消息");
+      setAgentMeta(activeAgent.agentId, {
+        preview: `你：${previewText}`,
+        timeLabel: formatTimeLabel(startedAt),
+        unread: 0
+      });
+
+      isSending.value = true;
+      void scrollMessagesToBottom();
+
+      let latestGroupPreview = "群聊已回复";
+      let hasSuccess = false;
+      try {
+        for (const row of pendingRows) {
+          if (isRunInterrupted()) {
+            return;
+          }
+          const wasMentioned = mentionedMembers.some((member) => member.agentId === row.member.agentId);
+          const sessionKey = buildGroupMemberSessionKey(activeConversationGroup, row.member.agentId, groupSourceKey);
+          const promptMessages = buildGroupMemberPromptMessages(activeConversationGroup, row.member, chatMessages.value, {
+            wasMentioned: wasMentioned || activationTriggered,
+            sourceKey: groupSourceKey,
+            sessionKey
+          });
+          try {
+            const response = await sendOpenClawChat(promptMessages, {
+              agentId: row.member.agentId,
+              sessionKey,
+              signal: runAbortController?.signal ?? null
+            });
+            if (isRunInterrupted()) {
+              return;
+            }
+            const doneAt = Date.now();
+            const pendingMessage = chatMessages.value.find((item) => item.id === row.pendingId);
+            const prefixedText = `【${stripRoleLabel(row.member.displayName)}】${response.text}`;
+            if (pendingMessage) {
+              pendingMessage.text = prefixedText;
+              pendingMessage.status = "done";
+              pendingMessage.createdAt = doneAt;
+            }
+            latestGroupPreview = prefixedText.trim() || latestGroupPreview;
+            hasSuccess = true;
+            setAgentMeta(row.member.agentId, {
+              preview: response.text.trim() || "已在群聊回复",
+              timeLabel: formatTimeLabel(doneAt),
+              unread: 0
+            });
+          } catch (error) {
+            if (isRunInterrupted() || isChatAbortError(error)) {
+              return;
+            }
+            const failedAt = Date.now();
+            const pendingMessage = chatMessages.value.find((item) => item.id === row.pendingId);
+            const errorText = error instanceof Error ? error.message : "群成员回复失败。";
+            if (pendingMessage) {
+              pendingMessage.text = `【${stripRoleLabel(row.member.displayName)}】${errorText}`;
+              pendingMessage.status = "error";
+              pendingMessage.createdAt = failedAt;
+            }
+            appendLocalRuntimeErrorLog({
+              agentId: row.member.agentId,
+              agentName: stripRoleLabel(row.member.displayName),
+              requestText: userContent,
+              errorText,
+              sessionKey,
+              startedAt
+            });
+          }
+        }
+        if (isRunInterrupted()) {
+          return;
+        }
+        const finishedAt = Date.now();
+        setAgentMeta(activeAgent.agentId, {
+          preview: hasSuccess ? latestGroupPreview : "群聊消息发送失败",
+          timeLabel: formatTimeLabel(finishedAt),
+          unread: 0
+        });
+      } finally {
+        if (!isRunInterrupted()) {
+          isSending.value = false;
+          persistChatHistory(conversationScopeKey);
+          agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+          void scrollMessagesToBottom();
+        }
+      }
       return;
     }
-    const mentionedMembers = resolveMentionedGroupMembers(text, groupMembers);
-    const activationTriggered = isConversationGroupActivationCommand(text, activeConversationGroup);
-    const replyMembers =
-      mentionedMembers.length > 0
-        ? mentionedMembers
-        : activeConversationGroup.requireMention
-          ? activationTriggered
-            ? groupMembers
-            : []
-          : groupMembers;
+
+    const history = getOpenClawMessages(chatMessages.value);
+    const pendingId = createMessageId("assistant");
 
     chatMessages.value.push({
       id: createMessageId("user"),
@@ -8295,51 +8732,25 @@ async function submitChat() {
     });
     void dispatchChannelMessageMirror(conversationScopeKey, userContent, activeChannelChatSession.value);
 
-    if (replyMembers.length === 0) {
-      const noticeAt = Date.now();
-      const activationCommand = normalizeChatConversationGroupActivationCommand(activeConversationGroup.activationCommand);
-      chatMessages.value.push({
-        id: createMessageId("assistant"),
-        role: "assistant",
-        text: `群组当前为「仅@触发」。请先 @目标成员，或输入 ${activationCommand} 触发全员响应。`,
-        status: "done",
-        createdAt: noticeAt
-      });
-      chatInput.value = "";
-      chatAttachments.value = [];
-      chatComposerError.value = "";
-      resetChatMentionState();
-      void nextTick(() => {
-        resizeChatComposerInput();
-      });
-      setAgentMeta(activeAgent.agentId, {
-        preview: "已发送（等待 @ 或激活命令）",
-        timeLabel: formatTimeLabel(noticeAt),
-        unread: 0
-      });
-      persistChatHistory(conversationScopeKey);
-      agentHistories.value[conversationScopeKey] = [...chatMessages.value];
-      void scrollMessagesToBottom();
-      return;
-    }
-
-    const pendingRows = replyMembers.map((member) => {
-      const pendingId = createMessageId("assistant");
-      chatMessages.value.push({
-        id: pendingId,
-        role: "assistant",
-        text: `${stripRoleLabel(member.displayName)} 正在思考中...`,
-        status: "pending",
-        createdAt: Date.now()
-      });
-      return {
-        member,
-        pendingId
-      };
+    chatMessages.value.push({
+      id: pendingId,
+      role: "assistant",
+      text: `${stripRoleLabel(activeAgent.displayName)} 正在思考中...`,
+      status: "pending",
+      createdAt: Date.now()
     });
-
-    runtimeToolSyncContext.value = null;
+    runtimeToolSyncContext.value = {
+      pendingMessageId: pendingId,
+      startedAtMs: startedAt,
+      runtimeAgentId: activeAgent.agentId,
+      expiresAtMs: Date.now() + runtimeToolSyncWindowMs
+    };
     clearRuntimeToolSyncRetryTimer();
+    const initialSyncContext = runtimeToolSyncContext.value;
+    if (initialSyncContext) {
+      void syncRuntimeToolMessagesNow(initialSyncContext);
+      scheduleRuntimeToolSyncRetry();
+    }
 
     chatInput.value = "";
     chatAttachments.value = [];
@@ -8348,7 +8759,6 @@ async function submitChat() {
     void nextTick(() => {
       resizeChatComposerInput();
     });
-
     const previewText =
       text ||
       (pendingAttachments.length > 0
@@ -8362,191 +8772,95 @@ async function submitChat() {
 
     isSending.value = true;
     void scrollMessagesToBottom();
+    const runtimeSessionKey = resolveRuntimeSessionKeyForConversation(conversationScopeKey, activeAgent.agentId);
 
-    let latestGroupPreview = "群聊已回复";
-    let hasSuccess = false;
     try {
-      for (const row of pendingRows) {
-        const wasMentioned = mentionedMembers.some((member) => member.agentId === row.member.agentId);
-        const sessionKey = buildGroupMemberSessionKey(activeConversationGroup, row.member.agentId, groupSourceKey);
-        const promptMessages = buildGroupMemberPromptMessages(activeConversationGroup, row.member, chatMessages.value, {
-          wasMentioned: wasMentioned || activationTriggered,
-          sourceKey: groupSourceKey,
-          sessionKey
-        });
-        try {
-          const response = await sendOpenClawChat(promptMessages, {
-            agentId: row.member.agentId,
-            sessionKey
-          });
-          const doneAt = Date.now();
-          const pendingMessage = chatMessages.value.find((item) => item.id === row.pendingId);
-          const prefixedText = `【${stripRoleLabel(row.member.displayName)}】${response.text}`;
-          if (pendingMessage) {
-            pendingMessage.text = prefixedText;
-            pendingMessage.status = "done";
-            pendingMessage.createdAt = doneAt;
-          }
-          latestGroupPreview = prefixedText.trim() || latestGroupPreview;
-          hasSuccess = true;
-          setAgentMeta(row.member.agentId, {
-            preview: response.text.trim() || "已在群聊回复",
-            timeLabel: formatTimeLabel(doneAt),
-            unread: 0
-          });
-        } catch (error) {
-          const failedAt = Date.now();
-          const pendingMessage = chatMessages.value.find((item) => item.id === row.pendingId);
-          const errorText = error instanceof Error ? error.message : "群成员回复失败。";
-          if (pendingMessage) {
-            pendingMessage.text = `【${stripRoleLabel(row.member.displayName)}】${errorText}`;
-            pendingMessage.status = "error";
-            pendingMessage.createdAt = failedAt;
-          }
-          appendLocalRuntimeErrorLog({
-            agentId: row.member.agentId,
-            agentName: stripRoleLabel(row.member.displayName),
-            requestText: userContent,
-            errorText,
-            sessionKey,
-            startedAt
-          });
-        }
+      const response = await sendOpenClawChat(
+        [...history, { role: "user", content: userContent }],
+        runtimeSessionKey
+          ? {
+              agentId: activeAgent.agentId,
+              sessionKey: runtimeSessionKey,
+              signal: runAbortController?.signal ?? null
+            }
+          : {
+              agentId: activeAgent.agentId,
+              signal: runAbortController?.signal ?? null
+            }
+      );
+      if (isRunInterrupted()) {
+        return;
       }
-      const finishedAt = Date.now();
+      const doneAt = Date.now();
+
+      const pendingMessage = chatMessages.value.find((item) => item.id === pendingId);
+      if (pendingMessage) {
+        pendingMessage.text = response.text;
+        pendingMessage.status = "done";
+        pendingMessage.createdAt = doneAt;
+      }
+
       setAgentMeta(activeAgent.agentId, {
-        preview: hasSuccess ? latestGroupPreview : "群聊消息发送失败",
-        timeLabel: formatTimeLabel(finishedAt),
+        preview: response.text.trim() || "已回复",
+        timeLabel: formatTimeLabel(doneAt),
+        unread: 0
+      });
+    } catch (error) {
+      if (isRunInterrupted() || isChatAbortError(error)) {
+        return;
+      }
+      const failedAt = Date.now();
+      const pendingMessage = chatMessages.value.find((item) => item.id === pendingId);
+      const errorText = error instanceof Error ? error.message : "Agent 回复失败。";
+      if (pendingMessage) {
+        pendingMessage.text = errorText;
+        pendingMessage.status = "error";
+        pendingMessage.createdAt = failedAt;
+      }
+      appendLocalRuntimeErrorLog({
+        agentId: activeAgent.agentId,
+        agentName: stripRoleLabel(activeAgent.displayName),
+        requestText: userContent,
+        errorText,
+        sessionKey: runtimeSessionKey,
+        startedAt
+      });
+
+      setAgentMeta(activeAgent.agentId, {
+        preview: "消息发送失败",
+        timeLabel: formatTimeLabel(failedAt),
         unread: 0
       });
     } finally {
-      isSending.value = false;
-      persistChatHistory(conversationScopeKey);
-      agentHistories.value[conversationScopeKey] = [...chatMessages.value];
-      void scrollMessagesToBottom();
-    }
-    return;
-  }
-
-  const history = getOpenClawMessages(chatMessages.value);
-  const pendingId = createMessageId("assistant");
-
-  chatMessages.value.push({
-    id: createMessageId("user"),
-    role: "user",
-    text: text || "(附件)",
-    status: "done",
-    createdAt: startedAt,
-    attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined
-  });
-  void dispatchChannelMessageMirror(conversationScopeKey, userContent, activeChannelChatSession.value);
-
-  chatMessages.value.push({
-    id: pendingId,
-    role: "assistant",
-    text: `${stripRoleLabel(activeAgent.displayName)} 正在思考中...`,
-    status: "pending",
-    createdAt: Date.now()
-  });
-  runtimeToolSyncContext.value = {
-    pendingMessageId: pendingId,
-    startedAtMs: startedAt,
-    runtimeAgentId: activeAgent.agentId,
-    expiresAtMs: Date.now() + runtimeToolSyncWindowMs
-  };
-  clearRuntimeToolSyncRetryTimer();
-  const initialSyncContext = runtimeToolSyncContext.value;
-  if (initialSyncContext) {
-    void syncRuntimeToolMessagesNow(initialSyncContext);
-    scheduleRuntimeToolSyncRetry();
-  }
-
-  chatInput.value = "";
-  chatAttachments.value = [];
-  chatComposerError.value = "";
-  resetChatMentionState();
-  void nextTick(() => {
-    resizeChatComposerInput();
-  });
-  const previewText =
-    text ||
-    (pendingAttachments.length > 0
-      ? `[附件 ${pendingAttachments.length} 个]`
-      : "已发送消息");
-  setAgentMeta(activeAgent.agentId, {
-    preview: `你：${previewText}`,
-    timeLabel: formatTimeLabel(startedAt),
-    unread: 0
-  });
-
-  isSending.value = true;
-  void scrollMessagesToBottom();
-  const runtimeSessionKey = resolveRuntimeSessionKeyForConversation(conversationScopeKey, activeAgent.agentId);
-
-  try {
-    const response = await sendOpenClawChat(
-      [...history, { role: "user", content: userContent }],
-      runtimeSessionKey
-        ? { agentId: activeAgent.agentId, sessionKey: runtimeSessionKey }
-        : { agentId: activeAgent.agentId }
-    );
-    const doneAt = Date.now();
-
-    const pendingMessage = chatMessages.value.find((item) => item.id === pendingId);
-    if (pendingMessage) {
-      pendingMessage.text = response.text;
-      pendingMessage.status = "done";
-      pendingMessage.createdAt = doneAt;
-    }
-
-    setAgentMeta(activeAgent.agentId, {
-      preview: response.text.trim() || "已回复",
-      timeLabel: formatTimeLabel(doneAt),
-      unread: 0
-    });
-  } catch (error) {
-    const failedAt = Date.now();
-    const pendingMessage = chatMessages.value.find((item) => item.id === pendingId);
-    const errorText = error instanceof Error ? error.message : "Agent 回复失败。";
-    if (pendingMessage) {
-      pendingMessage.text = errorText;
-      pendingMessage.status = "error";
-      pendingMessage.createdAt = failedAt;
-    }
-    appendLocalRuntimeErrorLog({
-      agentId: activeAgent.agentId,
-      agentName: stripRoleLabel(activeAgent.displayName),
-      requestText: userContent,
-      errorText,
-      sessionKey: runtimeSessionKey,
-      startedAt
-    });
-
-    setAgentMeta(activeAgent.agentId, {
-      preview: "消息发送失败",
-      timeLabel: formatTimeLabel(failedAt),
-      unread: 0
-    });
-  } finally {
-    const syncContext = runtimeToolSyncContext.value;
-    if (syncContext) {
-      syncContext.expiresAtMs = Date.now() + runtimeToolSyncPostResponseWindowMs;
-      await syncRuntimeToolMessagesNow(syncContext);
-      const latest = runtimeToolSyncContext.value;
-      if (latest && !isRuntimeToolSyncExpired(latest)) {
-        scheduleRuntimeToolSyncRetry();
-      } else {
-        runtimeToolSyncContext.value = null;
-        clearRuntimeToolSyncRetryTimer();
+      if (!isRunInterrupted()) {
+        const syncContext = runtimeToolSyncContext.value;
+        if (syncContext) {
+          syncContext.expiresAtMs = Date.now() + runtimeToolSyncPostResponseWindowMs;
+          await syncRuntimeToolMessagesNow(syncContext);
+          const latest = runtimeToolSyncContext.value;
+          if (latest && !isRuntimeToolSyncExpired(latest)) {
+            scheduleRuntimeToolSyncRetry();
+          } else {
+            runtimeToolSyncContext.value = null;
+            clearRuntimeToolSyncRetryTimer();
+          }
+        }
+        isSending.value = false;
+        persistChatHistory(conversationScopeKey);
+        agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+        void scrollMessagesToBottom();
       }
     }
-    isSending.value = false;
-    persistChatHistory(conversationScopeKey);
-    agentHistories.value[conversationScopeKey] = [...chatMessages.value];
-    void scrollMessagesToBottom();
-  }
   } finally {
-    isSubmittingChat.value = false;
+    interruptedChatSubmitRunIds.delete(submitRunId);
+    if (activeChatSubmitRunId.value === submitRunId) {
+      activeChatSubmitRunId.value = null;
+      if (activeChatAbortController === runAbortController) {
+        activeChatAbortController = null;
+      }
+      isSending.value = false;
+      isSubmittingChat.value = false;
+    }
   }
 }
 
@@ -12566,6 +12880,14 @@ function isChannelQrBindingTerminalStatus(status: string | null | undefined) {
   return normalizedStatus === "success" || normalizedStatus === "error";
 }
 
+function resolveChannelQrBindingWaitElapsedMs(snapshot: OpenClawChannelQrBindingSessionSnapshot | null | undefined) {
+  const startedAtMs = Number(snapshot?.startedAtMs ?? 0);
+  if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) {
+    return 0;
+  }
+  return Math.max(0, Date.now() - startedAtMs);
+}
+
 function stopChannelQrBindingPolling() {
   if (channelQrBindingPollTimer) {
     window.clearInterval(channelQrBindingPollTimer);
@@ -12674,6 +12996,22 @@ async function pollChannelQrBindingSession(sessionId: string) {
     })) as OpenClawChannelQrBindingSessionSnapshot;
     applyChannelQrBindingSnapshot(snapshot, channelQrBindingChannelType.value);
     const normalizedStatus = (snapshot.status ?? "").trim().toLowerCase();
+    const normalizedChannelType = normalizeChannelPaneType(snapshot.channelType || channelQrBindingChannelType.value);
+    const detail = (snapshot.detail ?? "").trim();
+    const hasQrPayload = Boolean((snapshot.qrUrl ?? "").trim() || (snapshot.qrAscii ?? "").trim());
+    const waitElapsedMs = resolveChannelQrBindingWaitElapsedMs(snapshot);
+    const whatsappRetryHintReady = waitElapsedMs >= WHATSAPP_QR_BINDING_RETRY_HINT_DELAY_MS;
+    if (normalizedStatus === "running" || normalizedStatus === "waiting_scan") {
+      if (normalizedChannelType === "whatsapp" && normalizedStatus === "waiting_scan" && !hasQrPayload) {
+        channelConfigNotice.value = detail
+          || (whatsappRetryHintReady
+            ? "已启动 WhatsApp 连接，当前仍在等待二维码。若超过 1 分钟未出现，可点击“重新尝试连接”。"
+            : "已启动 WhatsApp 连接，正在获取二维码，请稍候...");
+      } else if (detail) {
+        channelConfigNotice.value = detail;
+      }
+      channelConfigError.value = "";
+    }
     if (normalizedStatus === "success") {
       stopChannelQrBindingPolling();
       channelConfigNotice.value = "二维码绑定成功。";
@@ -12722,7 +13060,7 @@ async function handleStartChannelQrBinding() {
     return;
   }
   const backendType = normalizeChannelPaneType(channelConfigBackendType.value);
-  if (backendType !== "weixin" && backendType !== "wecom") {
+  if (backendType !== "weixin" && backendType !== "wecom" && backendType !== "whatsapp") {
     channelConfigError.value = "当前频道暂不支持二维码绑定。";
     return;
   }
@@ -14417,6 +14755,9 @@ function getRecruitmentRoleAvatarStyle(role: AgencyRosterRole) {
 function handleSidebarSectionChange(section: SidebarSection) {
   closeChatQuickCreateMenu();
   closeSidebarSystemMenu();
+  if (section !== "tasks" && isTaskCreateModalOpen.value) {
+    closeTaskCreateModal();
+  }
   activeSection.value = section;
   if (section !== "chat") {
     isAgentSettingsOpen.value = false;
@@ -14426,11 +14767,10 @@ function handleSidebarSectionChange(section: SidebarSection) {
 
   if (section === "tasks") {
     taskItems.value = loadTasks();
-    taskModuleView.value = "projects";
     taskModuleError.value = "";
     taskModuleNotice.value = "";
-    activeTaskProject.value = DEFAULT_TASK_PROJECT_NAME;
-    syncTaskProjectNamesFromTasks();
+    taskBoardSelectedTaskKey.value = null;
+    void refreshTaskBoardSnapshot();
   }
 }
 
@@ -14438,70 +14778,88 @@ function formatMarketPoints(value: number) {
   return marketPointsFormatter.format(Math.max(0, Math.floor(value)));
 }
 
-function openTaskProjectsHome() {
-  taskModuleView.value = "projects";
-  taskModuleError.value = "";
-  taskDragTaskId.value = null;
-  taskDragOverStatus.value = null;
+async function refreshTaskBoardSnapshot() {
+  if (isTaskBoardRefreshing.value) {
+    return;
+  }
+  isTaskBoardRefreshing.value = true;
+  taskBoardRefreshError.value = "";
+  try {
+    taskBoardSnapshot.value = await loadTaskSnapshotForReminder();
+  } catch (error) {
+    taskBoardSnapshot.value = {
+      sourcePath: "runtime unavailable",
+      detail: "任务快照读取失败。",
+      jobs: []
+    };
+    taskBoardRefreshError.value = error instanceof Error ? error.message : "任务快照读取失败。";
+  } finally {
+    isTaskBoardRefreshing.value = false;
+  }
 }
 
-function openTaskProjectBoard(projectName: string) {
-  if (!taskProjectNames.value.includes(projectName)) {
-    return;
+function parseTaskDraftDueAt() {
+  const raw = taskDraftDueAt.value.trim();
+  if (!raw) {
+    return Date.now() + 4 * 60 * 60 * 1000;
   }
-  activeTaskProject.value = projectName;
-  taskModuleView.value = "board";
-  taskModuleError.value = "";
-  taskModuleNotice.value = "";
-  resetTaskDraftForm();
+  const parsed = new Date(raw).getTime();
+  if (!Number.isFinite(parsed)) {
+    return Date.now() + 4 * 60 * 60 * 1000;
+  }
+  return parsed;
 }
 
-function handleCreateTaskProject() {
-  const projectName = normalizeTaskProjectName(taskProjectInput.value);
-  if (!projectName) {
-    taskModuleError.value = "请输入项目名称。";
-    taskModuleNotice.value = "";
-    return;
-  }
-  if (projectName === DEFAULT_TASK_PROJECT_NAME) {
-    taskModuleError.value = `「${DEFAULT_TASK_PROJECT_NAME}」是默认项目，不能重复创建。`;
-    taskModuleNotice.value = "";
-    return;
-  }
-  if (taskProjectNames.value.some((item) => item.toLowerCase() === projectName.toLowerCase())) {
-    taskModuleError.value = `项目「${projectName}」已存在。`;
-    taskModuleNotice.value = "";
-    return;
-  }
-
-  taskProjectNames.value = buildTaskProjectList([...taskProjectNames.value, projectName]);
-  saveTaskProjectsToStorage(taskProjectNames.value);
-  taskProjectInput.value = "";
-  taskModuleNotice.value = `项目「${projectName}」已创建。`;
-  taskModuleError.value = "";
-}
-
-function handleCreateTaskInActiveProject() {
+function handleCreateTaskInBoard() {
   const title = taskDraftTitle.value.trim();
   if (!title) {
     taskModuleError.value = "请先填写任务标题。";
     taskModuleNotice.value = "";
-    return;
+    return false;
   }
   const draft = createTaskDraft();
-  const projectName = activeTaskProject.value === DEFAULT_TASK_PROJECT_NAME ? "" : activeTaskProject.value;
+  const ownerType = taskDraftOwnerType.value;
+  const owner = taskDraftOwner.value.trim() || "Commander";
+  const ownerTeam = ownerType === "team" ? owner : normalizeTaskBoardTeamLabel(taskDraftTeam.value);
+  const dueAt = parseTaskDraftDueAt();
+  const totalSteps = Math.max(1, draft.totalSteps || draft.steps.length || 4);
+
   updateTaskRecord({
     ...draft,
     title,
     summary: taskDraftSummary.value.trim() || "暂无说明",
-    owner: taskDraftOwner.value.trim() || "Commander",
+    owner,
+    ownerType,
+    ownerTeam,
     priority: taskDraftPriority.value,
-    project: projectName,
-    status: "todo"
+    project: "",
+    status: "todo",
+    dueAt,
+    currentStepNo: 1,
+    totalSteps,
+    steps: syncTaskStepsWithStatus(
+      {
+        steps: draft.steps as TaskRecord["steps"],
+        totalSteps,
+        updatedAt: Date.now()
+      },
+      "todo"
+    ),
+    isScheduled: false,
+    scheduleKind: "manual"
   });
-  taskModuleNotice.value = `任务「${title}」已添加到「${activeTaskProject.value}」。`;
+  taskModuleNotice.value = `任务「${title}」已创建。`;
   taskModuleError.value = "";
   resetTaskDraftForm();
+  return true;
+}
+
+function handleTaskCreateModalSubmit() {
+  const created = handleCreateTaskInBoard();
+  if (!created) {
+    return;
+  }
+  closeTaskCreateModal();
 }
 
 function getTaskStatusText(status: TaskBoardStatus) {
@@ -14539,15 +14897,24 @@ function updateTaskStatus(taskId: string, nextStatus: TaskBoardStatus) {
   if (!current || current.status === nextStatus) {
     return;
   }
+  const totalSteps = Math.max(1, current.totalSteps || current.steps.length || 4);
+  const currentStepNo = getTaskStatusStepNo(nextStatus, totalSteps);
   updateTaskRecord({
     ...current,
-    status: nextStatus
+    status: nextStatus,
+    currentStepNo,
+    totalSteps,
+    steps: syncTaskStepsWithStatus(current, nextStatus)
   });
   taskModuleError.value = "";
   taskModuleNotice.value = `任务「${current.title}」已移动到「${getTaskStatusText(nextStatus)}」。`;
+  taskBoardSelectedTaskKey.value = `local:${current.id}`;
 }
 
-function moveTaskToPrevStatus(task: TaskRecord) {
+function moveTaskToPrevStatus(task: TaskBoardTaskItem) {
+  if (task.source !== "local") {
+    return;
+  }
   const prev = getTaskPrevStatus(task.status);
   if (!prev) {
     return;
@@ -14555,7 +14922,10 @@ function moveTaskToPrevStatus(task: TaskRecord) {
   updateTaskStatus(task.id, prev);
 }
 
-function moveTaskToNextStatus(task: TaskRecord) {
+function moveTaskToNextStatus(task: TaskBoardTaskItem) {
+  if (task.source !== "local") {
+    return;
+  }
   const next = getTaskNextStatus(task.status);
   if (!next) {
     return;
@@ -14563,7 +14933,12 @@ function moveTaskToNextStatus(task: TaskRecord) {
   updateTaskStatus(task.id, next);
 }
 
-function handleTaskDragStart(taskId: string) {
+function handleTaskDragStart(taskId: string, source: TaskBoardSourceKind) {
+  if (source !== "local") {
+    taskDragTaskId.value = null;
+    taskDragOverStatus.value = null;
+    return;
+  }
   taskDragTaskId.value = taskId;
   taskDragOverStatus.value = null;
 }
@@ -14587,6 +14962,216 @@ function handleTaskColumnDrop(status: TaskBoardStatus) {
   }
   updateTaskStatus(taskId, status);
   handleTaskDragEnd();
+}
+
+function openTaskBoardDetail(task: TaskBoardTaskItem) {
+  taskBoardSelectedTaskKey.value = task.boardKey;
+}
+
+function closeTaskBoardDetail() {
+  taskBoardSelectedTaskKey.value = null;
+}
+
+function getTaskStepStatusLabel(status: "pending" | "running" | "done" | "blocked") {
+  if (status === "running") return "进行中";
+  if (status === "done") return "已完成";
+  if (status === "blocked") return "阻塞";
+  return "待执行";
+}
+
+function getTaskBoardAssociatedAgents(task: TaskBoardTaskItem) {
+  if (task.ownerType === "team") {
+    const teamLabel = normalizeTaskBoardTeamLabel(task.team || task.owner);
+    if (teamLabel !== "未分组") {
+      const teamMembers = agents.value.filter((agent) => normalizeTaskBoardTeamLabel(agent.workspace) === teamLabel);
+      if (teamMembers.length > 0) {
+        return teamMembers;
+      }
+    }
+  }
+  const ownerAgent = findAgentByOwner(task.owner);
+  return ownerAgent ? [ownerAgent] : [];
+}
+
+function getTaskBoardAvatarItems(task: TaskBoardTaskItem) {
+  const linkedAgents = getTaskBoardAssociatedAgents(task);
+  if (linkedAgents.length > 0) {
+    return linkedAgents.slice(0, 3).map((agent) => ({
+      key: agent.agentId,
+      avatarUrl: getAgentAvatarUrl(agent),
+      alt: `${stripRoleLabel(agent.displayName)} 头像`,
+      initial: getAgentInitial(agent)
+    }));
+  }
+  return [
+    {
+      key: `fallback-${task.boardKey}`,
+      avatarUrl: task.ownerAvatarUrl,
+      alt: task.ownerAvatarAlt,
+      initial: task.ownerAvatarInitial
+    }
+  ];
+}
+
+function getTaskBoardAvatarOverflow(task: TaskBoardTaskItem) {
+  const linkedCount = getTaskBoardAssociatedAgents(task).length;
+  return linkedCount > 3 ? linkedCount - 3 : 0;
+}
+
+function formatTaskBoardTeamDisplay(team: string) {
+  const normalized = team.trim();
+  if (!normalized || normalized === "未分组") {
+    return "未分组团队";
+  }
+  const segments = normalized.split("/").filter(Boolean);
+  const candidate = segments.length > 0 ? segments[segments.length - 1] || normalized : normalized;
+  return candidate.length > 36 ? `${candidate.slice(0, 36)}...` : candidate;
+}
+
+function getTaskBoardOwnerDisplayName(task: TaskBoardTaskItem) {
+  if (task.ownerType !== "agent") {
+    return task.owner.trim() || "未分配员工";
+  }
+  const ownerAgent = findAgentByOwner(task.owner);
+  if (!ownerAgent) {
+    return task.owner.trim() || "未分配员工";
+  }
+  const normalizedName = stripRoleLabel(ownerAgent.displayName).trim();
+  return normalizedName || task.owner.trim() || "未分配员工";
+}
+
+function getTaskCurrentStepLabel(steps: TaskBoardTaskItem["steps"], currentStepNo: number) {
+  const step = steps.find((item, index) => index + 1 === currentStepNo) ?? steps[currentStepNo - 1] ?? steps[0];
+  if (!step) {
+    return "未设置";
+  }
+  return `${step.title} · ${getTaskStepStatusLabel(step.status)}`;
+}
+
+function getTaskProgressPct(status: TaskBoardStatus, currentStepNo: number, totalSteps: number) {
+  if (status === "done") {
+    return 100;
+  }
+  if (status === "cancelled") {
+    return 0;
+  }
+  const safeTotalSteps = Math.max(1, totalSteps);
+  const safeCurrentStepNo = Math.min(safeTotalSteps, Math.max(1, currentStepNo));
+  return Math.max(5, Math.min(95, Math.round((safeCurrentStepNo / safeTotalSteps) * 100)));
+}
+
+function mapLocalTaskToBoardItem(task: TaskRecord): TaskBoardTaskItem {
+  const ownerType = normalizeTaskBoardOwnerType(task.ownerType);
+  const team = resolveTaskOwnerTeam(task.owner, ownerType, task.ownerTeam);
+  const ownerAvatarMeta = resolveTaskOwnerAvatarMeta(task.owner, ownerType);
+  const totalSteps = Math.max(1, task.totalSteps || task.steps.length || 4);
+  const currentStepNo = Math.min(totalSteps, Math.max(1, task.currentStepNo || getTaskStatusStepNo(task.status, totalSteps)));
+  const steps =
+    task.steps.length > 0
+      ? task.steps.map((step) => ({
+          id: step.id,
+          title: step.title,
+          status: step.status,
+          detail: step.detail,
+          updatedAt: step.updatedAt
+        }))
+      : syncTaskStepsWithStatus(task, task.status).map((step) => ({
+          id: step.id,
+          title: step.title,
+          status: step.status,
+          detail: step.detail,
+          updatedAt: step.updatedAt
+        }));
+  return {
+    boardKey: `local:${task.id}`,
+    id: task.id,
+    source: "local",
+    title: task.title,
+    summary: task.summary,
+    owner: task.owner,
+    ownerType,
+    team,
+    priority: task.priority,
+    status: task.status,
+    dueAt: task.dueAt,
+    updatedAt: task.updatedAt,
+    currentStepNo,
+    totalSteps,
+    currentStepLabel: getTaskCurrentStepLabel(steps, currentStepNo),
+    progressPct: getTaskProgressPct(task.status, currentStepNo, totalSteps),
+    steps,
+    isScheduled: Boolean(task.isScheduled),
+    scheduleKind: task.scheduleKind || "manual",
+    nextRunAtMs: task.isScheduled ? task.dueAt : null,
+    enabled: task.status !== "done" && task.status !== "cancelled",
+    ownerAvatarUrl: ownerAvatarMeta.ownerAvatarUrl,
+    ownerAvatarInitial: ownerAvatarMeta.ownerAvatarInitial,
+    ownerAvatarAlt: ownerAvatarMeta.ownerAvatarAlt,
+    detailText: `任务来源：本地任务 · 项目：${task.project || "未分组"}`
+  };
+}
+
+function mapScheduledStatusToTaskStatus(statusKind: string): TaskBoardStatus {
+  if (statusKind === "late") {
+    return "in_progress";
+  }
+  if (statusKind === "disabled") {
+    return "cancelled";
+  }
+  return "todo";
+}
+
+function buildScheduledTaskSteps(job: TaskSnapshotItem) {
+  const stepStatus: Array<"done" | "running" | "pending" | "blocked"> =
+    job.statusKind === "disabled"
+      ? ["done", "blocked", "pending"]
+      : job.statusKind === "late"
+        ? ["done", "running", "pending"]
+        : ["running", "pending", "pending"];
+  const stepTitles = ["任务排程", "执行队列", "结果写回"];
+  return stepTitles.map((title, index) => ({
+    id: `${job.id}-step-${index + 1}`,
+    title,
+    status: stepStatus[index] ?? "pending",
+    detail: "",
+    updatedAt: job.updatedAtMs
+  }));
+}
+
+function mapScheduledTaskToBoardItem(job: TaskSnapshotItem): TaskBoardTaskItem {
+  const status = mapScheduledStatusToTaskStatus(job.statusKind);
+  const steps = buildScheduledTaskSteps(job);
+  const currentStepNo = status === "cancelled" ? 2 : status === "in_progress" ? 2 : 1;
+  const owner = job.agentId?.trim() || "未标注";
+  const ownerAvatarMeta = resolveTaskOwnerAvatarMeta(owner, "agent");
+  const team = resolveTaskOwnerTeam(owner, "agent", "");
+  return {
+    boardKey: `scheduled:${job.id}`,
+    id: job.id,
+    source: "scheduled",
+    title: job.name || "未命名定时任务",
+    summary: job.summary || "暂无任务描述。",
+    owner,
+    ownerType: "agent",
+    team,
+    priority: status === "in_progress" ? "p0" : status === "cancelled" ? "p2" : "p1",
+    status,
+    dueAt: job.nextRunAtMs,
+    updatedAt: job.updatedAtMs,
+    currentStepNo,
+    totalSteps: steps.length,
+    currentStepLabel: getTaskCurrentStepLabel(steps, currentStepNo),
+    progressPct: getTaskProgressPct(status, currentStepNo, steps.length),
+    steps,
+    isScheduled: true,
+    scheduleKind: job.scheduleKind || "cron",
+    nextRunAtMs: job.nextRunAtMs,
+    enabled: job.enabled && job.statusKind !== "disabled",
+    ownerAvatarUrl: ownerAvatarMeta.ownerAvatarUrl,
+    ownerAvatarInitial: ownerAvatarMeta.ownerAvatarInitial,
+    ownerAvatarAlt: ownerAvatarMeta.ownerAvatarAlt,
+    detailText: `任务来源：定时任务快照 · ${job.statusLabel || "状态未知"}`
+  };
 }
 
 async function refreshRelatedResourceData(target: RelatedResourceTarget) {
@@ -15945,25 +16530,123 @@ const channelQrBindingConnectSubtitle = computed(() => {
   if (channelId === "wecom") {
     return "点击按钮会展示企业微信登录二维码，用手机企业微信扫码即可完成连接。";
   }
+  if (channelId === "whatsapp") {
+    return "点击按钮会展示 WhatsApp 登录二维码，用手机 WhatsApp 扫码即可完成连接。";
+  }
   return "点击按钮会展示微信登录二维码，用手机微信扫码即可完成连接。";
 });
 const channelQrBindingRawUrl = computed(() => (channelQrBindingSnapshot.value?.qrUrl ?? "").trim());
-async function renderChannelQrBindingImage(rawUrl: string) {
+const channelQrBindingRawAscii = computed(() => (channelQrBindingSnapshot.value?.qrAscii ?? "").trim());
+
+function decodeWhatsAppAsciiQr(rawAscii: string) {
+  const lines = rawAscii
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+$/g, ""))
+    .filter((line) => line.trim().length > 0);
+  if (lines.length < 8) {
+    return null;
+  }
+
+  const rows: boolean[][] = [];
+  for (const line of lines) {
+    const top: boolean[] = [];
+    const bottom: boolean[] = [];
+    for (const ch of line) {
+      if (ch === "█") {
+        top.push(true);
+        bottom.push(true);
+      } else if (ch === "▀") {
+        top.push(true);
+        bottom.push(false);
+      } else if (ch === "▄") {
+        top.push(false);
+        bottom.push(true);
+      } else if (ch === " ") {
+        top.push(false);
+        bottom.push(false);
+      } else {
+        return null;
+      }
+    }
+    rows.push(top, bottom);
+  }
+
+  const width = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  if (width <= 0) {
+    return null;
+  }
+  for (const row of rows) {
+    while (row.length < width) {
+      row.push(false);
+    }
+  }
+  return rows;
+}
+
+function renderAsciiQrToDataUrl(rawAscii: string) {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const matrix = decodeWhatsAppAsciiQr(rawAscii);
+  if (!matrix) {
+    return null;
+  }
+  const moduleSize = 6;
+  const marginModules = 4;
+  const width = matrix[0]?.length ?? 0;
+  const height = matrix.length;
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = (width + marginModules * 2) * moduleSize;
+  canvas.height = (height + marginModules * 2) * moduleSize;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return null;
+  }
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#111111";
+  for (let y = 0; y < height; y += 1) {
+    const row = matrix[y];
+    for (let x = 0; x < width; x += 1) {
+      if (!row[x]) {
+        continue;
+      }
+      const px = (x + marginModules) * moduleSize;
+      const py = (y + marginModules) * moduleSize;
+      ctx.fillRect(px, py, moduleSize, moduleSize);
+    }
+  }
+
+  return canvas.toDataURL("image/png");
+}
+
+async function renderChannelQrBindingImage(rawUrl: string, rawAscii: string) {
   const targetUrl = rawUrl.trim();
+  const targetAscii = rawAscii.trim();
   channelQrBindingImageRenderToken += 1;
   const ticket = channelQrBindingImageRenderToken;
   channelQrBindingImageError.value = "";
 
-  if (!targetUrl) {
+  if (!targetUrl && !targetAscii) {
     channelQrBindingImageUrl.value = "";
     return;
   }
 
   try {
-    const dataUrl = await QRCode.toDataURL(targetUrl, {
-      width: 260,
-      margin: 0
-    });
+    const dataUrl = targetUrl
+      ? await QRCode.toDataURL(targetUrl, {
+          width: 260,
+          margin: 0
+        })
+      : renderAsciiQrToDataUrl(targetAscii);
+    if (!dataUrl) {
+      throw new Error("无法解析 WhatsApp 终端二维码输出。");
+    }
     if (ticket !== channelQrBindingImageRenderToken) {
       return;
     }
@@ -15977,22 +16660,41 @@ async function renderChannelQrBindingImage(rawUrl: string) {
   }
 }
 watch(
-  () => [channelQrBindingRawUrl.value, channelQrBindingSnapshot.value?.updatedAtMs ?? 0] as const,
-  ([rawUrl]) => {
-    void renderChannelQrBindingImage(rawUrl);
+  () =>
+    [channelQrBindingRawUrl.value, channelQrBindingRawAscii.value, channelQrBindingSnapshot.value?.updatedAtMs ?? 0] as const,
+  ([rawUrl, rawAscii]) => {
+    void renderChannelQrBindingImage(rawUrl, rawAscii);
   },
   { immediate: true }
 );
 const channelQrBindingConnecting = computed(() => {
   const normalizedStatus = (channelQrBindingSnapshot.value?.status ?? "").trim().toLowerCase();
-  const hasQrPayload = Boolean(channelQrBindingRawUrl.value);
+  const hasQrPayload = Boolean(channelQrBindingRawUrl.value || channelQrBindingRawAscii.value);
+  const normalizedChannelType = normalizeChannelPaneType(
+    channelQrBindingSnapshot.value?.channelType || channelQrBindingChannelType.value
+  );
+  const waitElapsedMs = resolveChannelQrBindingWaitElapsedMs(channelQrBindingSnapshot.value);
+  if (normalizedChannelType === "whatsapp" && normalizedStatus === "waiting_scan" && !hasQrPayload) {
+    return waitElapsedMs < WHATSAPP_QR_BINDING_RETRY_HINT_DELAY_MS;
+  }
   return channelQrBindingStarting.value || ((normalizedStatus === "running" || normalizedStatus === "waiting_scan") && !hasQrPayload);
 });
 const channelQrBindingStartButtonLabel = computed(() => {
   if (channelQrBindingConnecting.value) {
     return "正在连接中...";
   }
-  if (channelQrBindingRawUrl.value) {
+  const normalizedStatus = (channelQrBindingSnapshot.value?.status ?? "").trim().toLowerCase();
+  const normalizedChannelType = normalizeChannelPaneType(
+    channelQrBindingSnapshot.value?.channelType || channelQrBindingChannelType.value
+  );
+  const waitElapsedMs = resolveChannelQrBindingWaitElapsedMs(channelQrBindingSnapshot.value);
+  if (normalizedChannelType === "whatsapp" && normalizedStatus === "waiting_scan" && !channelQrBindingRawUrl.value && !channelQrBindingRawAscii.value) {
+    if (waitElapsedMs < WHATSAPP_QR_BINDING_RETRY_HINT_DELAY_MS) {
+      return "正在获取二维码...";
+    }
+    return "重新尝试连接";
+  }
+  if (channelQrBindingRawUrl.value || channelQrBindingRawAscii.value) {
     return "重新获取二维码";
   }
   const channelName = activeChannelConfigMeta.value?.name?.trim() || "频道";
@@ -16074,12 +16776,21 @@ const voiceActionButtonLabel = computed(() => {
   }
   return "语音发送";
 });
+const chatSendButtonLabel = computed(() => {
+  if (isSending.value || isSubmittingChat.value) {
+    return "打断并发送";
+  }
+  return "发送消息";
+});
 const chatComposerPlaceholder = computed(() => {
   if (isVoiceRecording.value) {
     return `录音中 ${voiceRecordingDurationLabel.value}，再次点击麦克风结束并发送`;
   }
   if (isVoiceRecordingProcessing.value) {
     return "正在处理语音，请稍候...";
+  }
+  if (isSending.value || isSubmittingChat.value) {
+    return "正在回复中，输入内容后发送可打断并引导回复";
   }
   const agent = activeAgent.value;
   if (!agent) {
@@ -17202,30 +17913,130 @@ const startupOpenClawShowActions = computed(
   () => !startupOpenClawInstalling.value && (Boolean(startupOpenClawInstallError.value) || startupOpenClawShowManualActions.value)
 );
 
-const taskSummary = computed(() => {
-  const total = taskItems.value.length;
-  const todo = taskItems.value.filter((item) => item.status === "todo").length;
-  const doing = taskItems.value.filter((item) => item.status === "in_progress").length;
-  const review = taskItems.value.filter((item) => item.status === "in_review").length;
-  const done = taskItems.value.filter((item) => item.status === "done").length;
-  const cancelled = taskItems.value.filter((item) => item.status === "cancelled").length;
+const taskBoardSnapshotHasRuntimeData = computed(
+  () => Boolean(taskBoardSnapshot.value && !taskBoardSnapshot.value.sourcePath.startsWith("localStorage:"))
+);
 
-  return { total, todo, doing, review, done, cancelled };
+const taskBoardAllItems = computed(() => {
+  const localItems = sortTaskRecords(taskItems.value).map((task) => mapLocalTaskToBoardItem(task));
+  if (!taskBoardSnapshotHasRuntimeData.value) {
+    return localItems;
+  }
+  const scheduledItems = (taskBoardSnapshot.value?.jobs ?? []).map((job) => mapScheduledTaskToBoardItem(job));
+  return sortTaskRecordsForColumn([...localItems, ...scheduledItems]);
 });
 
-const activeTaskProjectName = computed(() =>
-  taskProjectNames.value.includes(activeTaskProject.value) ? activeTaskProject.value : DEFAULT_TASK_PROJECT_NAME
-);
+const taskBoardAgentOptions = computed(() => {
+  const names = new Set(
+    taskBoardAllItems.value
+      .filter((item) => item.ownerType === "agent")
+      .map((item) => item.owner.trim())
+      .filter(Boolean)
+  );
+  return Array.from(names).sort((left, right) => left.localeCompare(right, "zh-CN"));
+});
 
-const activeProjectTaskItems = computed(() =>
-  sortTaskRecords(taskItems.value.filter((item) => isTaskInProject(item, activeTaskProjectName.value)))
-);
+const taskBoardTeamOptions = computed(() => {
+  const names = new Set(taskBoardAllItems.value.map((item) => item.team.trim()).filter(Boolean));
+  return Array.from(names).sort((left, right) => left.localeCompare(right, "zh-CN"));
+});
 
-const activeProjectTaskColumns = computed(() =>
+const filteredTaskBoardItems = computed(() => {
+  const keyword = taskBoardSearch.value.trim().toLowerCase();
+  return taskBoardAllItems.value.filter((item) => {
+    if (taskBoardSourceFilter.value === "manual" && item.isScheduled) {
+      return false;
+    }
+    if (taskBoardSourceFilter.value === "scheduled" && !item.isScheduled) {
+      return false;
+    }
+    if (taskBoardAgentFilter.value !== TASK_BOARD_FILTER_ALL && item.owner !== taskBoardAgentFilter.value) {
+      return false;
+    }
+    if (taskBoardTeamFilter.value !== TASK_BOARD_FILTER_ALL && item.team !== taskBoardTeamFilter.value) {
+      return false;
+    }
+    if (!keyword) {
+      return true;
+    }
+    const blob = [item.title, item.summary, item.owner, item.team, item.currentStepLabel].join(" ").toLowerCase();
+    return blob.includes(keyword);
+  });
+});
+
+const taskBoardColumnsWithItems = computed(() =>
   taskBoardColumns.map((column) => ({
     ...column,
-    tasks: sortTaskRecordsForColumn(activeProjectTaskItems.value.filter((item) => item.status === column.id))
+    tasks: sortTaskRecordsForColumn(filteredTaskBoardItems.value.filter((item) => item.status === column.id))
   }))
+);
+
+const taskBoardOwnerGroups = computed<TaskBoardOwnerGroup[]>(() => {
+  const mode = taskBoardGroupMode.value;
+  if (mode === "status") {
+    return [];
+  }
+  const groups = new Map<string, TaskBoardTaskItem[]>();
+  for (const item of filteredTaskBoardItems.value) {
+    const key = mode === "agent" ? item.owner : item.team;
+    const list = groups.get(key) ?? [];
+    list.push(item);
+    groups.set(key, list);
+  }
+  return Array.from(groups.entries())
+    .map(([label, tasks]) => ({
+      id: label,
+      label,
+      count: tasks.length,
+      tasks: sortTaskRecordsForColumn(tasks)
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+});
+
+const selectedTaskBoardItem = computed(() => {
+  if (!taskBoardSelectedTaskKey.value) {
+    return null;
+  }
+  return taskBoardAllItems.value.find((item) => item.boardKey === taskBoardSelectedTaskKey.value) ?? null;
+});
+
+watch(
+  () => filteredTaskBoardItems.value.map((item) => item.boardKey).join("|"),
+  () => {
+    if (!taskBoardSelectedTaskKey.value) {
+      return;
+    }
+    if (!filteredTaskBoardItems.value.some((item) => item.boardKey === taskBoardSelectedTaskKey.value)) {
+      taskBoardSelectedTaskKey.value = null;
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => taskBoardAgentOptions.value.join("|"),
+  () => {
+    if (taskBoardAgentFilter.value === TASK_BOARD_FILTER_ALL) {
+      return;
+    }
+    if (!taskBoardAgentOptions.value.includes(taskBoardAgentFilter.value)) {
+      taskBoardAgentFilter.value = TASK_BOARD_FILTER_ALL;
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => taskBoardTeamOptions.value.join("|"),
+  () => {
+    if (taskBoardTeamFilter.value === TASK_BOARD_FILTER_ALL) {
+      return;
+    }
+    if (!taskBoardTeamOptions.value.includes(taskBoardTeamFilter.value)) {
+      taskBoardTeamFilter.value = TASK_BOARD_FILTER_ALL;
+    }
+  },
+  { immediate: true }
 );
 
 watch(
@@ -17252,21 +18063,6 @@ watch(
   { immediate: true }
 );
 
-const taskProjectCards = computed<TaskProjectCard[]>(() =>
-  taskProjectNames.value.map((projectName) => {
-    const records = taskItems.value.filter((item) => isTaskInProject(item, projectName));
-    return {
-      name: projectName,
-      count: records.length,
-      activeCount: records.filter((item) => item.status !== "done" && item.status !== "cancelled").length,
-      doneCount: records.filter((item) => item.status === "done").length,
-      reviewCount: records.filter((item) => item.status === "in_review").length,
-      updatedAt: records.reduce((latest, item) => (latest === null || item.updatedAt > latest ? item.updatedAt : latest), null as number | null),
-      isDefault: projectName === DEFAULT_TASK_PROJECT_NAME
-    };
-  })
-);
-
 onMounted(() => {
   if (typeof document !== "undefined") {
     document.addEventListener("mousedown", handleChatQuickCreateMenuDocumentMouseDown);
@@ -17286,8 +18082,7 @@ onMounted(() => {
   }
   pruneChatUserGroupMembership();
   taskItems.value = loadTasks();
-  taskProjectNames.value = loadTaskProjectsFromStorage();
-  syncTaskProjectNamesFromTasks();
+  void refreshTaskBoardSnapshot();
   startTaskReminderMonitor();
   scheduleStartupOpenClawReadyCheck();
   scheduleInitialChatPageBootstrap();
@@ -17311,6 +18106,7 @@ onBeforeUnmount(() => {
     document.removeEventListener("keydown", handleChannelPaneItemContextMenuDocumentKeyDown);
   }
   stopSystemThemeModeListener();
+  interruptActiveChatReply();
   clearRuntimeToolSyncRetryTimer();
   stopFeishuQrCountdown();
   resetChannelQrBindingState({ clearSession: true });
@@ -19427,9 +20223,21 @@ watch(
                       <ControlIcon name="mic" />
                     </button>
                     <button
+                      v-if="isSending || isSubmittingChat"
+                      class="composer-stop"
+                      type="button"
+                      title="停止当前回复"
+                      aria-label="停止当前回复"
+                      @click="interruptActiveChatReply()"
+                    >
+                      <ControlIcon name="close" />
+                    </button>
+                    <button
                       class="composer-send"
                       type="button"
-                      :disabled="!activeAgent || isSending || isVoiceRecording || isVoiceRecordingProcessing || (!chatInput.trim() && chatAttachments.length === 0)"
+                      :title="chatSendButtonLabel"
+                      :aria-label="chatSendButtonLabel"
+                      :disabled="!activeAgent || isVoiceRecording || isVoiceRecordingProcessing || (!chatInput.trim() && chatAttachments.length === 0)"
                       @click="submitChat"
                     >
                       <ControlIcon name="send" />
@@ -19450,7 +20258,11 @@ watch(
         </template>
         </template>
 
-        <main v-else class="module-board" :class="{ 'module-board--dashboard': activeSection === 'dashboard' }">
+        <main
+          v-else
+          class="module-board"
+          :class="{ 'module-board--dashboard': activeSection === 'dashboard', 'module-board--tasks': activeSection === 'tasks' }"
+        >
           <template v-if="activeSection === 'dashboard'">
             <header
               class="module-board__header module-board__header--dashboard"
@@ -19529,33 +20341,6 @@ watch(
               <h2>{{ getModuleTitle(activeSection) }}</h2>
               <p>{{ missionStatement }}</p>
             </header>
-
-            <div v-if="activeSection === 'tasks'" class="module-board__metrics">
-              <article>
-                <span>任务总数</span>
-                <strong>{{ taskSummary.total }}</strong>
-              </article>
-              <article>
-                <span>待办</span>
-                <strong>{{ taskSummary.todo }}</strong>
-              </article>
-              <article>
-                <span>进行中</span>
-                <strong>{{ taskSummary.doing }}</strong>
-              </article>
-              <article>
-                <span>回顾</span>
-                <strong>{{ taskSummary.review }}</strong>
-              </article>
-              <article>
-                <span>已完成</span>
-                <strong>{{ taskSummary.done }}</strong>
-              </article>
-              <article>
-                <span>已取消</span>
-                <strong>{{ taskSummary.cancelled }}</strong>
-              </article>
-            </div>
 
             <template v-if="activeSection === 'recruitment'">
               <section class="module-surface recruitment-surface">
@@ -19803,114 +20588,124 @@ watch(
                 <p v-if="taskModuleNotice" class="module-surface__hint module-surface__hint--notice">{{ taskModuleNotice }}</p>
                 <p v-if="taskModuleError" class="module-surface__hint module-surface__hint--error">{{ taskModuleError }}</p>
 
-                <template v-if="taskModuleView === 'projects'">
-                  <div class="task-project-toolbar">
-                    <input
-                      v-model="taskProjectInput"
-                      class="module-surface__search"
-                      type="text"
-                      placeholder="输入项目名称，例如：发布计划"
-                      @keydown.enter.prevent="handleCreateTaskProject"
-                    />
-                    <button class="module-surface__button" type="button" @click="handleCreateTaskProject">添加项目</button>
-                  </div>
-
-                  <div class="task-project-grid">
+                <div class="task-board-actions">
+                  <div class="task-board-group-mode" role="tablist" aria-label="任务看板分组方式">
                     <button
-                      v-for="project in taskProjectCards"
-                      :key="project.name"
+                      v-for="mode in taskBoardGroupModeOptions"
+                      :key="`task-group-mode-${mode.id}`"
+                      class="task-board-group-mode__button"
+                      :class="{ 'is-active': taskBoardGroupMode === mode.id }"
                       type="button"
-                      class="task-project-card"
-                      :class="{ 'task-project-card--default': project.isDefault }"
-                      @click="openTaskProjectBoard(project.name)"
+                      @click="taskBoardGroupMode = mode.id"
                     >
-                      <div class="task-project-card__head">
-                        <strong>{{ project.name }}</strong>
-                        <span>{{ project.count }} 项</span>
-                      </div>
-                      <p>
-                        进行中 {{ project.activeCount }} · 回顾 {{ project.reviewCount }} · 完成 {{ project.doneCount }}
-                      </p>
-                      <small>
-                        {{ project.updatedAt ? `最近更新 ${formatDateTime(project.updatedAt)}` : "暂无任务，点击进入看板开始创建。" }}
-                      </small>
+                      {{ mode.label }}
                     </button>
                   </div>
-                </template>
-
-                <template v-else>
-                  <div class="task-board-topbar">
-                    <button class="task-board-back" type="button" @click="openTaskProjectsHome">← 返回项目</button>
-                    <div>
-                      <strong>{{ activeTaskProjectName }}</strong>
-                      <p>{{ activeProjectTaskItems.length }} 项任务 · 参照 vibe-kanban 五列流转</p>
-                    </div>
+                  <div class="task-board-actions__buttons">
+                    <button class="task-board-action" type="button" :disabled="isTaskBoardRefreshing" @click="refreshTaskBoardSnapshot">
+                      {{ isTaskBoardRefreshing ? "刷新中..." : "刷新快照" }}
+                    </button>
+                    <button class="task-board-action task-board-action--primary" type="button" @click="openTaskCreateModal">添加任务</button>
                   </div>
+                </div>
 
-                  <div class="task-board-creator">
-                    <input
-                      v-model="taskDraftTitle"
-                      type="text"
-                      class="task-board-creator__input task-board-creator__input--title"
-                      placeholder="新增任务标题"
-                      @keydown.enter.prevent="handleCreateTaskInActiveProject"
-                    />
-                    <input v-model="taskDraftSummary" type="text" class="task-board-creator__input" placeholder="任务摘要（可选）" />
-                    <input v-model="taskDraftOwner" type="text" class="task-board-creator__input" placeholder="负责人（默认 Commander）" />
-                    <select v-model="taskDraftPriority" class="task-board-creator__select">
-                      <option value="p0">P0 紧急</option>
-                      <option value="p1">P1 常规</option>
-                      <option value="p2">P2 低优先</option>
-                    </select>
-                    <button class="task-board-creator__button" type="button" @click="handleCreateTaskInActiveProject">添加任务</button>
-                  </div>
-
-                  <div class="task-board-columns">
-                    <section
-                      v-for="column in activeProjectTaskColumns"
-                      :key="column.id"
-                      class="task-board-column"
-                      :class="{ 'is-drag-over': taskDragOverStatus === column.id }"
-                      @dragover.prevent="handleTaskColumnDragOver(column.id)"
-                      @drop.prevent="handleTaskColumnDrop(column.id)"
-                    >
-                      <header class="task-board-column__header">
-                        <div>
-                          <strong>{{ column.label }}</strong>
-                          <span>{{ column.subtitle }}</span>
-                        </div>
-                        <em>{{ column.tasks.length }}</em>
-                      </header>
-
-                      <div v-if="column.tasks.length === 0" class="task-board-column__empty">{{ column.emptyText }}</div>
-                      <div v-else class="task-board-column__list">
-                        <article
-                          v-for="task in column.tasks"
-                          :key="task.id"
-                          class="task-board-card"
-                          :data-status="task.status"
-                          :data-priority="task.priority"
-                          draggable="true"
-                          @dragstart="handleTaskDragStart(task.id)"
-                          @dragend="handleTaskDragEnd"
-                        >
-                          <div class="task-board-card__head">
-                            <strong>{{ task.title }}</strong>
-                            <span>{{ getTaskPriorityText(task.priority) }}</span>
-                          </div>
-                          <p>{{ task.summary }}</p>
-                          <small>{{ task.owner }} · 截止 {{ formatDateTime(task.dueAt) }} · 更新 {{ formatDateTime(task.updatedAt) }}</small>
-                          <div class="task-board-card__actions">
-                            <button type="button" :disabled="!getTaskPrevStatus(task.status)" @click="moveTaskToPrevStatus(task)">上一步</button>
-                            <button type="button" :disabled="!getTaskNextStatus(task.status)" @click="moveTaskToNextStatus(task)">下一步</button>
-                          </div>
-                        </article>
+                <div v-if="taskBoardGroupMode === 'status'" class="task-board-columns">
+                  <section
+                    v-for="column in taskBoardColumnsWithItems"
+                    :key="column.id"
+                    class="task-board-column"
+                    :class="{ 'is-drag-over': taskDragOverStatus === column.id }"
+                    @dragover.prevent="handleTaskColumnDragOver(column.id)"
+                    @drop.prevent="handleTaskColumnDrop(column.id)"
+                  >
+                    <header class="task-board-column__header">
+                      <div>
+                        <strong>{{ column.label }}</strong>
+                        <span>{{ column.subtitle }}</span>
                       </div>
-                    </section>
-                  </div>
-                </template>
+                      <em>{{ column.tasks.length }}</em>
+                    </header>
+
+                    <div v-if="column.tasks.length === 0" class="task-board-column__empty">{{ column.emptyText }}</div>
+                    <div v-else class="task-board-column__list">
+                      <article
+                        v-for="task in column.tasks"
+                        :key="task.boardKey"
+                        class="task-board-card"
+                        :class="{ 'is-selected': selectedTaskBoardItem?.boardKey === task.boardKey }"
+                        :data-status="task.status"
+                        :data-priority="task.priority"
+                        :draggable="task.source === 'local'"
+                        @dragstart="handleTaskDragStart(task.id, task.source)"
+                        @dragend="handleTaskDragEnd"
+                        @click="openTaskBoardDetail(task)"
+                      >
+                        <div class="task-board-card__head">
+                          <strong>{{ task.title }}</strong>
+                          <span class="task-board-chip task-board-chip--source">
+                            {{ task.isScheduled ? formatTaskScheduleKind(task.scheduleKind, false) : "手动" }}
+                          </span>
+                        </div>
+                        <p v-if="task.summary" class="task-board-card__summary">{{ task.summary }}</p>
+                        <div class="task-board-card__foot">
+                          <div class="task-board-card__participants">
+                            <span v-for="avatar in getTaskBoardAvatarItems(task)" :key="`${task.boardKey}-${avatar.key}`" class="task-board-card__avatar">
+                              <img v-if="avatar.avatarUrl" :src="avatar.avatarUrl ?? undefined" :alt="avatar.alt" />
+                              <span v-else>{{ avatar.initial }}</span>
+                            </span>
+                            <span v-if="getTaskBoardAvatarOverflow(task) > 0" class="task-board-card__avatar-extra">
+                              +{{ getTaskBoardAvatarOverflow(task) }}
+                            </span>
+                          </div>
+                        </div>
+                      </article>
+                    </div>
+                    <button class="task-board-column__adder" type="button" aria-label="添加任务" @click="openTaskCreateModal">+</button>
+                  </section>
+                </div>
+
+                <div v-else class="task-board-owner-groups">
+                  <section v-for="group in taskBoardOwnerGroups" :key="`task-owner-group-${group.id}`" class="task-board-owner-group">
+                    <header class="task-board-owner-group__header">
+                      <strong>{{ group.label }}</strong>
+                      <em>{{ group.count }}</em>
+                    </header>
+                    <div class="task-board-owner-group__list">
+                      <article
+                        v-for="task in group.tasks"
+                        :key="task.boardKey"
+                        class="task-board-card"
+                        :class="{ 'is-selected': selectedTaskBoardItem?.boardKey === task.boardKey }"
+                        :data-status="task.status"
+                        :data-priority="task.priority"
+                        @click="openTaskBoardDetail(task)"
+                      >
+                        <div class="task-board-card__head">
+                          <strong>{{ task.title }}</strong>
+                          <span class="task-board-chip task-board-chip--source">
+                            {{ task.isScheduled ? formatTaskScheduleKind(task.scheduleKind, false) : "手动" }}
+                          </span>
+                        </div>
+                        <p v-if="task.summary" class="task-board-card__summary">{{ task.summary }}</p>
+                        <div class="task-board-card__foot">
+                          <div class="task-board-card__participants">
+                            <span v-for="avatar in getTaskBoardAvatarItems(task)" :key="`${task.boardKey}-${avatar.key}`" class="task-board-card__avatar">
+                              <img v-if="avatar.avatarUrl" :src="avatar.avatarUrl ?? undefined" :alt="avatar.alt" />
+                              <span v-else>{{ avatar.initial }}</span>
+                            </span>
+                            <span v-if="getTaskBoardAvatarOverflow(task) > 0" class="task-board-card__avatar-extra">
+                              +{{ getTaskBoardAvatarOverflow(task) }}
+                            </span>
+                          </div>
+                        </div>
+                      </article>
+                    </div>
+                    <button class="task-board-column__adder" type="button" aria-label="添加任务" @click="openTaskCreateModal">+</button>
+                  </section>
+                </div>
+
               </section>
-              <p class="module-board__detail">任务来源：localStorage（默认项目 {{ DEFAULT_TASK_PROJECT_NAME }} 收纳未归属项目任务）。</p>
+              <p v-if="taskBoardRefreshError" class="module-board__error">{{ taskBoardRefreshError }}</p>
             </template>
 
             <template v-else>
@@ -19920,6 +20715,125 @@ watch(
           </template>
         </main>
       </div>
+    </div>
+
+    <div v-if="isTaskCreateModalOpen" class="related-resource-modal-backdrop" @click.self="closeTaskCreateModal">
+      <section class="task-create-modal" role="dialog" aria-modal="true" aria-label="新增任务">
+        <header class="task-create-modal__header">
+          <div>
+            <strong>新增任务</strong>
+            <p>创建后会直接进入看板，可继续查看执行步骤与进度。</p>
+          </div>
+          <button class="task-create-modal__close" type="button" aria-label="关闭新增任务弹窗" @click="closeTaskCreateModal">×</button>
+        </header>
+
+        <form class="task-create-modal__body" @submit.prevent="handleTaskCreateModalSubmit">
+          <p v-if="taskModuleError" class="task-create-modal__status task-create-modal__status--error">{{ taskModuleError }}</p>
+
+          <div class="task-create-modal__grid">
+            <label class="task-create-modal__field task-create-modal__field--full">
+              <span>任务标题</span>
+              <input v-model="taskDraftTitle" type="text" placeholder="请输入任务标题" />
+            </label>
+
+            <label class="task-create-modal__field task-create-modal__field--full">
+              <span>任务摘要（可选）</span>
+              <textarea v-model="taskDraftSummary" rows="2" placeholder="补充任务说明，便于团队对齐目标" />
+            </label>
+
+            <label class="task-create-modal__field">
+              <span>负责人类型</span>
+              <select v-model="taskDraftOwnerType">
+                <option value="agent">Agent</option>
+                <option value="team">团队</option>
+              </select>
+            </label>
+
+            <label class="task-create-modal__field">
+              <span>负责人</span>
+              <input
+                v-model="taskDraftOwner"
+                type="text"
+                :placeholder="taskDraftOwnerType === 'team' ? '例如：交付团队' : '例如：Commander'"
+              />
+            </label>
+
+            <label class="task-create-modal__field">
+              <span>所属团队（可选）</span>
+              <input v-model="taskDraftTeam" type="text" placeholder="例如：业务增长组" />
+            </label>
+
+            <label class="task-create-modal__field">
+              <span>截止时间</span>
+              <input v-model="taskDraftDueAt" type="datetime-local" />
+            </label>
+
+            <label class="task-create-modal__field">
+              <span>优先级</span>
+              <select v-model="taskDraftPriority">
+                <option value="p0">P0 紧急</option>
+                <option value="p1">P1 常规</option>
+                <option value="p2">P2 低优先</option>
+              </select>
+            </label>
+          </div>
+
+          <footer class="task-create-modal__actions">
+            <button type="button" class="task-create-modal__action task-create-modal__action--secondary" @click="closeTaskCreateModal">取消</button>
+            <button type="submit" class="task-create-modal__action task-create-modal__action--primary">创建任务</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+
+    <div v-if="selectedTaskBoardItem" class="related-resource-modal-backdrop" @click.self="closeTaskBoardDetail">
+      <section class="task-board-detail-modal" role="dialog" aria-modal="true" :aria-label="`任务详情：${selectedTaskBoardItem.title}`">
+        <header class="task-board-detail__header">
+          <div class="task-board-detail__title-wrap">
+            <div class="task-board-detail__title-line">
+              <strong>{{ selectedTaskBoardItem.title }}</strong>
+              <span v-if="selectedTaskBoardItem.isScheduled" class="task-board-detail__title-tag">定时任务</span>
+            </div>
+            <p v-if="selectedTaskBoardItem.summary">{{ selectedTaskBoardItem.summary }}</p>
+          </div>
+          <button type="button" class="task-board-detail__close" aria-label="关闭任务详情" @click="closeTaskBoardDetail">×</button>
+        </header>
+
+        <div class="task-board-detail__owner">
+          <span class="task-board-detail__owner-avatar">
+            <img
+              v-if="selectedTaskBoardItem.ownerAvatarUrl"
+              :src="selectedTaskBoardItem.ownerAvatarUrl ?? undefined"
+              :alt="selectedTaskBoardItem.ownerAvatarAlt"
+            />
+            <span v-else>{{ selectedTaskBoardItem.ownerAvatarInitial }}</span>
+          </span>
+          <div class="task-board-detail__owner-info">
+            <small>负责人</small>
+            <strong>{{ getTaskBoardOwnerDisplayName(selectedTaskBoardItem) }}</strong>
+            <p>{{ formatTaskBoardTeamDisplay(selectedTaskBoardItem.team) }}</p>
+          </div>
+        </div>
+
+        <div class="task-board-detail__steps">
+          <article
+            v-for="(step, index) in selectedTaskBoardItem.steps"
+            :key="`task-detail-step-${step.id}`"
+            class="task-board-detail__step"
+            :data-status="step.status"
+          >
+            <header class="task-board-detail__step-head">
+              <span class="task-board-detail__step-index">{{ index + 1 }}</span>
+              <div>
+                <strong>{{ step.title }}</strong>
+                <small>{{ formatDateTime(step.updatedAt) }}</small>
+              </div>
+              <span class="task-board-detail__step-status" :data-status="step.status">{{ getTaskStepStatusLabel(step.status) }}</span>
+            </header>
+            <p>{{ step.detail || "暂无详细描述。" }}</p>
+          </article>
+        </div>
+      </section>
     </div>
 
     <div v-if="isCreateEmployeeModalOpen" class="create-employee-modal-backdrop" @click.self="closeCreateEmployeeModal">
@@ -20588,7 +21502,7 @@ watch(
               </button>
               <p v-if="channelQrBindingConnecting" class="channel-qr-bind__connecting">正在连接中，请稍候...</p>
 
-              <div v-if="channelQrBindingRawUrl" class="channel-qr-bind__panel">
+              <div v-if="channelQrBindingRawUrl || channelQrBindingRawAscii" class="channel-qr-bind__panel">
                 <div class="channel-qr-bind__image-shell">
                   <img
                     v-if="channelQrBindingImageUrl"
@@ -20599,7 +21513,14 @@ watch(
                   />
                   <p v-else class="channel-qr-bind__connecting">二维码渲染中，请稍候...</p>
                 </div>
-                <button class="related-resource-modal__refresh" type="button" @click="handleOpenChannelQrBindingLink">打开扫码链接</button>
+                <button
+                  v-if="channelQrBindingRawUrl"
+                  class="related-resource-modal__refresh"
+                  type="button"
+                  @click="handleOpenChannelQrBindingLink"
+                >
+                  打开扫码链接
+                </button>
               </div>
               <p v-if="channelQrBindingImageError" class="channel-config-modal__error">二维码渲染失败，可点击“打开扫码链接”完成绑定。</p>
             </section>
@@ -27015,6 +27936,27 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   opacity: 0.8;
 }
 
+.composer-stop {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #d4dbe7;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  position: static;
+  color: #6f8bb4;
+  background: #f4f6fa;
+  flex-shrink: 0;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.composer-stop:hover {
+  border-color: #c2cddd;
+  background: #e7edf7;
+  color: #4f6f9f;
+}
+
 .composer-new-chat {
   height: 28px;
   border: 1px solid #c8d4e8;
@@ -27080,7 +28022,8 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 }
 
 .composer-voice-action svg,
-.composer-send svg {
+.composer-send svg,
+.composer-stop svg {
   width: 14px;
   height: 14px;
 }
@@ -27181,12 +28124,20 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   overflow: auto;
   background: #ffffff;
   color: #24344f;
+  min-height: 0;
 }
 
 .module-board--utility-logs {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
+}
+
+.module-board--tasks {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  overflow: hidden;
 }
 
 .module-board__header--utility-logs {
@@ -27258,31 +28209,6 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   margin-top: 10px;
   color: var(--dashboard-muted);
   font-size: 13px;
-}
-
-.module-board__metrics {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
-}
-
-.module-board__metrics article {
-  padding: 12px;
-  border: 1px solid #d5e1f0;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.88);
-}
-
-.module-board__metrics span {
-  color: #7990b0;
-  font-size: 12px;
-}
-
-.module-board__metrics strong {
-  display: block;
-  margin-top: 6px;
-  font-size: 22px;
 }
 
 .module-board__note {
@@ -29568,171 +30494,104 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .task-module-surface {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  min-height: 0;
+  height: 100%;
+  padding: 12px;
+  border: 1px solid #d8dde8;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #eff1f6 0%, #e8ebf2 100%);
 }
 
-.task-project-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.task-project-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
-}
-
-.task-project-card {
-  border: 1px solid #d9e4f5;
-  border-radius: 12px;
-  background: #ffffff;
-  padding: 11px;
-  text-align: left;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  cursor: pointer;
-  transition: transform 130ms ease, border-color 130ms ease, box-shadow 130ms ease;
-}
-
-.task-project-card:hover {
-  transform: translateY(-1px);
-  border-color: #b7cff0;
-  box-shadow: 0 8px 20px rgba(62, 94, 146, 0.12);
-}
-
-.task-project-card--default {
-  border-color: #9fc0f5;
-  background: #f4f8ff;
-}
-
-.task-project-card__head {
+.task-board-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.task-board-actions__buttons {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
 }
 
-.task-project-card__head strong {
-  color: #2d3f5d;
-  font-size: 14px;
+.task-board-group-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.task-project-card__head span {
+.task-board-group-mode__button {
+  height: 31px;
+  border: 1px solid #d4d9e6;
   border-radius: 999px;
-  padding: 2px 8px;
-  border: 1px solid #c9dcf6;
-  background: #ebf3ff;
-  color: #466895;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.task-project-card p {
-  margin: 0;
-  color: #607895;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.task-project-card small {
-  color: #8093ae;
-  font-size: 11px;
-}
-
-.task-board-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.task-board-topbar strong {
-  color: #2f3f5b;
-  font-size: 16px;
-}
-
-.task-board-topbar p {
-  margin: 3px 0 0;
-  color: #6d83a4;
-  font-size: 12px;
-}
-
-.task-board-back {
-  height: 32px;
-  border: 1px solid #c9daf6;
-  border-radius: 8px;
-  background: #eaf3ff;
-  color: #315f95;
-  padding: 0 11px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.task-board-creator {
-  display: grid;
-  grid-template-columns: minmax(200px, 1.5fr) minmax(160px, 1.5fr) minmax(120px, 1fr) auto auto;
-  gap: 8px;
-}
-
-.task-board-creator__input,
-.task-board-creator__select,
-.task-board-creator__button {
-  height: 34px;
-  border-radius: 8px;
-  font-size: 12px;
-}
-
-.task-board-creator__input {
-  border: 1px solid #d3dff0;
-  background: #ffffff;
-  color: #304868;
-  padding: 0 10px;
-  outline: 0;
-}
-
-.task-board-creator__select {
-  padding-left: 10px;
-}
-
-.task-board-creator__input--title {
-  font-weight: 600;
-}
-
-.task-board-creator__button {
-  border: 1px solid #c9daf6;
-  background: #eaf3ff;
-  color: #315f95;
+  background: #f6f7fb;
+  color: #5f6f89;
   padding: 0 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.task-board-group-mode__button.is-active {
+  border-color: #a9bedf;
+  background: #e8eef9;
+  color: #355584;
+}
+
+.task-board-action {
+  height: 31px;
+  border: 1px solid #d2d9e7;
+  border-radius: 9px;
+  background: #f7f9fd;
+  color: #586a86;
+  padding: 0 12px;
+  font-size: 11px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.task-board-action--primary {
+  border-color: #9bb7de;
+  background: #e5edf9;
+  color: #345783;
+}
+
+.task-board-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .task-board-columns {
   display: grid;
-  grid-template-columns: repeat(5, minmax(230px, 1fr));
+  grid-template-columns: repeat(5, minmax(240px, 1fr));
   gap: 10px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding-bottom: 4px;
+  align-items: stretch;
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 auto;
 }
 
 .task-board-column {
-  border: 1px solid #dbe7f7;
-  border-radius: 12px;
-  background: #f8fbff;
-  padding: 10px;
-  min-height: 320px;
+  border: 1px solid #d8ddea;
+  border-radius: 14px;
+  background: rgba(235, 239, 247, 0.88);
+  padding: 9px;
+  min-height: 0;
+  height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 8px;
 }
 
 .task-board-column.is-drag-over {
-  border-color: #8fb7f3;
-  background: #eef5ff;
+  border-color: #9ab7df;
+  background: rgba(227, 235, 247, 0.96);
 }
 
 .task-board-column__header {
@@ -29740,38 +30599,44 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 1px 2px 0;
 }
 
 .task-board-column__header strong {
   display: block;
-  color: #2d3f5d;
-  font-size: 14px;
+  color: #2f3d56;
+  font-size: 13px;
+  letter-spacing: 0.01em;
 }
 
 .task-board-column__header span {
-  color: #6f84a5;
-  font-size: 11px;
+  color: #7f8aa1;
+  font-size: 10px;
 }
 
 .task-board-column__header em {
   font-style: normal;
   border-radius: 999px;
-  border: 1px solid #cfe0f7;
-  padding: 1px 8px;
-  background: #edf4ff;
-  color: #486894;
-  font-size: 11px;
+  border: 1px solid #d0d7e5;
+  padding: 0 7px;
+  background: #f4f7fc;
+  color: #72809a;
+  font-size: 10px;
   font-weight: 700;
+  min-height: 18px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .task-board-column__empty {
-  border: 1px dashed #d2ddec;
+  border: 1px dashed #cfd5e3;
   border-radius: 10px;
-  padding: 14px 10px;
+  padding: 16px 10px;
   text-align: center;
-  color: #7f90aa;
-  font-size: 12px;
+  color: #808da6;
+  font-size: 11px;
   align-self: start;
+  background: rgba(255, 255, 255, 0.45);
 }
 
 .task-board-column__list {
@@ -29779,109 +30644,645 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   flex-direction: column;
   gap: 8px;
   min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.task-board-column__adder {
+  height: 24px;
+  border: 1px solid #cfd5e2;
+  border-radius: 8px;
+  background: #edf1f8;
+  color: #95a2b8;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.task-board-column__adder:hover {
+  border-color: #bec8dc;
+  color: #6f7d95;
+  background: #e5ebf5;
+}
+
+.task-board-owner-groups {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
 }
 
 .task-board-card {
-  border: 1px solid #d8e4f5;
-  border-radius: 10px;
+  border: 1px solid #dde2ec;
+  border-radius: 12px;
   background: #ffffff;
-  padding: 9px;
+  padding: 10px;
   display: grid;
-  gap: 6px;
+  gap: 8px;
+  cursor: pointer;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.task-board-card[draggable="true"] {
   cursor: grab;
 }
 
+.task-board-card:hover {
+  border-color: #cfd8e8;
+  box-shadow: 0 12px 18px rgba(83, 98, 128, 0.12);
+  transform: translateY(-1px);
+}
+
+.task-board-card.is-selected {
+  border-color: #b8c8df;
+  box-shadow: 0 0 0 1px rgba(130, 157, 195, 0.25);
+}
+
 .task-board-card[data-priority="p0"] {
-  border-color: #f1c9c9;
-  background: #fff9f9;
+  border-color: #e8d4d4;
 }
 
 .task-board-card[data-priority="p1"] {
-  border-color: #d8e4f5;
+  border-color: #dde2ec;
 }
 
 .task-board-card[data-priority="p2"] {
-  border-color: #dce6ef;
-  background: #fafcff;
+  border-color: #dde3ee;
 }
 
 .task-board-card[data-status="in_progress"] {
-  border-color: #bfe4cc;
-  background: #f2fdf6;
+  border-color: #cde4d6;
 }
 
 .task-board-card[data-status="in_review"] {
-  border-color: #f4deb0;
-  background: #fff9ee;
+  border-color: #eadab4;
 }
 
 .task-board-card[data-status="done"] {
-  border-color: #cbead5;
-  background: #eefbf3;
+  border-color: #d1e6d9;
 }
 
 .task-board-card[data-status="cancelled"] {
-  border-color: #e4e7ed;
-  background: #f7f8fb;
+  border-color: #dde1e8;
 }
 
 .task-board-card__head {
+  min-height: 30px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-board-card__head strong {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: #2f3a4f;
+  font-size: 14px;
+  line-height: 1.35;
+  word-break: break-word;
+  flex: 1;
+  min-width: 0;
+}
+
+.task-board-chip {
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 7px;
+  color: #6e7a91;
+  background: #f3f5f9;
+  flex-shrink: 0;
+}
+
+.task-board-chip--source {
+  border-color: #edd9ae;
+  background: #fff6df;
+  color: #97712b;
+}
+
+.task-board-card__summary {
+  margin: 0;
+  color: #78849a;
+  font-size: 11px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.task-board-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.task-board-card__participants {
+  display: inline-flex;
+  align-items: center;
+}
+
+.task-board-card__avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1.5px solid #ffffff;
+  background: #ebf0f8;
+  color: #4f6487;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: -6px;
+  box-shadow: 0 0 0 1px rgba(206, 214, 230, 0.9);
+}
+
+.task-board-card__avatar:first-child {
+  margin-left: 0;
+}
+
+.task-board-card__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.task-board-card__avatar span {
+  line-height: 1;
+}
+
+.task-board-card__avatar-extra {
+  margin-left: 5px;
+  padding: 0 6px;
+  min-height: 18px;
+  border-radius: 999px;
+  border: 1px solid #d6dce8;
+  background: #f7f9fd;
+  color: #687993;
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+}
+
+.task-board-owner-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.task-board-owner-group {
+  border: 1px solid #d6dcea;
+  border-radius: 14px;
+  background: rgba(236, 240, 247, 0.88);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.task-board-owner-group__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.task-board-card__head strong {
-  color: #2f3f5b;
+.task-board-owner-group__header strong {
+  color: #2f3d56;
   font-size: 13px;
-  line-height: 1.35;
 }
 
-.task-board-card__head span {
-  flex-shrink: 0;
-  border: 1px solid #d3dff0;
+.task-board-owner-group__header em {
+  font-style: normal;
   border-radius: 999px;
-  padding: 1px 7px;
+  border: 1px solid #d0d7e5;
+  padding: 0 7px;
+  background: #f4f7fc;
+  color: #72809a;
   font-size: 10px;
   font-weight: 700;
-  color: #60728f;
-  background: #f8fbff;
-}
-
-.task-board-card p {
-  margin: 0;
-  color: #6f83a3;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.task-board-card small {
-  color: #8596b1;
-  font-size: 11px;
-}
-
-.task-board-card__actions {
-  display: flex;
+  min-height: 18px;
+  display: inline-flex;
   align-items: center;
+}
+
+.task-board-owner-group__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.task-board-detail-modal {
+  width: min(760px, calc(100vw - 36px));
+  max-height: calc(100vh - 42px);
+  border: 1px solid #dbe7f7;
+  border-radius: 14px;
+  background: #f7f9fd;
+  box-shadow: 0 24px 58px rgba(20, 30, 47, 0.3);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.task-board-detail__header {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #e5edf8;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.task-board-detail__header strong {
+  color: #24344f;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.task-board-detail__header p {
+  margin: 6px 0 0;
+  color: #5f769b;
+  font-size: 13px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.task-board-detail__title-wrap {
+  min-width: 0;
+  display: grid;
   gap: 6px;
 }
 
-.task-board-card__actions button {
-  flex: 1;
-  height: 27px;
-  border: 1px solid #d1ddef;
-  border-radius: 7px;
-  background: #f8fbff;
-  color: #587297;
+.task-board-detail__title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-board-detail__title-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid #d2ddf0;
+  background: #edf3fb;
+  color: #567198;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
+}
+
+.task-board-detail__close {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #ccd9ec;
+  border-radius: 10px;
+  background: #f1f6fe;
+  color: #3f608f;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.task-board-detail__close:hover {
+  border-color: #b8cae6;
+  background: #e9f1fd;
+}
+
+.task-board-detail__close:active {
+  transform: translateY(1px);
+}
+
+.task-board-detail__owner {
+  margin: 10px 16px 0;
+  border: 1px solid #d7e2f2;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px 11px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.task-board-detail__owner-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #d5e1f2;
+  background: #ecf3ff;
+  color: #496489;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.task-board-detail__owner-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.task-board-detail__owner-info {
+  min-width: 0;
+}
+
+.task-board-detail__owner-info strong {
+  display: block;
+  color: #2f4466;
+  font-size: 14px;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.task-board-detail__owner-info small {
+  display: block;
+  color: #8a99b1;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+.task-board-detail__owner-info p {
+  margin: 3px 0 0;
+  color: #7185a4;
+  font-size: 12px;
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.task-board-detail__steps {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.task-board-detail__step {
+  border: 1px solid #d9e5f5;
+  border-radius: 11px;
+  background: #ffffff;
+  padding: 10px 11px;
+  display: grid;
+  gap: 6px;
+  position: relative;
+}
+
+.task-board-detail__step-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.task-board-detail__step-head > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.task-board-detail__step-index {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid #ceddf1;
+  background: #f0f5fd;
+  color: #5f7497;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-board-detail__step strong {
+  display: block;
+  color: #2f4464;
+  font-size: 14px;
+}
+
+.task-board-detail__step-head small {
+  display: block;
+  margin-top: 2px;
+  color: #8698b1;
+  font-size: 11px;
+}
+
+.task-board-detail__step-status {
+  min-height: 22px;
+  border-radius: 999px;
+  border: 1px solid #d3deef;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  background: #f2f6fc;
+  color: #607695;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.task-board-detail__step-status[data-status="running"] {
+  border-color: #badfc8;
+  background: #edf9f1;
+  color: #3e845c;
+}
+
+.task-board-detail__step-status[data-status="done"] {
+  border-color: #c8e7d3;
+  background: #ecf9f1;
+  color: #3d865f;
+}
+
+.task-board-detail__step-status[data-status="blocked"] {
+  border-color: #eccfcf;
+  background: #fff2f2;
+  color: #a55555;
+}
+
+.task-board-detail__step-status[data-status="pending"] {
+  border-color: #d5dceb;
+  background: #f2f4f9;
+  color: #6d7890;
+}
+
+.task-board-detail__step p {
+  margin: 0;
+  color: #637b9f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.task-board-detail__step[data-status="blocked"] {
+  border-color: #efdbdb;
+  background: #fffafb;
+}
+
+.task-create-modal {
+  width: min(620px, calc(100vw - 36px));
+  max-height: calc(100vh - 42px);
+  border-radius: 14px;
+  border: 1px solid #dbe4f3;
+  background: #ffffff;
+  box-shadow: 0 22px 52px rgba(20, 27, 42, 0.32);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.task-create-modal__header {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #e8eef8;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-create-modal__header strong {
+  display: block;
+  color: #253450;
+  font-size: 17px;
+}
+
+.task-create-modal__header p {
+  margin: 4px 0 0;
+  color: #7c8da8;
+  font-size: 12px;
+}
+
+.task-create-modal__close {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #d6dfef;
+  border-radius: 8px;
+  background: #f4f8ff;
+  color: #4d607f;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.task-create-modal__body {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.task-create-modal__status {
+  margin: 0;
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.task-create-modal__status--error {
+  border: 1px solid #f1c2c2;
+  background: #fff3f3;
+  color: #a83b3b;
+}
+
+.task-create-modal__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.task-create-modal__field {
+  display: grid;
+  gap: 6px;
+}
+
+.task-create-modal__field--full {
+  grid-column: 1 / -1;
+}
+
+.task-create-modal__field span {
+  color: #5f7291;
+  font-size: 12px;
+}
+
+.task-create-modal__field input,
+.task-create-modal__field select,
+.task-create-modal__field textarea {
+  width: 100%;
+  border-radius: 9px;
+  border: 1px solid #d3dff0;
+  background: #ffffff;
+  color: #304868;
+  font-size: 13px;
+  padding: 0 10px;
+  outline: 0;
+}
+
+.task-create-modal__field input,
+.task-create-modal__field select {
+  height: 34px;
+}
+
+.task-create-modal__field textarea {
+  min-height: 66px;
+  resize: vertical;
+  padding: 8px 10px;
+}
+
+.task-create-modal__field input:focus,
+.task-create-modal__field select:focus,
+.task-create-modal__field textarea:focus {
+  border-color: #9fc0f5;
+  box-shadow: 0 0 0 2px rgba(101, 149, 220, 0.18);
+}
+
+.task-create-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.task-create-modal__action {
+  height: 32px;
+  border-radius: 9px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
 }
 
-.task-board-card__actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
+.task-create-modal__action--secondary {
+  border: 1px solid #d6dfef;
+  background: #f4f8ff;
+  color: #4d607f;
+}
+
+.task-create-modal__action--primary {
+  border: 1px solid #b4caf0;
+  background: #e8f1ff;
+  color: #285b98;
 }
 
 .chat-user-group-modal {
@@ -33733,6 +35134,7 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .composer-attachment-chip small,
 .composer-attachment-chip button,
 .composer-input-action,
+.composer-stop,
 .composer-model-chip,
 .composer-archive-chip {
   color: var(--cp-text-muted);
@@ -33768,6 +35170,16 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
 .composer-send:disabled {
   background: #c5cfdf;
   color: #eff3fa;
+}
+
+.composer-stop {
+  border-color: var(--cp-border);
+  background: var(--cp-surface-elevated);
+}
+
+.composer-stop:hover {
+  background: var(--cp-active-bg);
+  color: var(--cp-text);
 }
 
 .composer-new-chat {
@@ -34258,12 +35670,12 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
     font-size: 16px;
   }
 
-  .task-board-creator {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .task-board-actions {
+    align-items: flex-start;
   }
 
-  .task-board-creator__button {
-    grid-column: span 2;
+  .task-create-modal__grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .task-board-columns {
@@ -34960,30 +36372,59 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
     flex: 1 1 auto;
   }
 
-  .task-project-toolbar {
-    flex-direction: column;
-    align-items: stretch;
+  .task-board-actions__buttons {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
-  .task-project-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .task-create-modal {
+    width: min(620px, calc(100vw - 24px));
   }
 
-  .task-board-topbar {
-    flex-direction: column;
-    align-items: flex-start;
+  .task-board-detail-modal {
+    width: min(760px, calc(100vw - 24px));
   }
 
-  .task-board-creator {
-    grid-template-columns: minmax(0, 1fr);
+  .task-create-modal__actions {
+    justify-content: stretch;
   }
 
-  .task-board-creator__button {
-    grid-column: auto;
+  .task-create-modal__action {
+    flex: 1 1 auto;
   }
 
   .task-board-columns {
     grid-template-columns: repeat(5, minmax(220px, 1fr));
+  }
+
+  .task-board-owner-group__list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task-board-detail__header strong {
+    font-size: 19px;
+  }
+
+  .task-board-detail__title-line {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .task-board-detail__owner {
+    margin: 8px 12px 0;
+  }
+
+  .task-board-detail__owner-info strong {
+    font-size: 13px;
+  }
+
+  .task-board-detail__steps {
+    padding: 10px 12px 12px;
+  }
+
+  .task-board-detail__step-head {
+    flex-wrap: wrap;
   }
 
   .recruitment-role-grid {

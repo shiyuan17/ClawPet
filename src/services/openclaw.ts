@@ -24,6 +24,7 @@ export type OpenClawRequestOptions = {
   protocol?: "openai" | "anthropic" | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  signal?: AbortSignal | null;
 };
 
 type OpenAIChatCompletionResponse = {
@@ -112,6 +113,31 @@ type RuntimeBridge = Window & {
   __OPENCLAW__?: OpenClawWindowBridge;
   __OPENCLAW_ENDPOINT__?: string;
 };
+
+function createAbortError() {
+  const error = new Error("请求已中断。");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal | null) {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+async function withAbortSignal<T>(promise: Promise<T>, signal?: AbortSignal | null) {
+  if (!signal) {
+    return promise;
+  }
+  throwIfAborted(signal);
+  return await Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      signal.addEventListener("abort", () => reject(createAbortError()), { once: true });
+    })
+  ]);
+}
 
 function toErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -227,27 +253,31 @@ function getAnthropicPayload(messages: OpenClawMessage[], model: string) {
 }
 
 export async function sendOpenClawChat(messages: OpenClawMessage[], options: OpenClawRequestOptions = {}) {
+  throwIfAborted(options.signal);
   const runtime = getRuntimeBridge();
   const protocol = options.protocol ?? "openai";
 
   const agentId = options.agentId ?? null;
 
   if (!agentId && !options.endpoint && !options.apiKey && !options.model && !options.protocol && runtime?.__OPENCLAW__?.chat) {
-    const result = await runtime.__OPENCLAW__.chat({ messages });
+    const result = await withAbortSignal(runtime.__OPENCLAW__.chat({ messages }), options.signal);
     return normalizeResponse(result);
   }
 
   if (runtime?.__TAURI__?.core?.invoke) {
     try {
-      const result = await runtime.__TAURI__.core.invoke("openclaw_chat", {
-        messages,
-        endpoint: options.endpoint ?? null,
-        apiKey: options.apiKey ?? null,
-        model: options.model ?? null,
-        protocol,
-        agentId,
-        sessionKey: options.sessionKey ?? null
-      });
+      const result = await withAbortSignal(
+        runtime.__TAURI__.core.invoke("openclaw_chat", {
+          messages,
+          endpoint: options.endpoint ?? null,
+          apiKey: options.apiKey ?? null,
+          model: options.model ?? null,
+          protocol,
+          agentId,
+          sessionKey: options.sessionKey ?? null
+        }),
+        options.signal
+      );
       return normalizeResponse(result);
     } catch (error) {
       throw new Error(toErrorMessage(error));
@@ -295,10 +325,15 @@ export async function sendOpenClawChat(messages: OpenClawMessage[], options: Ope
     headers.Authorization = `Bearer ${token}`;
   }
 
+  if (protocol === "openai" && isOpenAICompatibleEndpoint(endpoint) && isLocalProxyEndpoint(endpoint)) {
+    headers["x-openclaw-scopes"] = "operator.write";
+  }
+
   const response = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: options.signal ?? undefined
   });
 
   if (!response.ok) {

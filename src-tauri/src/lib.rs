@@ -2,7 +2,7 @@ use base64::Engine;
 use chrono::Utc;
 use getrandom::getrandom;
 use hmac::{Hmac, Mac};
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha1::Sha1;
@@ -348,6 +348,7 @@ struct OpenClawChannelQrBindingSessionSnapshot {
     channel_type: String,
     status: String,
     qr_url: Option<String>,
+    qr_ascii: Option<String>,
     detail: Option<String>,
     logs: Vec<String>,
     started_at_ms: u128,
@@ -360,6 +361,9 @@ struct OpenClawChannelQrBindingSessionState {
     channel_type: String,
     status: String,
     qr_url: Option<String>,
+    qr_ascii: Option<String>,
+    qr_ascii_collecting: bool,
+    qr_ascii_buffer: Vec<String>,
     detail: Option<String>,
     logs: Vec<String>,
     started_at_ms: u128,
@@ -1061,14 +1065,14 @@ fn resolve_openclaw_gateway_token_for_onboard() -> Result<String, String> {
 }
 
 fn resolve_openclaw_config_path() -> PathBuf {
-    if let Ok(explicit) = std::env::var("OPENCLAW_CONFIG_PATH") {
-        let trimmed = explicit.trim();
-        if !trimmed.is_empty() {
-            return expand_home_path(trimmed);
-        }
-    }
-
     resolve_openclaw_home_path().join("openclaw.json")
+}
+
+fn official_openclaw_install_hint_for_platform() -> String {
+    if cfg!(target_os = "windows") {
+        return "请先按官方安装脚本安装 OpenClaw（Windows PowerShell）：`iwr -useb https://openclaw.ai/install.ps1 | iex`；安装后执行 `openclaw onboard --install-daemon`。".to_string();
+    }
+    "请先按官方安装脚本安装 OpenClaw（macOS/Linux/WSL2）：`curl -fsSL https://openclaw.ai/install.sh | bash`；安装后执行 `openclaw onboard --install-daemon`。".to_string()
 }
 
 #[derive(Default, Debug, Clone)]
@@ -1091,12 +1095,15 @@ impl ChatCompletionsEndpointEnableOutcome {
         let mut segments = Vec::new();
         if !self.changed_paths.is_empty() {
             segments.push(format!(
-                "已写入 gateway.http.endpoints.chatCompletions.enabled=true（{}）",
+                "已写入 gateway.mode=local 且 gateway.http.endpoints.chatCompletions.enabled=true（{}）",
                 self.changed_paths.join(", ")
             ));
         }
         if !self.unchanged_paths.is_empty() {
-            segments.push(format!("配置已开启（{}）", self.unchanged_paths.join(", ")));
+            segments.push(format!(
+                "配置已就绪（gateway.mode=local 且 chatCompletions.enabled=true）（{}）",
+                self.unchanged_paths.join(", ")
+            ));
         }
         if !self.failures.is_empty() {
             segments.push(format!("写入失败（{}）", self.failures.join("；")));
@@ -1110,16 +1117,7 @@ impl ChatCompletionsEndpointEnableOutcome {
 }
 
 fn collect_openclaw_candidate_config_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let primary = resolve_openclaw_config_path();
-    paths.push(primary.clone());
-
-    let fallback = resolve_default_openclaw_config_path();
-    if fallback != primary {
-        paths.push(fallback);
-    }
-
-    paths
+    vec![resolve_openclaw_config_path()]
 }
 
 fn ensure_openclaw_chat_completions_endpoint_enabled_at_path(
@@ -1144,6 +1142,16 @@ fn ensure_openclaw_chat_completions_endpoint_enabled_at_path(
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or("openclaw.json 的 gateway 字段不是对象")?;
+    let mut changed = false;
+    let gateway_mode_ready = gateway_obj
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().eq_ignore_ascii_case("local"))
+        .unwrap_or(false);
+    if !gateway_mode_ready {
+        gateway_obj.insert("mode".to_string(), Value::String("local".to_string()));
+        changed = true;
+    }
     let http_obj = gateway_obj
         .entry("http")
         .or_insert_with(|| serde_json::json!({}))
@@ -1160,11 +1168,13 @@ fn ensure_openclaw_chat_completions_endpoint_enabled_at_path(
         .as_object_mut()
         .ok_or("openclaw.json 的 gateway.http.endpoints.chatCompletions 字段不是对象")?;
 
-    if chat_obj.get("enabled").and_then(Value::as_bool) == Some(true) {
+    if chat_obj.get("enabled").and_then(Value::as_bool) != Some(true) {
+        chat_obj.insert("enabled".to_string(), Value::Bool(true));
+        changed = true;
+    }
+    if !changed {
         return Ok(false);
     }
-
-    chat_obj.insert("enabled".to_string(), Value::Bool(true));
     write_openclaw_config_value(&config_path, &parsed)?;
     Ok(true)
 }
@@ -1196,7 +1206,7 @@ fn ensure_openclaw_chat_completions_endpoint_enabled() -> Result<bool, String> {
     }
 
     Err(format!(
-        "无法启用 gateway.http.endpoints.chatCompletions.enabled：{}",
+        "无法确保 gateway.mode=local 与 gateway.http.endpoints.chatCompletions.enabled=true：{}",
         outcome.detail()
     ))
 }
@@ -1516,6 +1526,120 @@ fn sanitize_openclaw_channel_schema() -> Result<Option<String>, String> {
     )))
 }
 
+fn normalize_path_for_plugin_compare(path: &Path) -> String {
+    let display = path.display().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        display.replace('\\', "/").to_ascii_lowercase()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        display.replace('\\', "/")
+    }
+}
+
+fn sanitize_openclaw_plugin_load_paths_at_path(config_path: &Path) -> Result<Option<String>, String> {
+    let raw = match std::fs::read_to_string(config_path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("无法读取 openclaw.json: {error}")),
+    };
+    let mut parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败: {error}"))?;
+    let Some(root_obj) = parsed.as_object_mut() else {
+        return Ok(None);
+    };
+    let Some(plugins_obj) = root_obj.get_mut("plugins").and_then(Value::as_object_mut) else {
+        return Ok(None);
+    };
+    let Some(load_obj) = plugins_obj.get_mut("load").and_then(Value::as_object_mut) else {
+        return Ok(None);
+    };
+    let Some(paths_arr) = load_obj.get_mut("paths").and_then(Value::as_array_mut) else {
+        return Ok(None);
+    };
+
+    let project_root = resolve_project_root();
+    let project_root_norm = normalize_path_for_plugin_compare(&project_root);
+    let project_prefix = format!("{project_root_norm}/");
+
+    let mut changed = false;
+    let mut removed_project_paths = 0usize;
+    let mut seen = HashSet::new();
+    let mut next_paths = Vec::new();
+
+    for value in paths_arr.iter() {
+        let Some(path_raw) = value.as_str() else {
+            changed = true;
+            continue;
+        };
+        let trimmed = path_raw.trim();
+        if trimmed.is_empty() {
+            changed = true;
+            continue;
+        }
+
+        let normalized = normalize_path_for_plugin_compare(Path::new(trimmed));
+        if normalized == project_root_norm || normalized.starts_with(&project_prefix) {
+            changed = true;
+            removed_project_paths = removed_project_paths.saturating_add(1);
+            continue;
+        }
+
+        if !seen.insert(normalized) {
+            changed = true;
+            continue;
+        }
+
+        next_paths.push(Value::String(trimmed.to_string()));
+    }
+
+    if !changed {
+        return Ok(None);
+    }
+
+    *paths_arr = next_paths;
+    write_openclaw_config_value(config_path, &parsed)?;
+    Ok(Some(format!(
+        "{} -> removed_project_paths={removed_project_paths}",
+        config_path.display()
+    )))
+}
+
+fn sanitize_openclaw_plugin_load_paths() -> Result<Option<String>, String> {
+    let mut changed_paths = Vec::new();
+    let mut failures = Vec::new();
+    for path in collect_openclaw_candidate_config_paths() {
+        match sanitize_openclaw_plugin_load_paths_at_path(&path) {
+            Ok(Some(detail)) => changed_paths.push(detail),
+            Ok(None) => {}
+            Err(error) => failures.push(format!("{}: {error}", path.display())),
+        }
+    }
+
+    if changed_paths.is_empty() && failures.is_empty() {
+        return Ok(None);
+    }
+    if !changed_paths.is_empty() && failures.is_empty() {
+        return Ok(Some(format!(
+            "已清理 plugins.load.paths 中的项目内路径与重复项：{}",
+            changed_paths.join("；")
+        )));
+    }
+    if changed_paths.is_empty() && !failures.is_empty() {
+        return Err(format!(
+            "清理 plugins.load.paths 失败：{}",
+            failures.join("；")
+        ));
+    }
+
+    Ok(Some(format!(
+        "已部分清理 plugins.load.paths：{}；剩余失败：{}",
+        changed_paths.join("；"),
+        failures.join("；")
+    )))
+}
+
 fn resolve_user_home_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -1584,13 +1708,6 @@ fn resolve_default_openclaw_config_path() -> PathBuf {
 }
 
 fn resolve_openclaw_home_path() -> PathBuf {
-    if let Ok(explicit) = std::env::var("OPENCLAW_HOME") {
-        let trimmed = explicit.trim();
-        if !trimmed.is_empty() {
-            return expand_home_path(trimmed);
-        }
-    }
-
     resolve_default_openclaw_home_path()
 }
 
@@ -2070,12 +2187,21 @@ fn is_wecom_channel_identifier(normalized_channel: &str) -> bool {
     )
 }
 
+fn is_whatsapp_channel_identifier(normalized_channel: &str) -> bool {
+    matches!(
+        normalized_channel,
+        "whatsapp" | "wa" | "wacli" | "openclaw-whatsapp" | "openclaw_whatsapp"
+    )
+}
+
 fn normalize_channel_identifier_for_openclaw_config(raw: &str) -> String {
     let normalized = normalize_channel_identifier(raw);
     if is_weixin_channel_identifier(&normalized) {
         "openclaw-weixin".to_string()
     } else if is_wecom_channel_identifier(&normalized) {
         "wecom".to_string()
+    } else if is_whatsapp_channel_identifier(&normalized) {
+        "whatsapp".to_string()
     } else {
         normalized
     }
@@ -2187,6 +2313,11 @@ fn resolve_channel_plugin_account_store_paths(channel_type: &str) -> Vec<PathBuf
             openclaw_home.join("openclaw-wecom").join("accounts.json"),
             openclaw_home.join("wecom-openclaw").join("accounts.json"),
             openclaw_home.join("work-wechat").join("accounts.json"),
+        ],
+        "whatsapp" => vec![
+            openclaw_home.join("whatsapp").join("accounts.json"),
+            openclaw_home.join("openclaw-whatsapp").join("accounts.json"),
+            openclaw_home.join("wacli").join("accounts.json"),
         ],
         _ => Vec::new(),
     }
@@ -2326,6 +2457,7 @@ fn sync_channel_accounts_from_plugin_store(channel_type: &str) -> Result<bool, S
     let normalized_channel = normalize_channel_identifier(channel_type);
     if !is_weixin_channel_identifier(&normalized_channel)
         && !is_wecom_channel_identifier(&normalized_channel)
+        && !is_whatsapp_channel_identifier(&normalized_channel)
     {
         return Ok(false);
     }
@@ -2457,6 +2589,14 @@ fn resolve_channel_config_verification_aliases(channel_type: &str) -> HashSet<St
             "qywx".to_string(),
             "openclaw-wecom".to_string(),
             "openclaw_wecom".to_string(),
+        ]);
+    } else if is_whatsapp_channel_identifier(&normalized) {
+        aliases.extend([
+            "whatsapp".to_string(),
+            "wa".to_string(),
+            "wacli".to_string(),
+            "openclaw-whatsapp".to_string(),
+            "openclaw_whatsapp".to_string(),
         ]);
     }
 
@@ -2691,12 +2831,18 @@ fn has_configured_channel_account_in_openclaw_config(channel_type: &str) -> Resu
 }
 
 fn wait_for_channel_config_sync(channel_type: &str) -> Result<bool, String> {
-    for attempt in 0..6 {
+    let normalized = normalize_channel_identifier(channel_type);
+    let max_attempts = if is_whatsapp_channel_identifier(&normalized) {
+        14
+    } else {
+        6
+    };
+    for attempt in 0..max_attempts {
         let _ = sync_channel_accounts_from_plugin_store(channel_type);
         if has_configured_channel_account_in_openclaw_config(channel_type)? {
             return Ok(true);
         }
-        if attempt < 5 {
+        if attempt + 1 < max_attempts {
             thread::sleep(Duration::from_millis(900));
         }
     }
@@ -2805,7 +2951,9 @@ fn ensure_channel_plugin_allowlist(
         "wecom" | "workwechat" | "work-wechat" | "work_wechat" | "wechatwork" | "qywx"
         | "openclaw-wecom" | "openclaw_wecom" => Some("wecom"),
         "qqbot" => Some("qqbot"),
-        "whatsapp" => Some("whatsapp"),
+        "whatsapp" | "wa" | "wacli" | "openclaw-whatsapp" | "openclaw_whatsapp" => {
+            Some("whatsapp")
+        }
         _ => None,
     };
 
@@ -2871,6 +3019,9 @@ fn resolve_channel_plugin_install_spec(channel_type: &str) -> Option<(&'static s
     match normalize_channel_identifier(channel_type).as_str() {
         "feishu" => Some(("openclaw-lark", "@larksuite/openclaw-lark@2026.3.12")),
         "dingtalk" => Some(("dingtalk", "@soimy/dingtalk")),
+        "whatsapp" | "wa" | "wacli" | "openclaw-whatsapp" | "openclaw_whatsapp" => {
+            Some(("whatsapp", "@openclaw/whatsapp"))
+        }
         _ => None,
     }
 }
@@ -7143,6 +7294,7 @@ fn load_openclaw_channel_accounts_snapshot_blocking(
 ) -> Result<OpenClawChannelAccountsSnapshotResponse, String> {
     let _ = sync_channel_accounts_from_plugin_store("weixin");
     let _ = sync_channel_accounts_from_plugin_store("wecom");
+    let _ = sync_channel_accounts_from_plugin_store("whatsapp");
 
     let source_path = resolve_openclaw_config_path();
     let raw = match std::fs::read_to_string(&source_path) {
@@ -7363,7 +7515,7 @@ fn save_openclaw_channel_config(payload: OpenClawChannelConfigPayload) -> Result
 
     ensure_channel_plugin_allowlist(root, &normalized_channel)?;
 
-    if normalized_channel == "whatsapp" {
+    if is_whatsapp_channel_identifier(&normalized_channel) {
         return write_openclaw_config_value(&source_path, &parsed);
     }
 
@@ -8859,20 +9011,19 @@ fn resolve_openclaw_cli_wrapper_source() -> Option<PathBuf> {
         .find(|path| path.exists() && path.is_file())
 }
 
-fn prepend_openclaw_cli_wrapper_to_command_path(command: &mut Command) -> Option<String> {
-    let wrapper_source = resolve_openclaw_cli_wrapper_source()?;
-    let wrapper_dir = wrapper_source.parent()?.to_path_buf();
-    let normalized_wrapper_dir = normalize_windows_path_for_child_process(&wrapper_dir);
+fn prepend_global_openclaw_cli_to_command_path(command: &mut Command) -> Option<String> {
+    let cli_candidate = collect_openclaw_cli_command_candidates().into_iter().next()?;
+    let cli_dir = cli_candidate.parent()?.to_path_buf();
+    let preferred_dir = normalize_windows_path_for_child_process(&cli_dir);
 
-    let mut path_entries = Vec::<PathBuf>::new();
-    path_entries.push(normalized_wrapper_dir.clone());
+    let mut path_entries = vec![preferred_dir.clone()];
     if let Some(existing_path) = std::env::var_os("PATH") {
         path_entries.extend(std::env::split_paths(&existing_path));
     }
 
     let joined_path = std::env::join_paths(path_entries).ok()?;
     command.env("PATH", joined_path);
-    Some(normalized_wrapper_dir.display().to_string())
+    Some(preferred_dir.display().to_string())
 }
 
 fn collect_node_binary_candidates() -> Vec<PathBuf> {
@@ -8882,27 +9033,6 @@ fn collect_node_binary_candidates() -> Vec<PathBuf> {
         let trimmed = explicit.trim();
         if !trimmed.is_empty() {
             let candidate = PathBuf::from(trimmed);
-            if candidate.exists() {
-                candidates.push(candidate);
-            }
-        }
-    }
-
-    for root in resolve_resource_root_candidates() {
-        #[cfg(target_os = "windows")]
-        let node_candidates = [
-            root.join("bin").join("node.exe"),
-            root.join("resources").join("bin").join("node.exe"),
-            root.join("node.exe"),
-        ];
-        #[cfg(not(target_os = "windows"))]
-        let node_candidates = [
-            root.join("bin").join("node"),
-            root.join("resources").join("bin").join("node"),
-            root.join("node"),
-        ];
-
-        for candidate in node_candidates {
             if candidate.exists() {
                 candidates.push(candidate);
             }
@@ -9100,27 +9230,11 @@ fn build_openclaw_command_display(node: &Path, entry: &Path, args: &[&str]) -> S
     parts.join(" ")
 }
 
-fn run_openclaw_cli_output(args: &[&str]) -> Result<(String, std::process::Output), String> {
-    let runtime_dir_raw = resolve_openclaw_runtime_dir()
-        .ok_or("未找到 bundled OpenClaw 运行时目录（openclaw.mjs/package.json）。".to_string())?;
-    let entry_raw = runtime_dir_raw.join("openclaw.mjs");
-    let runtime_dir = normalize_windows_path_for_child_process(&runtime_dir_raw);
-    let entry = normalize_windows_path_for_child_process(&entry_raw);
-    if !entry.exists() {
-        return Err(format!("未找到 OpenClaw 入口脚本：{}", entry.display()));
-    }
-    let (node_raw, _node_version) = resolve_openclaw_node_runtime()?;
-    let node = normalize_windows_path_for_child_process(&node_raw);
+fn apply_openclaw_child_process_env(command: &mut Command) {
     let openclaw_state_dir =
         normalize_windows_path_for_child_process(&resolve_openclaw_home_path());
     let openclaw_config = normalize_windows_path_for_child_process(&resolve_openclaw_config_path());
-
-    let mut command = Command::new(&node);
-    suppress_windows_command_window(&mut command);
     command
-        .arg(&entry)
-        .args(args)
-        .current_dir(&runtime_dir)
         .env("OPENCLAW_NO_RESPAWN", "1")
         .env("OPENCLAW_EMBEDDED_IN", "DragonClaw")
         .env("OPENCLAW_STATE_DIR", openclaw_state_dir.clone())
@@ -9131,20 +9245,271 @@ fn run_openclaw_cli_output(args: &[&str]) -> Result<(String, std::process::Outpu
     if let Some(token) = resolve_openclaw_gateway_token() {
         command.env("OPENCLAW_GATEWAY_TOKEN", token);
     }
+}
 
-    let command_display = build_openclaw_command_display(&node, &entry, args);
-    let output = command
-        .output()
-        .map_err(|error| format!("执行 OpenClaw 命令失败（{command_display}）: {error}"))?;
+fn parse_dotted_numeric_version(raw: &str) -> Option<Vec<u32>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut segments = Vec::new();
+    for segment in trimmed.split('.') {
+        if segment.is_empty() {
+            return None;
+        }
+        let parsed = segment.parse::<u32>().ok()?;
+        segments.push(parsed);
+    }
+    if segments.is_empty() {
+        None
+    } else {
+        Some(segments)
+    }
+}
 
-    Ok((command_display, output))
+fn compare_dotted_numeric_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    let left_segments = parse_dotted_numeric_version(left)?;
+    let right_segments = parse_dotted_numeric_version(right)?;
+    let max_len = left_segments.len().max(right_segments.len());
+    for idx in 0..max_len {
+        let left_value = *left_segments.get(idx).unwrap_or(&0);
+        let right_value = *right_segments.get(idx).unwrap_or(&0);
+        match left_value.cmp(&right_value) {
+            std::cmp::Ordering::Equal => {}
+            value => return Some(value),
+        }
+    }
+    Some(std::cmp::Ordering::Equal)
+}
+
+fn is_openclaw_official_version_newer(official: &str, bundled: &str) -> bool {
+    match compare_dotted_numeric_versions(official, bundled) {
+        Some(std::cmp::Ordering::Greater) => true,
+        Some(_) => false,
+        None => official.trim() != bundled.trim(),
+    }
+}
+
+fn fetch_openclaw_latest_official_version() -> Result<String, String> {
+    tauri::async_runtime::block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(4))
+            .build()
+            .map_err(|error| format!("创建官网版本检查客户端失败: {error}"))?;
+        let response = client
+            .get("https://registry.npmjs.org/openclaw/latest")
+            .header(ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|error| format!("访问官网版本接口失败: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("官网版本接口返回异常状态：{status}"));
+        }
+        let payload = response
+            .json::<Value>()
+            .await
+            .map_err(|error| format!("解析官网版本响应失败: {error}"))?;
+        let version = payload
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or("官网版本响应未包含有效 version 字段。".to_string())?;
+        Ok(version.to_string())
+    })
+}
+
+fn read_bundled_openclaw_runtime_version() -> Option<String> {
+    let runtime_dir = resolve_openclaw_runtime_dir()?;
+    read_json_version_field(&runtime_dir.join("package.json"))
+}
+
+fn collect_npm_command_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::<PathBuf>::new();
+
+    if let Ok(explicit) = std::env::var("OPENCLAW_NPM_PATH") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            let candidate = PathBuf::from(trimmed);
+            if candidate.exists() {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    if let Ok((node_path, _)) = resolve_openclaw_node_runtime() {
+        if let Some(node_dir) = node_path.parent() {
+            #[cfg(target_os = "windows")]
+            let local_npm_candidates = [node_dir.join("npm.cmd"), node_dir.join("npm.exe"), node_dir.join("npm")];
+            #[cfg(not(target_os = "windows"))]
+            let local_npm_candidates = [node_dir.join("npm")];
+
+            for candidate in local_npm_candidates {
+                if candidate.exists() {
+                    candidates.push(candidate);
+                }
+            }
+        }
+    }
+
+    for path in find_command_paths("npm") {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            candidates.push(candidate);
+        }
+    }
+
+    let mut dedup = std::collections::HashSet::new();
+    let mut output = Vec::new();
+    for candidate in candidates {
+        let key = candidate.display().to_string();
+        if dedup.insert(key) {
+            output.push(candidate);
+        }
+    }
+    output
+}
+
+fn run_openclaw_cli_via_npm_exec(
+    package_spec: &str,
+    args: &[String],
+) -> Result<(String, std::process::Output), String> {
+    let npm_candidates = collect_npm_command_candidates();
+    if npm_candidates.is_empty() {
+        return Err("未找到 npm 可执行文件（请确认 PATH 或 OPENCLAW_NPM_PATH）。".to_string());
+    }
+
+    let args_text = args.join(" ");
+    let mut launch_errors = Vec::new();
+    for npm_raw in npm_candidates {
+        let npm = normalize_windows_path_for_child_process(&npm_raw);
+        let mut command = Command::new(&npm);
+        suppress_windows_command_window(&mut command);
+        command
+            .arg("exec")
+            .arg("--yes")
+            .arg(package_spec)
+            .arg("--")
+            .args(args)
+            .current_dir(resolve_project_root());
+        apply_openclaw_child_process_env(&mut command);
+
+        let command_display = format!(
+            "{} exec --yes {} -- {}",
+            npm.display(),
+            package_spec,
+            args_text
+        );
+        match command.output() {
+            Ok(output) => return Ok((command_display, output)),
+            Err(error) => launch_errors.push(format!("{}: {}", npm.display(), error)),
+        }
+    }
+
+    Err(format!(
+        "调用 npm exec 失败（{}）。",
+        launch_errors.join("；")
+    ))
+}
+
+fn collect_openclaw_cli_command_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::<PathBuf>::new();
+
+    if let Ok(explicit) = std::env::var("OPENCLAW_BIN_PATH") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            let candidate = PathBuf::from(trimmed);
+            if candidate.exists() {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    if let Some(home_parent) = resolve_default_openclaw_home_path().parent() {
+        let petclaw_node_root = home_parent.join(".petclaw").join("node");
+        #[cfg(target_os = "windows")]
+        let petclaw_candidates = vec![
+            petclaw_node_root.join("bin").join("openclaw.cmd"),
+            petclaw_node_root.join("bin").join("openclaw.exe"),
+            petclaw_node_root.join("openclaw.cmd"),
+            petclaw_node_root.join("openclaw.exe"),
+        ];
+        #[cfg(not(target_os = "windows"))]
+        let petclaw_candidates = vec![petclaw_node_root.join("bin").join("openclaw")];
+
+        for candidate in petclaw_candidates {
+            if candidate.exists() {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    for path in find_command_paths("openclaw") {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            candidates.push(candidate);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    for path in find_command_paths("openclaw.cmd") {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            candidates.push(candidate);
+        }
+    }
+
+    let mut dedup = std::collections::HashSet::new();
+    let mut output = Vec::new();
+    for candidate in candidates {
+        let key = candidate.display().to_string();
+        if dedup.insert(key) {
+            output.push(candidate);
+        }
+    }
+    output
+}
+
+fn run_openclaw_cli_via_global_command(
+    args: &[&str],
+) -> Result<(String, std::process::Output), String> {
+    let cli_candidates = collect_openclaw_cli_command_candidates();
+    if cli_candidates.is_empty() {
+        return Err(
+            "未找到全局 OpenClaw CLI（openclaw）。请先安装到系统环境并确保 PATH 可见。"
+                .to_string(),
+        );
+    }
+
+    let mut launch_errors = Vec::new();
+    for cli_raw in cli_candidates {
+        let cli = normalize_windows_path_for_child_process(&cli_raw);
+        let mut command = Command::new(&cli);
+        suppress_windows_command_window(&mut command);
+        command.args(args).current_dir(resolve_project_root());
+        apply_openclaw_child_process_env(&mut command);
+        let command_display = format!("{} {}", cli.display(), args.join(" "));
+        match command.output() {
+            Ok(output) => return Ok((command_display, output)),
+            Err(error) => launch_errors.push(format!("{}: {}", cli.display(), error)),
+        }
+    }
+
+    Err(format!(
+        "调用全局 OpenClaw CLI 失败（{}）。",
+        launch_errors.join("；")
+    ))
+}
+
+fn run_openclaw_cli_output(args: &[&str]) -> Result<(String, std::process::Output), String> {
+    run_openclaw_cli_via_global_command(args)
 }
 
 fn install_openclaw_cli_wrapper() -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {
         let wrapper = resolve_openclaw_cli_wrapper_source()
-            .ok_or("未找到 bundled OpenClaw CLI 包装器（openclaw.cmd）。".to_string())?;
+            .ok_or("未找到内置 OpenClaw CLI 包装器（openclaw.cmd）。".to_string())?;
         let cli_dir = wrapper
             .parent()
             .ok_or("无法解析 CLI 包装器目录。".to_string())?;
@@ -9199,7 +9564,7 @@ fn install_openclaw_cli_wrapper() -> Result<Option<String>, String> {
     #[cfg(not(target_os = "windows"))]
     {
         let source = resolve_openclaw_cli_wrapper_source()
-            .ok_or("未找到 bundled OpenClaw CLI 包装器。".to_string())?;
+            .ok_or("未找到内置 OpenClaw CLI 包装器。".to_string())?;
         let home = std::env::var("HOME").map_err(|_| "无法读取 HOME 环境变量。".to_string())?;
         let target_dir = PathBuf::from(home).join(".local").join("bin");
         std::fs::create_dir_all(&target_dir)
@@ -9232,21 +9597,19 @@ fn install_openclaw_cli_wrapper() -> Result<Option<String>, String> {
 }
 
 fn bootstrap_openclaw_runtime(install_cli: bool) -> Result<Vec<String>, String> {
-    let runtime_dir = resolve_openclaw_runtime_dir()
-        .ok_or("未找到 bundled OpenClaw 运行时目录（openclaw.mjs/package.json）。".to_string())?;
-    let entry = runtime_dir.join("openclaw.mjs");
-    if !entry.exists() {
-        return Err(format!("未找到 OpenClaw 入口脚本：{}", entry.display()));
-    }
-    let (node, node_version) = resolve_openclaw_node_runtime()?;
+    let cli_candidates = collect_openclaw_cli_command_candidates();
+    let Some(cli_path) = cli_candidates.first() else {
+        return Err(format!(
+            "未找到全局 OpenClaw CLI（openclaw）。请先安装并确保 PATH 可见。{}",
+            official_openclaw_install_hint_for_platform()
+        ));
+    };
     let openclaw_home = resolve_openclaw_home_path();
 
     let mut notes = vec![
         format!("home={}", openclaw_home.display()),
         format!("config={}", resolve_openclaw_config_path().display()),
-        format!("runtime={}", runtime_dir.display()),
-        format!("entry={}", entry.display()),
-        format!("node={} (v{})", node.display(), node_version),
+        format!("cli={}", cli_path.display()),
     ];
 
     match sanitize_openclaw_channel_schema() {
@@ -9254,43 +9617,70 @@ fn bootstrap_openclaw_runtime(install_cli: bool) -> Result<Vec<String>, String> 
         Ok(None) => {}
         Err(error) => notes.push(format!("channel_schema_sanitize_error={error}")),
     }
+    match sanitize_openclaw_plugin_load_paths() {
+        Ok(Some(detail)) => notes.push(format!("plugin_load_paths_sanitized={detail}")),
+        Ok(None) => {}
+        Err(error) => notes.push(format!("plugin_load_paths_sanitize_error={error}")),
+    }
+    match ensure_openclaw_chat_completions_endpoint_enabled_outcome() {
+        outcome if outcome.any_success() => {
+            notes.push(format!(
+                "gateway_mode_local_and_chat_completions={}",
+                outcome.detail()
+            ));
+        }
+        outcome => {
+            return Err(format!(
+                "OpenClaw 网关配置未就绪（需要 gateway.mode=local 与 chatCompletions.enabled=true）：{}",
+                outcome.detail()
+            ));
+        }
+    }
+
+    match run_openclaw_cli_output(&["--version"]) {
+        Ok((command_display, output)) if output.status.success() => {
+            let version_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !version_text.is_empty() {
+                notes.push(format!("cli_version={version_text}"));
+            } else {
+                notes.push(format!("cli_check={command_display}"));
+            }
+        }
+        Ok((command_display, output)) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if stderr.is_empty() {
+                format!(
+                    "全局 OpenClaw CLI 自检失败（{}，exit: {}）。",
+                    command_display,
+                    output.status.code().unwrap_or(-1)
+                )
+            } else {
+                format!("全局 OpenClaw CLI 自检失败（{}）：{}", command_display, stderr)
+            });
+        }
+        Err(error) => return Err(error),
+    }
 
     if install_cli {
-        match install_openclaw_cli_wrapper() {
-            Ok(Some(path)) => notes.push(format!("cli={path}")),
-            Ok(None) => notes.push("cli=skipped".to_string()),
-            Err(error) => notes.push(format!("cli_error={error}")),
-        }
+        notes.push("cli_mode=global-only".to_string());
     }
 
     Ok(notes)
 }
 
 fn detect_openclaw_installation() -> (bool, Option<String>, Option<String>, String) {
-    let runtime_dir = resolve_openclaw_runtime_dir();
-    let binary = runtime_dir
-        .as_ref()
-        .map(|dir| dir.join("openclaw.mjs").display().to_string());
-
-    let Some(runtime_dir) = runtime_dir else {
+    let cli_candidates = collect_openclaw_cli_command_candidates();
+    let binary = cli_candidates.first().map(|path| path.display().to_string());
+    if binary.is_none() {
         return (
             false,
             None,
             None,
-            "未找到 bundled OpenClaw 运行时目录。请先执行打包脚本。".to_string(),
+            format!(
+                "未找到全局 OpenClaw CLI（openclaw）。请先安装并确保 PATH 可见。{}",
+                official_openclaw_install_hint_for_platform()
+            ),
         );
-    };
-    if !runtime_dir.join("openclaw.mjs").exists() {
-        return (
-            false,
-            None,
-            binary,
-            "运行时目录存在，但 openclaw.mjs 缺失。".to_string(),
-        );
-    }
-    let runtime_version = read_json_version_field(&runtime_dir.join("package.json"));
-    if let Err(error) = resolve_openclaw_node_runtime() {
-        return (false, runtime_version, binary, error);
     }
 
     match run_openclaw_cli_output(&["--version"]) {
@@ -9310,7 +9700,7 @@ fn detect_openclaw_installation() -> (bool, Option<String>, Option<String>, Stri
                 true,
                 version,
                 binary,
-                format!("已检测到 bundled OpenClaw（{command_display}）。"),
+                format!("已检测到全局 OpenClaw CLI（{command_display}）。"),
             )
         }
         Ok((command_display, result)) => {
@@ -9323,9 +9713,9 @@ fn detect_openclaw_installation() -> (bool, Option<String>, Option<String>, Stri
             } else {
                 format!("OpenClaw 命令执行失败（{command_display}）：{stderr}")
             };
-            (false, runtime_version, binary, detail)
+            (false, None, binary, detail)
         }
-        Err(error) => (false, runtime_version, binary, error),
+        Err(error) => (false, None, binary, error),
     }
 }
 
@@ -9337,6 +9727,40 @@ struct OfficialOnboardOutcome {
     exit_code: Option<i32>,
     stdout: String,
     stderr: String,
+}
+
+struct OfficialOnboardCommandRun {
+    command_redacted: String,
+    output: std::process::Output,
+    strategy_note: Option<String>,
+}
+
+fn build_official_onboard_command_redacted(
+    package_spec: Option<&str>,
+    gateway_port: &str,
+    workspace: &str,
+) -> String {
+    let _ = package_spec;
+    let core = format!(
+        "onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice skip --gateway-auth token --gateway-token *** --gateway-port {} --gateway-bind loopback --install-daemon --workspace {} --json",
+        gateway_port, workspace
+    );
+    format!("openclaw {}", core)
+}
+
+fn run_official_onboard_command_with_latest_priority(
+    args: &[String],
+    gateway_port: &str,
+    workspace: &str,
+) -> Result<OfficialOnboardCommandRun, String> {
+    let command_redacted = build_official_onboard_command_redacted(None, gateway_port, workspace);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let (_command_display, output) = run_openclaw_cli_output(&arg_refs)?;
+    Ok(OfficialOnboardCommandRun {
+        command_redacted,
+        output,
+        strategy_note: Some("使用全局 OpenClaw CLI 执行安装。".to_string()),
+    })
 }
 
 fn parse_json_object_from_line_tail(line: &str) -> Option<Value> {
@@ -9578,35 +10002,44 @@ fn run_openclaw_official_silent_onboard_once() -> OfficialOnboardOutcome {
         workspace_string.clone(),
         "--json".to_string(),
     ];
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let command_redacted = format!(
-        "openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice skip --gateway-auth token --gateway-token *** --gateway-port {} --gateway-bind loopback --install-daemon --workspace {} --json",
-        gateway_port_string, workspace_string
-    );
-
-    let (_actual_command, output) = match run_openclaw_cli_output(&arg_refs) {
+    let command_run = match run_official_onboard_command_with_latest_priority(
+        &args,
+        &gateway_port_string,
+        &workspace_string,
+    ) {
         Ok(value) => value,
         Err(error) => {
             return OfficialOnboardOutcome {
                 success: false,
                 degraded: false,
-                command: command_redacted,
-                detail: "官方静默安装失败，无法调用 bundled OpenClaw CLI。".to_string(),
+                command: build_official_onboard_command_redacted(
+                    None,
+                    &gateway_port_string,
+                    &workspace_string,
+                ),
+                detail: "官方静默安装失败，无法调用 OpenClaw CLI。".to_string(),
                 exit_code: None,
                 stdout: String::new(),
                 stderr: error,
             };
         }
     };
+    let command_redacted = command_run.command_redacted;
+    let strategy_note = command_run.strategy_note;
+    let output = command_run.output;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     if output.status.success() {
-        let detail = if let Some(note) = port_switch_note {
-            format!("已按官方 Onboard 流程完成静默安装配置。{note}")
-        } else {
-            "已按官方 Onboard 流程完成静默安装配置。".to_string()
-        };
+        let mut detail = "已按官方 Onboard 流程完成静默安装配置。".to_string();
+        if let Some(note) = strategy_note.as_deref() {
+            detail.push(' ');
+            detail.push_str(note);
+        }
+        if let Some(note) = port_switch_note {
+            detail.push(' ');
+            detail.push_str(&note);
+        }
         OfficialOnboardOutcome {
             success: true,
             degraded: false,
@@ -9623,19 +10056,19 @@ fn run_openclaw_official_silent_onboard_once() -> OfficialOnboardOutcome {
         let soft_failure = is_windows_daemon_install_soft_failure(&stdout, &stderr, &merged_detail);
         if soft_failure {
             let soft_note = "守护进程安装失败，已降级为用户级登录启动项（无需管理员权限）。";
-            let detail = if merged_detail.is_empty() {
-                if let Some(note) = port_switch_note {
-                    format!("已按官方 Onboard 流程完成核心配置。{soft_note} {note}")
-                } else {
-                    format!("已按官方 Onboard 流程完成核心配置。{soft_note}")
-                }
-            } else if let Some(note) = port_switch_note {
-                format!(
-                    "已按官方 Onboard 流程完成核心配置。{soft_note} 详情：{merged_detail} {note}"
-                )
+            let mut detail = if merged_detail.is_empty() {
+                format!("已按官方 Onboard 流程完成核心配置。{soft_note}")
             } else {
                 format!("已按官方 Onboard 流程完成核心配置。{soft_note} 详情：{merged_detail}")
             };
+            if let Some(note) = strategy_note.as_deref() {
+                detail.push(' ');
+                detail.push_str(note);
+            }
+            if let Some(note) = port_switch_note {
+                detail.push(' ');
+                detail.push_str(&note);
+            }
             return OfficialOnboardOutcome {
                 success: true,
                 degraded: true,
@@ -9656,10 +10089,21 @@ fn run_openclaw_official_silent_onboard_once() -> OfficialOnboardOutcome {
                     "官方静默安装失败（exit: {}）。",
                     output.status.code().unwrap_or(-1)
                 );
-                if let Some(note) = port_switch_note {
+                let with_strategy = if let Some(note) = strategy_note.as_deref() {
                     format!("{base} {note}")
                 } else {
                     base
+                };
+                if let Some(note) = port_switch_note {
+                    format!("{with_strategy} {note}")
+                } else {
+                    with_strategy
+                }
+            } else if let Some(strategy) = strategy_note.as_deref() {
+                if let Some(note) = port_switch_note {
+                    format!("官方静默安装失败：{merged_detail} {strategy} {note}")
+                } else {
+                    format!("官方静默安装失败：{merged_detail} {strategy}")
                 }
             } else if let Some(note) = port_switch_note {
                 format!("官方静默安装失败：{merged_detail} {note}")
@@ -9840,7 +10284,7 @@ fn summarize_gateway_bootstrap_failure(stderr: &str, port: u16) -> String {
             "网关初始化失败：检测到端口 {port} 已被占用（常见于 ClawX 或其他 OpenClaw 实例）。请关闭占用进程后重试。"
         );
     }
-    "网关初始化失败，请检查 bundled OpenClaw 运行环境与配置。".to_string()
+    "网关初始化失败，请检查全局 OpenClaw CLI 运行环境与配置。".to_string()
 }
 
 fn is_loopback_port_listening(port: u16) -> bool {
@@ -10049,7 +10493,7 @@ fn run_openclaw_gateway_daemon_ensure_once() -> GatewayDaemonEnsureOutcome {
             return GatewayDaemonEnsureOutcome {
                 success: false,
                 command: "openclaw gateway install --runtime node --port <port> --json".to_string(),
-                detail: "后台守护进程安装失败，无法调用 bundled OpenClaw CLI。".to_string(),
+                detail: "后台守护进程安装失败，无法调用全局 OpenClaw CLI。".to_string(),
                 exit_code: None,
                 stdout: String::new(),
                 stderr: error,
@@ -10093,7 +10537,7 @@ fn run_openclaw_gateway_daemon_ensure_once() -> GatewayDaemonEnsureOutcome {
             return GatewayDaemonEnsureOutcome {
                 success: false,
                 command: format!("{install_command} && openclaw gateway start --json"),
-                detail: "后台守护进程启动失败，无法调用 bundled OpenClaw CLI。".to_string(),
+                detail: "后台守护进程启动失败，无法调用全局 OpenClaw CLI。".to_string(),
                 exit_code: None,
                 stdout: stdout_sections.join("\n\n"),
                 stderr: if stderr_sections.is_empty() {
@@ -10141,7 +10585,7 @@ fn run_openclaw_gateway_daemon_ensure_once() -> GatewayDaemonEnsureOutcome {
                 command: format!(
                     "{install_command} && {start_command} && openclaw gateway status --json"
                 ),
-                detail: "后台守护进程状态检查失败，无法调用 bundled OpenClaw CLI。".to_string(),
+                detail: "后台守护进程状态检查失败，无法调用全局 OpenClaw CLI。".to_string(),
                 exit_code: None,
                 stdout: stdout_sections.join("\n\n"),
                 stderr: if stderr_sections.is_empty() {
@@ -10165,8 +10609,8 @@ fn run_openclaw_gateway_daemon_ensure_once() -> GatewayDaemonEnsureOutcome {
     } else {
         gateway_status_text_indicates_running(&merged_status_text)
     };
-    let port_ready = wait_for_loopback_port_listening(gateway_port, 12, 250);
-    let gateway_probe = if !status_effective || !status_running {
+    let port_ready = wait_for_loopback_port_listening(gateway_port, 36, 250);
+    let gateway_probe = if !status_effective || !status_running || !port_ready {
         check_openclaw_gateway_health_fallback_blocking()
     } else {
         None
@@ -10175,16 +10619,17 @@ fn run_openclaw_gateway_daemon_ensure_once() -> GatewayDaemonEnsureOutcome {
         .as_ref()
         .map(is_gateway_health_probe_online)
         .unwrap_or(false);
-    let fallback_online = port_ready && gateway_probe_online;
-    let effective_success = status_effective || fallback_online;
+    let fallback_online = gateway_probe_online;
+    let effective_success = status_effective || status_running || fallback_online;
     let effective_running = status_running || fallback_online;
+    let effective_ready = port_ready || fallback_online || status_running;
     let status_summary = status_payload
         .as_ref()
         .map(gateway_status_payload_summary)
         .unwrap_or_else(|| "未解析到 JSON 状态对象".to_string());
     let probe_summary = summarize_gateway_health_probe(gateway_probe.as_ref());
 
-    if !effective_success || !effective_running || !port_ready {
+    if !effective_success || !effective_running || !effective_ready {
         let status_detail = format!(
             "status_effective={status_effective}, status_running={status_running}, port_ready={port_ready}, fallback_online={fallback_online}, {status_summary}, {probe_summary}"
         );
@@ -10236,7 +10681,7 @@ fn run_openclaw_gateway_bootstrap_once() -> GatewayBootstrapOutcome {
             return GatewayBootstrapOutcome {
                 success: false,
                 command: "openclaw gateway restart".to_string(),
-                detail: "网关初始化失败，未能调用 bundled OpenClaw CLI。".to_string(),
+                detail: "网关初始化失败，未能调用全局 OpenClaw CLI。".to_string(),
                 exit_code: None,
                 stdout: String::new(),
                 stderr: error,
@@ -10850,7 +11295,7 @@ fn run_lobster_pause_gateway_action() -> LobsterActionResult {
             action: "pause_gateway".to_string(),
             command: "openclaw gateway stop --json".to_string(),
             success: false,
-            detail: "网关暂停失败，无法调用 bundled OpenClaw CLI。".to_string(),
+            detail: "网关暂停失败，无法调用全局 OpenClaw CLI。".to_string(),
             exit_code: None,
             stdout: String::new(),
             stderr: error,
@@ -11213,6 +11658,9 @@ fn proxy_single_request(
     let has_authorization = has_header(&headers, "authorization");
     let has_x_api_key = has_header(&headers, "x-api-key");
     let has_anthropic_version = has_header(&headers, "anthropic-version");
+    let has_openclaw_scopes = has_header(&headers, "x-openclaw-scopes");
+    let should_set_openclaw_scopes =
+        protocol != "anthropic" && should_try_enable_chat_completions_endpoint(&target_url);
 
     tauri::async_runtime::block_on(async move {
         let client = reqwest::Client::new();
@@ -11240,6 +11688,10 @@ fn proxy_single_request(
             }
         } else if !has_authorization && !api_key.trim().is_empty() {
             request = request.header(AUTHORIZATION, format!("Bearer {api_key}"));
+        }
+
+        if should_set_openclaw_scopes && !has_openclaw_scopes {
+            request = request.header("x-openclaw-scopes", "operator.write");
         }
 
         let response = request
@@ -11707,6 +12159,9 @@ async fn openclaw_chat(
         request = request.header("X-OpenClaw-Agent-Id", aid);
     }
     if request_protocol == "openai" && should_try_enable_chat_completions {
+        // OpenClaw gateway HTTP API (2026.3.x) requires explicit operator scopes
+        // via x-openclaw-scopes for guarded methods such as chat.send.
+        request = request.header("x-openclaw-scopes", "operator.write");
         if let Some(session_key) = session_key.as_deref() {
             request = request.header("x-openclaw-session-key", session_key);
         }
@@ -12036,19 +12491,19 @@ async fn check_openclaw_runtime_status() -> Result<OpenClawRuntimeStatusResponse
 fn load_lobster_install_guide() -> Result<LobsterInstallGuideResponse, String> {
     let mut checks: Vec<LobsterInstallCheckItem> = Vec::new();
 
-    let runtime_dir = resolve_openclaw_runtime_dir();
+    let global_cli = collect_openclaw_cli_command_candidates().into_iter().next();
     checks.push(LobsterInstallCheckItem {
         id: "runtime".to_string(),
-        title: "Bundled OpenClaw 运行时".to_string(),
-        status: if runtime_dir.is_some() {
+        title: "全局 OpenClaw CLI".to_string(),
+        status: if global_cli.is_some() {
             "success".to_string()
         } else {
             "failed".to_string()
         },
-        detail: runtime_dir
-            .map(|path| format!("已找到运行时目录：{}", path.display()))
+        detail: global_cli
+            .map(|path| format!("已找到全局 CLI：{}", path.display()))
             .unwrap_or_else(|| {
-                "未找到运行时目录，请先执行 `npm run bundle:openclaw`。".to_string()
+                "未找到全局 openclaw 命令。请先执行 `npm i -g openclaw`（或安装到 ~/.petclaw/node）并确保 PATH 可见。".to_string()
             }),
     });
 
@@ -12101,7 +12556,7 @@ fn load_lobster_install_guide() -> Result<LobsterInstallGuideResponse, String> {
         title: "官方静默安装命令".to_string(),
         status: "success".to_string(),
         detail: format!(
-            "将执行：openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice skip --gateway-auth token --gateway-token *** --gateway-port {} --gateway-bind loopback --install-daemon --workspace {} --json",
+            "将通过全局 openclaw CLI 执行（不使用内置运行时）。命令参数：openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice skip --gateway-auth token --gateway-token *** --gateway-port {} --gateway-bind loopback --install-daemon --workspace {} --json",
             resolve_openclaw_gateway_port(),
             resolve_workspace_main_root().display()
         ),
@@ -12435,7 +12890,7 @@ fn run_openclaw_channel_message_send_blocking(
     ];
     let args_ref: Vec<&str> = args_owned.iter().map(String::as_str).collect();
     let (command_display, output) = run_openclaw_cli_output(&args_ref)
-        .map_err(|error| format!("频道消息发送失败，无法调用 bundled OpenClaw CLI：{error}"))?;
+        .map_err(|error| format!("频道消息发送失败，无法调用全局 OpenClaw CLI：{error}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -12486,7 +12941,7 @@ fn run_openclaw_channel_message_send_blocking(
                         let (prune_retry_command, prune_retry_output) =
                             run_openclaw_cli_output(&retry_args_ref).map_err(|error| {
                                 format!(
-                                    "频道消息发送失败，自动清理插件配置后重试调用 bundled OpenClaw CLI 失败：{error}"
+                                    "频道消息发送失败，自动清理插件配置后重试调用全局 OpenClaw CLI 失败：{error}"
                                 )
                             })?;
                         let prune_retry_stdout =
@@ -12586,7 +13041,7 @@ fn run_openclaw_channel_message_send_blocking(
             let (retry_command, retry_output) =
                 run_openclaw_cli_output(&retry_args_ref).map_err(|error| {
                     format!(
-                        "频道消息发送失败，自动修复飞书插件后重试调用 bundled OpenClaw CLI 失败：{error}"
+                        "频道消息发送失败，自动修复飞书插件后重试调用全局 OpenClaw CLI 失败：{error}"
                     )
                 })?;
             let retry_stdout = String::from_utf8_lossy(&retry_output.stdout).to_string();
@@ -12784,7 +13239,7 @@ fn run_openclaw_channel_plugin_install_blocking(
                 plugin_spec: Some(plugin_spec.to_string()),
                 command,
                 success: false,
-                detail: "插件安装失败，无法调用 bundled OpenClaw CLI。".to_string(),
+                detail: "插件安装失败，无法调用全局 OpenClaw CLI。".to_string(),
                 exit_code: None,
                 stdout: String::new(),
                 stderr: error,
@@ -12819,7 +13274,7 @@ fn run_openclaw_channel_plugin_install_blocking(
                         plugin_spec: Some(plugin_spec.to_string()),
                         command: format!("{install_command} && openclaw plugins uninstall --force {plugin_id}"),
                         success: false,
-                        detail: "检测到插件目录已存在，尝试卸载后重装失败（无法调用 bundled OpenClaw CLI）。".to_string(),
+                        detail: "检测到插件目录已存在，尝试卸载后重装失败（无法调用全局 OpenClaw CLI）。".to_string(),
                         exit_code: install_output.status.code(),
                         stdout: stdout_sections.join("\n\n"),
                         stderr: if stderr_sections.is_empty() {
@@ -12886,7 +13341,7 @@ fn run_openclaw_channel_plugin_install_blocking(
                         plugin_spec: Some(plugin_spec.to_string()),
                         command: format!("{install_command} ; {uninstall_command} ; openclaw plugins install {plugin_spec}"),
                         success: false,
-                        detail: "插件卸载后重装失败，无法调用 bundled OpenClaw CLI。".to_string(),
+                        detail: "插件卸载后重装失败，无法调用全局 OpenClaw CLI。".to_string(),
                         exit_code: uninstall_output.status.code().or(install_output.status.code()),
                         stdout: stdout_sections.join("\n\n"),
                         stderr: if stderr_sections.is_empty() {
@@ -12952,7 +13407,7 @@ fn run_openclaw_channel_plugin_install_blocking(
                 plugin_spec: Some(plugin_spec.to_string()),
                 command,
                 success: false,
-                detail: "插件已安装，但启用失败（无法调用 bundled OpenClaw CLI）。".to_string(),
+                detail: "插件已安装，但启用失败（无法调用全局 OpenClaw CLI）。".to_string(),
                 exit_code: install_output.status.code(),
                 stdout: stdout_sections.join("\n\n"),
                 stderr: if stderr_sections.is_empty() {
@@ -13128,11 +13583,44 @@ fn build_openclaw_channel_qr_binding_snapshot(
         channel_type: state.channel_type.clone(),
         status: state.status.clone(),
         qr_url: state.qr_url.clone(),
+        qr_ascii: state.qr_ascii.clone(),
         detail: state.detail.clone(),
         logs: state.logs.clone(),
         started_at_ms: state.started_at_ms,
         updated_at_ms: state.updated_at_ms,
     }
+}
+
+fn is_whatsapp_ascii_qr_line(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let mut has_blocks = false;
+    for ch in trimmed.chars() {
+        match ch {
+            '█' | '▀' | '▄' => has_blocks = true,
+            ' ' => {}
+            _ => return false,
+        }
+    }
+
+    has_blocks
+}
+
+fn finalize_whatsapp_ascii_qr_capture(session: &mut OpenClawChannelQrBindingSessionState) {
+    if session.qr_ascii_buffer.len() < 8 {
+        session.qr_ascii_collecting = false;
+        session.qr_ascii_buffer.clear();
+        return;
+    }
+
+    session.qr_ascii = Some(session.qr_ascii_buffer.join("\n"));
+    session.qr_ascii_collecting = false;
+    session.qr_ascii_buffer.clear();
+    session.status = "waiting_scan".to_string();
+    session.detail = Some("二维码已生成，请使用手机扫码完成绑定。".to_string());
 }
 
 fn strip_ansi_escape_sequences(raw: &str) -> String {
@@ -13219,7 +13707,7 @@ fn extract_channel_qr_url_from_line(channel_type: &str, line: &str) -> Option<St
     }
 
     let normalized = normalize_channel_identifier(channel_type);
-    if normalized == "weixin" {
+    if is_weixin_channel_identifier(&normalized) {
         if let Some(value) = urls
             .iter()
             .find(|url| url.contains("liteapp.weixin.qq.com"))
@@ -13227,10 +13715,21 @@ fn extract_channel_qr_url_from_line(channel_type: &str, line: &str) -> Option<St
         {
             return Some(value);
         }
-    } else if normalized == "wecom" {
+    } else if is_wecom_channel_identifier(&normalized) {
         if let Some(value) = urls
             .iter()
             .find(|url| url.contains("work.weixin.qq.com/ai/qc/"))
+            .cloned()
+        {
+            return Some(value);
+        }
+    } else if is_whatsapp_channel_identifier(&normalized) {
+        if let Some(value) = urls
+            .iter()
+            .find(|url| {
+                let lower = url.to_ascii_lowercase();
+                lower.contains("whatsapp.com") || lower.contains("wa.me")
+            })
             .cloned()
         {
             return Some(value);
@@ -13258,6 +13757,31 @@ fn update_openclaw_channel_qr_binding_session_from_line(
         let extra = session.logs.len() - 120;
         session.logs.drain(0..extra);
     }
+    let cleaned_lower = cleaned.to_ascii_lowercase();
+    let is_whatsapp = is_whatsapp_channel_identifier(&session.channel_type);
+
+    if is_whatsapp {
+        let is_qr_heading = cleaned_lower.contains("scan this qr in whatsapp")
+            && cleaned_lower.contains("linked devices");
+        if is_qr_heading {
+            if session.qr_ascii_collecting && !session.qr_ascii_buffer.is_empty() {
+                finalize_whatsapp_ascii_qr_capture(session);
+            }
+            session.qr_ascii_collecting = true;
+            session.qr_ascii_buffer.clear();
+        } else if session.qr_ascii_collecting && is_whatsapp_ascii_qr_line(&cleaned) {
+            session.qr_ascii_buffer.push(cleaned.clone());
+            if session.qr_ascii_buffer.len() >= 12 {
+                session.qr_ascii = Some(session.qr_ascii_buffer.join("\n"));
+                session.status = "waiting_scan".to_string();
+                session.detail = Some("二维码已生成，请使用手机扫码完成绑定。".to_string());
+            }
+        } else if session.qr_ascii_collecting
+            && !cleaned_lower.contains("waiting for whatsapp connection")
+        {
+            finalize_whatsapp_ascii_qr_capture(session);
+        }
+    }
 
     if session.qr_url.is_none() {
         if let Some(url) = extract_channel_qr_url_from_line(&session.channel_type, &cleaned) {
@@ -13267,12 +13791,19 @@ fn update_openclaw_channel_qr_binding_session_from_line(
         }
     }
 
+    let has_qr_payload = session.qr_url.is_some() || session.qr_ascii.is_some();
+
     if cleaned.contains("等待扫码")
         || cleaned.contains("等待连接结果")
         || cleaned.contains("请使用微信扫描")
         || cleaned.contains("请使用企业微信扫描")
+        || cleaned_lower.contains("waiting for whatsapp connection")
+        || cleaned_lower.contains("scan the qr")
+        || cleaned_lower.contains("scan qr")
+        || cleaned_lower.contains("waiting for scan")
+        || cleaned_lower.contains("waiting for qr")
     {
-        if session.status == "running" {
+        if session.status == "running" || (is_whatsapp && has_qr_payload) {
             session.status = "waiting_scan".to_string();
         }
     }
@@ -13281,12 +13812,22 @@ fn update_openclaw_channel_qr_binding_session_from_line(
         || cleaned.contains("连接成功")
         || cleaned.contains("已自动获取")
         || cleaned.contains("与微信连接成功")
+        || cleaned_lower.contains("login successful")
+        || cleaned_lower.contains("logged in")
     {
         session.detail = Some(cleaned.clone());
     }
 
-    if cleaned.contains("失败") || cleaned.to_ascii_lowercase().contains("error") {
+    if cleaned.contains("失败") || cleaned_lower.contains("error") {
         session.detail = Some(cleaned);
+    }
+
+    if cleaned_lower.contains("unsupported channel: whatsapp") {
+        session.status = "error".to_string();
+        session.detail = Some(
+            "当前 OpenClaw CLI 版本不支持 WhatsApp 频道。请升级到 2026.3.13 或更高版本后重试。"
+                .to_string(),
+        );
     }
 }
 
@@ -13315,9 +13856,21 @@ fn prune_openclaw_channel_qr_binding_sessions() {
 fn start_openclaw_channel_qr_binding(
     channel_type: String,
 ) -> Result<OpenClawChannelQrBindingSessionSnapshot, String> {
-    let normalized_channel = normalize_channel_identifier(&channel_type);
-    if normalized_channel != "weixin" && normalized_channel != "wecom" {
-        return Err("当前仅支持微信（weixin）和企业微信（wecom）二维码绑定。".to_string());
+    let normalized_input = normalize_channel_identifier(&channel_type);
+    let normalized_channel = if is_weixin_channel_identifier(&normalized_input) {
+        "weixin".to_string()
+    } else if is_wecom_channel_identifier(&normalized_input) {
+        "wecom".to_string()
+    } else if is_whatsapp_channel_identifier(&normalized_input) {
+        "whatsapp".to_string()
+    } else {
+        return Err(
+            "当前仅支持微信（weixin）、企业微信（wecom）和 WhatsApp（whatsapp）二维码绑定。".to_string(),
+        );
+    };
+
+    if let Err(error) = sanitize_openclaw_plugin_load_paths() {
+        eprintln!("[dragonclaw] sanitize plugins.load.paths failed before qr binding: {error}");
     }
 
     prune_openclaw_channel_qr_binding_sessions();
@@ -13326,20 +13879,43 @@ fn start_openclaw_channel_qr_binding(
         .unwrap_or_else(|_| format!("qr-{}", current_timestamp_millis()));
     let openclaw_state_dir = resolve_openclaw_home_path().display().to_string();
     let openclaw_config_path = resolve_openclaw_config_path().display().to_string();
-    let login_command = if normalized_channel == "weixin" {
-        "(openclaw channels login --channel openclaw-weixin) || (openclaw channels login --channel weixin)".to_string()
-    } else {
-        "(openclaw channels login --channel wecom) || (openclaw channels login --channel openclaw-wecom)".to_string()
+    let login_command = match normalized_channel.as_str() {
+        "weixin" => {
+            "(openclaw channels login --channel openclaw-weixin) || (openclaw channels login --channel weixin)"
+                .to_string()
+        }
+        "wecom" => {
+            "(openclaw channels login --channel wecom) || (openclaw channels login --channel openclaw-wecom)"
+                .to_string()
+        }
+        _ => "openclaw channels login --channel whatsapp --verbose".to_string(),
     };
-    let install_command = if normalized_channel == "weixin" {
-        "npx -y @tencent-weixin/openclaw-weixin-cli@latest install".to_string()
-    } else if cfg!(target_os = "windows") {
-        // WeCom CLI 默认首项即“扫码接入（推荐）”，通过换行可自动确认。
-        "echo.| npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
-    } else {
-        "printf '\\n' | npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
+    let install_command = match normalized_channel.as_str() {
+        "weixin" => Some("npx -y @tencent-weixin/openclaw-weixin-cli@latest install".to_string()),
+        "wecom" => Some(if cfg!(target_os = "windows") {
+            // WeCom CLI 默认首项即“扫码接入（推荐）”，通过换行可自动确认。
+            "echo.| npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
+        } else {
+            "printf '\\n' | npx -y @wecom/wecom-openclaw-cli@latest install".to_string()
+        }),
+        "whatsapp" => {
+            Some("openclaw plugins install @openclaw/whatsapp && openclaw plugins enable whatsapp".to_string())
+        }
+        _ => None,
     };
-    let command_line = format!("({login_command}) || (({install_command}) && ({login_command}))");
+    let command_line = if normalized_channel == "whatsapp" {
+        if let Some(install_command) = install_command {
+            format!(
+                "(({install_command}) || (echo [whatsapp] plugin install fallback)) && ({login_command})"
+            )
+        } else {
+            login_command.clone()
+        }
+    } else if let Some(install_command) = install_command {
+        format!("({login_command}) || (({install_command}) && ({login_command}))")
+    } else {
+        login_command.clone()
+    };
 
     let now = current_timestamp_millis();
     let session_state = Arc::new(Mutex::new(OpenClawChannelQrBindingSessionState {
@@ -13347,12 +13923,15 @@ fn start_openclaw_channel_qr_binding(
         channel_type: normalized_channel.clone(),
         status: "running".to_string(),
         qr_url: None,
+        qr_ascii: None,
+        qr_ascii_collecting: false,
+        qr_ascii_buffer: Vec::new(),
         detail: Some(format!(
             "已启动{}绑定流程，正在获取二维码...",
-            if normalized_channel == "weixin" {
-                "微信"
-            } else {
-                "企业微信"
+            match normalized_channel.as_str() {
+                "weixin" => "微信",
+                "wecom" => "企业微信",
+                _ => "WhatsApp",
             }
         )),
         logs: vec![
@@ -13383,7 +13962,7 @@ fn start_openclaw_channel_qr_binding(
             cmd
         };
         suppress_windows_command_window(&mut command);
-        let bundled_cli_path_prefix = prepend_openclaw_cli_wrapper_to_command_path(&mut command);
+        let global_cli_path_prefix = prepend_global_openclaw_cli_to_command_path(&mut command);
         command
             .env("OPENCLAW_NO_RESPAWN", "1")
             .env("OPENCLAW_EMBEDDED_IN", "DragonClaw")
@@ -13397,13 +13976,13 @@ fn start_openclaw_channel_qr_binding(
 
         if let Ok(mut state) = session_state_for_thread.lock() {
             state.updated_at_ms = current_timestamp_millis();
-            if let Some(path_prefix) = bundled_cli_path_prefix {
+            if let Some(path_prefix) = global_cli_path_prefix {
                 state.logs.push(format!(
-                    "已将 bundled OpenClaw CLI 置于 PATH 前缀：{path_prefix}"
+                    "已将全局 OpenClaw CLI 置于 PATH 前缀：{path_prefix}"
                 ));
             } else {
                 state.logs.push(
-                    "未找到 bundled OpenClaw CLI 包装器，当前将回退使用系统 PATH 中的 openclaw。"
+                    "未找到全局 OpenClaw CLI 路径，当前将使用系统 PATH 中的 openclaw。"
                         .to_string(),
                 );
             }
@@ -13464,6 +14043,9 @@ fn start_openclaw_channel_qr_binding(
 
         if let Ok(mut state) = session_state_for_thread.lock() {
             state.updated_at_ms = current_timestamp_millis();
+            if state.qr_ascii_collecting && !state.qr_ascii_buffer.is_empty() {
+                finalize_whatsapp_ascii_qr_capture(&mut state);
+            }
             let config_sync_result = wait_for_channel_config_sync(&state.channel_type);
             match wait_result {
                 Ok(status) => {
@@ -13486,10 +14068,27 @@ fn start_openclaw_channel_qr_binding(
                         }
                         Ok(false) => {
                             state.status = "error".to_string();
-                            state.detail = Some(format!(
-                                "扫码流程结束（exit code: {code_text}），但未在 openclaw 配置中检测到 {} 频道可用账号。请点击“重新获取二维码”重试；如仍失败，请检查 CLI 输出日志。",
-                                if state.channel_type == "weixin" { "微信" } else { "企业微信" }
-                            ));
+                            let saw_whatsapp_install_prompt = state.channel_type == "whatsapp"
+                                && state.logs.iter().any(|line| {
+                                    let lowered = line.to_ascii_lowercase();
+                                    lowered.contains("install whatsapp plugin")
+                                        || lowered.contains("use local plugin path")
+                                        || lowered.contains("@openclaw/whatsapp")
+                                });
+                            if saw_whatsapp_install_prompt {
+                                state.detail = Some(format!(
+                                    "扫码流程结束（exit code: {code_text}），检测到 WhatsApp 插件未完成安装。请先执行 `openclaw plugins install @openclaw/whatsapp && openclaw plugins enable whatsapp`，再点击“重新获取二维码”。"
+                                ));
+                            } else {
+                                state.detail = Some(format!(
+                                    "扫码流程结束（exit code: {code_text}），但未在 openclaw 配置中检测到 {} 频道可用账号。请点击“重新获取二维码”重试；如仍失败，请检查 CLI 输出日志。",
+                                    match state.channel_type.as_str() {
+                                        "weixin" => "微信",
+                                        "wecom" => "企业微信",
+                                        _ => "WhatsApp",
+                                    }
+                                ));
+                            }
                         }
                         Err(error) => {
                             state.status = "error".to_string();
@@ -13532,9 +14131,18 @@ fn poll_openclaw_channel_qr_binding(
             .ok_or_else(|| format!("未找到二维码会话：{normalized_id}"))?
     };
 
-    let state = state_handle
+    let mut state = state_handle
         .lock()
         .map_err(|_| "二维码会话状态读取失败。".to_string())?;
+    let normalized_status = state.status.trim().to_ascii_lowercase();
+    if normalized_status != "success" && normalized_status != "error" {
+        let _ = sync_channel_accounts_from_plugin_store(&state.channel_type);
+        if has_configured_channel_account_in_openclaw_config(&state.channel_type)? {
+            state.status = "success".to_string();
+            state.detail = Some("二维码绑定成功，已检测到频道配置。".to_string());
+            state.updated_at_ms = current_timestamp_millis();
+        }
+    }
     Ok(build_openclaw_channel_qr_binding_snapshot(&state))
 }
 
@@ -14559,6 +15167,59 @@ mod tests {
             "boot logs\n{\n  \"ok\": true,\n  \"service\": { \"loaded\": true }\n}\nmore logs";
         let payload = extract_last_json_object_from_streams(stdout, stderr).unwrap();
         assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn dotted_version_compare_detects_newer_official_version() {
+        assert!(is_openclaw_official_version_newer("2026.3.28", "2026.3.13"));
+        assert!(!is_openclaw_official_version_newer("2026.3.13", "2026.3.28"));
+        assert!(!is_openclaw_official_version_newer("2026.3.28", "2026.3.28"));
+    }
+
+    #[test]
+    fn dotted_version_compare_handles_length_differences() {
+        assert!(is_openclaw_official_version_newer("2026.4", "2026.3.99"));
+        assert!(!is_openclaw_official_version_newer("2026.3", "2026.3.0"));
+    }
+
+    #[test]
+    fn detects_whatsapp_ascii_qr_line() {
+        assert!(is_whatsapp_ascii_qr_line("██▀▀▄█"));
+        assert!(is_whatsapp_ascii_qr_line(" ▄▄▄ █ "));
+        assert!(!is_whatsapp_ascii_qr_line("Waiting for WhatsApp connection..."));
+    }
+
+    #[test]
+    fn captures_whatsapp_ascii_qr_from_cli_stream() {
+        let mut session = OpenClawChannelQrBindingSessionState {
+            session_id: "qr-test".to_string(),
+            channel_type: "whatsapp".to_string(),
+            status: "running".to_string(),
+            qr_url: None,
+            qr_ascii: None,
+            qr_ascii_collecting: false,
+            qr_ascii_buffer: Vec::new(),
+            detail: None,
+            logs: Vec::new(),
+            started_at_ms: 0,
+            updated_at_ms: 0,
+        };
+
+        update_openclaw_channel_qr_binding_session_from_line(
+            &mut session,
+            "Scan this QR in WhatsApp (Linked Devices):",
+        );
+        for _ in 0..12 {
+            update_openclaw_channel_qr_binding_session_from_line(&mut session, "██▀▀▄█");
+        }
+
+        assert_eq!(session.status, "waiting_scan");
+        assert!(session.qr_ascii.is_some());
+        assert!(session
+            .qr_ascii
+            .as_deref()
+            .unwrap_or_default()
+            .contains("██▀▀▄█"));
     }
 }
 

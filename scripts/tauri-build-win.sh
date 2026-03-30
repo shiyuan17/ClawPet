@@ -3,6 +3,7 @@
 set -euo pipefail
 
 TARGET="${1:-x86_64-pc-windows-msvc}"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v cargo-xwin >/dev/null 2>&1; then
   echo "error: cargo-xwin is required. Install it with: cargo install cargo-xwin"
@@ -40,6 +41,15 @@ elif [ -x "/usr/local/bin/makensis" ]; then
 fi
 
 export PATH="${llvm_bin}:${HOME}/.cargo/bin:${PATH}"
+
+# Keep Windows cross-compilation artifacts isolated from regular host builds.
+# This avoids stale/mixed metadata issues (e.g. "crate `itoa` ... rlib format").
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/src-tauri/target/tauri-win}"
+
+# Rust 1.94 + cargo-xwin can fail in release mode for proc-macro deps with:
+# "crate `quote` required to be available in rlib format, but was not found".
+# Disable release stripping for this build path to avoid the broken code path.
+export CARGO_PROFILE_RELEASE_STRIP="${CARGO_PROFILE_RELEASE_STRIP:-none}"
 
 if [ -n "${nsis_path}" ]; then
   CI=false NSIS_PATH="${nsis_path}" tauri build --runner cargo-xwin --target "${TARGET}" --config src-tauri/tauri.windows.conf.json
