@@ -128,13 +128,13 @@ export type TaskRecord = {
   updatedAt: number;
 };
 
-const platformsStorageKey = "keai.desktop-pet.platforms";
-const activePlatformStorageKey = "keai.desktop-pet.active-platform";
-const requestLogsStorageKey = "keai.desktop-pet.request-logs";
-const staffStorageKey = "keai.desktop-pet.staff";
-const memoryStorageKey = "keai.desktop-pet.memory";
-const documentsStorageKey = "keai.desktop-pet.documents";
-const tasksStorageKey = "keai.desktop-pet.tasks";
+const platformsStorageKey = "DragonClaw.desktop-pet.platforms";
+const activePlatformStorageKey = "DragonClaw.desktop-pet.active-platform";
+const requestLogsStorageKey = "DragonClaw.desktop-pet.request-logs";
+const staffStorageKey = "DragonClaw.desktop-pet.staff";
+const memoryStorageKey = "DragonClaw.desktop-pet.memory";
+const documentsStorageKey = "DragonClaw.desktop-pet.documents";
+const tasksStorageKey = "DragonClaw.desktop-pet.tasks";
 const maxLogCount = 180;
 const LEGACY_SEED_TASK_SIGNATURES = new Set([
   "补齐代理配置入口|统一平台配置、默认入口和接入说明。|Commander",

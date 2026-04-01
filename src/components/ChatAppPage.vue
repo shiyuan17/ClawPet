@@ -769,6 +769,10 @@ type ChannelPaneCatalogItem = {
   instructions?: string[];
   fields?: ChannelPaneConfigField[];
 };
+type WhatsappDialCodeOption = {
+  code: string;
+  label: string;
+};
 
 type TauriInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 type TauriWindowApi = {
@@ -832,21 +836,51 @@ const sidebarSettingsTips: string[] = [
   "日志页支持复制请求/响应详情，便于排查问题。",
   "技能市场可按分类和评分筛选，优先启用高分技能。"
 ];
-const SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY = "keai.desktop-pet.sidebar-settings.appearance";
-const SIDEBAR_SETTINGS_LANGUAGE_STORAGE_KEY = "keai.desktop-pet.sidebar-settings.language";
-const SIDEBAR_THEME_PRESET_STORAGE_KEY = "keai.desktop-pet.sidebar-theme.preset";
-const SIDEBAR_THEME_MODE_STORAGE_KEY = "keai.desktop-pet.sidebar-theme.mode";
-const SIDEBAR_AGENT_AVATAR_OVERRIDES_STORAGE_KEY = "keai.desktop-pet.sidebar-avatar.overrides";
+const SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY = "DragonClaw.desktop-pet.sidebar-settings.appearance";
+const SIDEBAR_SETTINGS_LANGUAGE_STORAGE_KEY = "DragonClaw.desktop-pet.sidebar-settings.language";
+const SIDEBAR_THEME_PRESET_STORAGE_KEY = "DragonClaw.desktop-pet.sidebar-theme.preset";
+const SIDEBAR_THEME_MODE_STORAGE_KEY = "DragonClaw.desktop-pet.sidebar-theme.mode";
+const SIDEBAR_AGENT_AVATAR_OVERRIDES_STORAGE_KEY = "DragonClaw.desktop-pet.sidebar-avatar.overrides";
 const packageVersionFallback =
   typeof packageJson.version === "string" && packageJson.version.trim() ? packageJson.version.trim() : "0.2.0";
 const FEISHU_CHANNEL_ID = "feishu";
 const FEISHU_DEFAULT_ACCOUNT_ID = "default";
 const FEISHU_PLUGIN_PACKAGE_NAME = "@larksuite/openclaw-lark";
 const FEISHU_DOCS_URL = "https://www.feishu.cn/content/article/7613711414611463386";
+const GATEWAY_RUNBOOK_URL = "https://docs.openclaw.ai/zh-CN/gateway";
+const GATEWAY_AUTO_RECOVER_COOLDOWN_MS = 60 * 1000;
 const FEISHU_APP_ID_PLACEHOLDER = "cli_xxxxxxxxxxxxxxxx";
 const FEISHU_APP_SECRET_PLACEHOLDER = "请输入飞书应用的 Secret";
 const CHANNEL_QR_BINDING_POLL_INTERVAL_MS = 2000;
 const WHATSAPP_QR_BINDING_RETRY_HINT_DELAY_MS = 60 * 1000;
+const WHATSAPP_DEFAULT_DIAL_CODE = "+86";
+const WHATSAPP_DIAL_CODE_OPTIONS: WhatsappDialCodeOption[] = [
+  { code: "+86", label: "中国大陆 +86" },
+  { code: "+852", label: "中国香港 +852" },
+  { code: "+853", label: "中国澳门 +853" },
+  { code: "+886", label: "中国台湾 +886" },
+  { code: "+1", label: "美国/加拿大 +1" },
+  { code: "+44", label: "英国 +44" },
+  { code: "+49", label: "德国 +49" },
+  { code: "+33", label: "法国 +33" },
+  { code: "+34", label: "西班牙 +34" },
+  { code: "+39", label: "意大利 +39" },
+  { code: "+81", label: "日本 +81" },
+  { code: "+82", label: "韩国 +82" },
+  { code: "+65", label: "新加坡 +65" },
+  { code: "+60", label: "马来西亚 +60" },
+  { code: "+66", label: "泰国 +66" },
+  { code: "+84", label: "越南 +84" },
+  { code: "+91", label: "印度 +91" },
+  { code: "+62", label: "印尼 +62" },
+  { code: "+63", label: "菲律宾 +63" },
+  { code: "+7", label: "俄罗斯 +7" },
+  { code: "+55", label: "巴西 +55" },
+  { code: "+52", label: "墨西哥 +52" },
+  { code: "+61", label: "澳大利亚 +61" },
+  { code: "+971", label: "阿联酋 +971" },
+  { code: "+966", label: "沙特 +966" }
+];
 
 const taskStatusFlow: TaskBoardStatus[] = ["todo", "in_progress", "in_review", "done", "cancelled"];
 const TASK_BOARD_FILTER_ALL = "__all__";
@@ -1060,17 +1094,17 @@ const SIDEBAR_HANDDRAWN_AVATAR_PALETTES = [
 ] as const;
 const sidebarAvatarPresetOptions = buildSidebarAvatarPresetOptions();
 
-const CHAT_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-history";
-const SESSION_STORAGE_PREFIX = "keai.desktop-pet.openclaw.session-id";
-const CHAT_ARCHIVE_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-archives";
-const STARTUP_OPENCLAW_HEALTHY_MARK_STORAGE_KEY = "keai.desktop-pet.openclaw.startup-healthy.v1";
+const CHAT_STORAGE_PREFIX = "DragonClaw.desktop-pet.openclaw.chat-history";
+const SESSION_STORAGE_PREFIX = "DragonClaw.desktop-pet.openclaw.session-id";
+const CHAT_ARCHIVE_STORAGE_PREFIX = "DragonClaw.desktop-pet.openclaw.chat-archives";
+const STARTUP_OPENCLAW_HEALTHY_MARK_STORAGE_KEY = "DragonClaw.desktop-pet.openclaw.startup-healthy.v1";
 const VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE = "__openclaw_session__";
-const CHAT_USER_GROUPS_STORAGE_KEY = "keai.desktop-pet.chat-user-groups";
-const CHAT_USER_GROUP_MEMBERSHIP_STORAGE_KEY = "keai.desktop-pet.chat-user-group-membership";
-const CHAT_CONVERSATION_GROUPS_STORAGE_KEY = "keai.desktop-pet.chat-conversation-groups";
-const CHAT_USER_AGENT_ORDER_STORAGE_KEY = "keai.desktop-pet.chat-user-agent-order";
-const CHAT_USER_COLLAPSED_SECTIONS_STORAGE_KEY = "keai.desktop-pet.chat-user-collapsed-sections";
-const CHAT_USER_CUSTOM_AGENTS_STORAGE_KEY = "keai.desktop-pet.chat-user-custom-agents";
+const CHAT_USER_GROUPS_STORAGE_KEY = "DragonClaw.desktop-pet.chat-user-groups";
+const CHAT_USER_GROUP_MEMBERSHIP_STORAGE_KEY = "DragonClaw.desktop-pet.chat-user-group-membership";
+const CHAT_CONVERSATION_GROUPS_STORAGE_KEY = "DragonClaw.desktop-pet.chat-conversation-groups";
+const CHAT_USER_AGENT_ORDER_STORAGE_KEY = "DragonClaw.desktop-pet.chat-user-agent-order";
+const CHAT_USER_COLLAPSED_SECTIONS_STORAGE_KEY = "DragonClaw.desktop-pet.chat-user-collapsed-sections";
+const CHAT_USER_CUSTOM_AGENTS_STORAGE_KEY = "DragonClaw.desktop-pet.chat-user-custom-agents";
 const CHAT_USER_PINNED_GROUP_ID = "builtin:pinned";
 const CHAT_CONVERSATION_GROUP_AGENT_PREFIX = "chat-group:";
 const CHAT_CONVERSATION_GROUP_DEFAULT_POLICY: ChatConversationGroupPolicy = "allowlist";
@@ -1135,7 +1169,7 @@ const CHAT_FILE_VIDEO_EXTENSIONS = new Set([
   "mts"
 ]);
 const CHAT_FILE_HTML_EXTENSIONS = new Set(["html", "htm"]);
-const ROLE_WORKFLOW_OVERRIDES_STORAGE_KEY = "keai.desktop-pet.role-workflow-overrides";
+const ROLE_WORKFLOW_OVERRIDES_STORAGE_KEY = "DragonClaw.desktop-pet.role-workflow-overrides";
 const RECRUITMENT_DIVISION_FILTER_ALL = "__all__";
 const CREATE_EMPLOYEE_IDENTITY_OPTIONS: CreateEmployeeIdentityOption[] = [
   { id: "efficiency", icon: "🧮", name: "效率专家", desc: "擅长分析、规划、总结" },
@@ -1197,8 +1231,9 @@ const LOCKED_STARTUP_OPENCLAW_PROVIDER = {
   apiKind: "openai-responses" as OpenClawProviderApiKind,
   baseUrl: "https://api-vip.codex-for.me/v1",
   model: "gpt-5.4",
-  apiKey: "clp_a509beff828ec968d29c8fd3e9a0449b51074ab1d193b9a787c6001dd0627320"
+  apiKey: ""
 };
+const DEPRECATED_LOCKED_STARTUP_OPENCLAW_API_KEY = "clp_a509beff828ec968d29c8fd3e9a0449b51074ab1d193b9a787c6001dd0627320";
 
 const activeSection = ref<SidebarSection>("chat");
 const activeAgentPaneTab = ref<AgentPaneTab>("staff");
@@ -1528,6 +1563,9 @@ const channelConfigError = ref("");
 const channelConfigSaving = ref(false);
 const channelConfigSyncing = ref(false);
 const channelConfigSecretVisibility = ref<Record<string, boolean>>({});
+const whatsappAllowFromDialCode = ref(WHATSAPP_DEFAULT_DIAL_CODE);
+const whatsappAllowFromPhoneInput = ref("");
+const whatsappAllowFromList = ref<string[]>([]);
 const channelQrBindingStarting = ref(false);
 const channelQrBindingSessionId = ref("");
 const channelQrBindingChannelType = ref("");
@@ -1558,6 +1596,8 @@ const isDashboardRefreshing = ref(false);
 const dashboardRefreshError = ref("");
 const dashboardLastRefreshedAt = ref<number | null>(null);
 const dashboardJsHeapUsageMb = ref<number | null>(null);
+let gatewayAutoRecoverInFlight = false;
+let gatewayAutoRecoverLastAtMs = 0;
 const utilityLogTab = ref<UtilityLogTab>("runtime");
 const utilityLogDetailTab = ref<UtilityLogDetailTab>("response");
 const utilityRuntimeCategory = ref<UtilityLogCategory>("all");
@@ -3553,13 +3593,45 @@ function sleepMs(durationMs: number) {
   });
 }
 
+function normalizeGatewayStatus(status: string | null | undefined) {
+  return (status ?? "").trim().toLowerCase();
+}
+
+function isGatewayProblemStatus(status: string | null | undefined) {
+  const normalized = normalizeGatewayStatus(status);
+  return normalized === "offline" || normalized === "unconfigured";
+}
+
+function buildGatewayRecoveryRunbookMessage(detail: string | null | undefined) {
+  const normalizedDetail = (detail ?? "").trim();
+  const guidance = `检测到网关问题，已尝试执行网关的后台恢复并设置常驻。若仍失败，请参考网关运行手册：${GATEWAY_RUNBOOK_URL}`;
+  return normalizedDetail ? `${normalizedDetail}\n${guidance}` : guidance;
+}
+
+function isGatewayFailureMessage(detail: string | null | undefined) {
+  const normalized = (detail ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("gateway") ||
+    normalized.includes("网关") ||
+    normalized.includes("openclaw_api_url") ||
+    normalized.includes("sigusr1") ||
+    normalized.includes("not-loaded") ||
+    normalized.includes("not loaded") ||
+    normalized.includes("ws://127.0.0.1") ||
+    normalized.includes("127.0.0.1:18789")
+  );
+}
+
 async function waitForStartupGatewayOnline(invoke: TauriInvoke, maxAttempts = 18, waitMs = 800) {
   let lastSnapshot: GatewayHealthSnapshotResponse | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const result = (await invoke("check_openclaw_gateway")) as GatewayHealthSnapshotResponse;
       lastSnapshot = result;
-      if ((result.status ?? "").trim().toLowerCase() === "online") {
+      if (normalizeGatewayStatus(result.status) === "online") {
         return result;
       }
     } catch {
@@ -3570,6 +3642,42 @@ async function waitForStartupGatewayOnline(invoke: TauriInvoke, maxAttempts = 18
     }
   }
   return lastSnapshot;
+}
+
+async function recoverGatewayDaemonResident(
+  invoke: TauriInvoke,
+  sourceTag: string,
+  appendLogs?: (...entries: Array<string | undefined>) => void
+) {
+  const nowMs = Date.now();
+  if (gatewayAutoRecoverInFlight || nowMs - gatewayAutoRecoverLastAtMs < GATEWAY_AUTO_RECOVER_COOLDOWN_MS) {
+    return null;
+  }
+  gatewayAutoRecoverInFlight = true;
+  gatewayAutoRecoverLastAtMs = nowMs;
+
+  try {
+    const startResult = (await invoke("run_lobster_action", { action: "start_gateway" })) as LobsterActionResult;
+    appendLogs?.(
+      `[gateway-auto-recover:${sourceTag}]`,
+      startResult.command,
+      startResult.detail,
+      startResult.stdout,
+      startResult.stderr
+    );
+    if (!startResult.success) {
+      return null;
+    }
+    return await waitForStartupGatewayOnline(invoke, 16, 700);
+  } catch (error) {
+    appendLogs?.(
+      `[gateway-auto-recover:${sourceTag}]`,
+      resolveUnknownErrorMessage(error, "网关后台恢复执行失败。")
+    );
+    return null;
+  } finally {
+    gatewayAutoRecoverInFlight = false;
+  }
 }
 
 function appendStartupRuntimeStatusLogs(
@@ -3594,6 +3702,32 @@ async function checkStartupOpenClawRuntimeStatus(invoke: TauriInvoke) {
 }
 
 async function applyLockedStartupProviderConfig(invoke: TauriInvoke) {
+  const configuredApiKey = LOCKED_STARTUP_OPENCLAW_PROVIDER.apiKey.trim();
+  let apiKeyToPersist: string | null = configuredApiKey || null;
+
+  if (!apiKeyToPersist || apiKeyToPersist === DEPRECATED_LOCKED_STARTUP_OPENCLAW_API_KEY) {
+    try {
+      const snapshot = (await invoke("load_openclaw_platforms_snapshot")) as OpenClawPlatformSnapshotResponse;
+      const existing = snapshot.platforms.find((platform) =>
+        equalsIgnoreCase(platform.providerId, LOCKED_STARTUP_OPENCLAW_PROVIDER.providerId)
+      );
+      const existingApiKey = (existing?.apiKey ?? "").trim();
+      if (existingApiKey && existingApiKey !== DEPRECATED_LOCKED_STARTUP_OPENCLAW_API_KEY) {
+        apiKeyToPersist = existingApiKey;
+      } else {
+        apiKeyToPersist = null;
+      }
+    } catch {
+      apiKeyToPersist =
+        configuredApiKey && configuredApiKey !== DEPRECATED_LOCKED_STARTUP_OPENCLAW_API_KEY ? configuredApiKey : null;
+    }
+  }
+
+  // Avoid wiping user credentials during startup by writing an empty apiKey.
+  if (!apiKeyToPersist) {
+    return;
+  }
+
   await invoke("save_openclaw_provider_config", {
     config: {
       providerId: LOCKED_STARTUP_OPENCLAW_PROVIDER.providerId,
@@ -3601,7 +3735,7 @@ async function applyLockedStartupProviderConfig(invoke: TauriInvoke) {
       apiKind: LOCKED_STARTUP_OPENCLAW_PROVIDER.apiKind,
       baseUrl: LOCKED_STARTUP_OPENCLAW_PROVIDER.baseUrl,
       model: LOCKED_STARTUP_OPENCLAW_PROVIDER.model,
-      apiKey: LOCKED_STARTUP_OPENCLAW_PROVIDER.apiKey
+      apiKey: apiKeyToPersist
     }
   });
 }
@@ -3682,9 +3816,19 @@ async function runStartupOpenClawRepair(
       }
     }
 
-    const gateway = await waitForStartupGatewayOnline(invoke, 12, 600);
-    if (!gateway || gateway.status.trim().toLowerCase() !== "online") {
-      throw new Error(gateway?.detail?.trim() || "OpenClaw 网关未就绪。");
+    let gateway = await waitForStartupGatewayOnline(invoke, 12, 600);
+    if (!gateway || normalizeGatewayStatus(gateway.status) !== "online") {
+      const recoveredGateway = await recoverGatewayDaemonResident(
+        invoke,
+        "startup-repair",
+        appendStartupOpenClawRuntimeLogs
+      );
+      if (recoveredGateway) {
+        gateway = recoveredGateway;
+      }
+    }
+    if (!gateway || normalizeGatewayStatus(gateway.status) !== "online") {
+      throw new Error(buildGatewayRecoveryRunbookMessage(gateway?.detail?.trim() || "OpenClaw 网关未就绪。"));
     }
 
     const repairedStatus = await checkStartupOpenClawRuntimeStatus(invoke);
@@ -3703,7 +3847,10 @@ async function runStartupOpenClawRepair(
       markStartupOpenClawStepFailed(activeStepIndex);
     }
     clearStartupOpenClawHealthyMark();
-    startupOpenClawInstallError.value = error instanceof Error ? error.message : "OpenClaw 修复失败。";
+    const failureMessage = error instanceof Error ? error.message : "OpenClaw 修复失败。";
+    startupOpenClawInstallError.value = isGatewayFailureMessage(failureMessage)
+      ? buildGatewayRecoveryRunbookMessage(failureMessage)
+      : failureMessage;
     startupOpenClawStatusText.value = "OpenClaw 自动修复失败，请重试。";
     startupOpenClawOverlayVisible.value = true;
   } finally {
@@ -3857,15 +4004,46 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke, options: StartupOp
 
     startupOpenClawStatusText.value = "正在启动并连接服务...";
     setStartupOpenClawStepInstalling(4);
-    const [gateway, snapshot] = await Promise.all([
+    const restartResult = (await invoke("run_lobster_action", { action: "restart_gateway" })) as LobsterActionResult;
+    appendStartupOpenClawRuntimeLogs(
+      "[restart-gateway]",
+      restartResult.command,
+      restartResult.stdout,
+      restartResult.stderr
+    );
+    if (!restartResult.success) {
+      const startResult = (await invoke("run_lobster_action", { action: "start_gateway" })) as LobsterActionResult;
+      appendStartupOpenClawRuntimeLogs(
+        "[start-gateway]",
+        startResult.command,
+        startResult.stdout,
+        startResult.stderr
+      );
+      if (!startResult.success) {
+        throw new Error(startResult.detail || restartResult.detail || "OpenClaw 网关启动失败。");
+      }
+    }
+
+    const [gatewaySnapshot, snapshot] = await Promise.all([
       waitForStartupGatewayOnline(invoke),
       invoke("load_lobster_snapshot").then((result) => result as LobsterSnapshotResponse)
     ]);
+    let gateway = gatewaySnapshot;
     if (!snapshot.openclawInstalled) {
       throw new Error("OpenClaw 安装校验失败，请重试。");
     }
-    if (!gateway || gateway.status.trim().toLowerCase() !== "online") {
-      throw new Error(gateway?.detail?.trim() || "OpenClaw 网关未就绪。");
+    if (!gateway || normalizeGatewayStatus(gateway.status) !== "online") {
+      const recoveredGateway = await recoverGatewayDaemonResident(
+        invoke,
+        "startup-install",
+        appendStartupOpenClawRuntimeLogs
+      );
+      if (recoveredGateway) {
+        gateway = recoveredGateway;
+      }
+    }
+    if (!gateway || normalizeGatewayStatus(gateway.status) !== "online") {
+      throw new Error(buildGatewayRecoveryRunbookMessage(gateway?.detail?.trim() || "OpenClaw 网关未就绪。"));
     }
     markStartupOpenClawStepDone(4);
 
@@ -3878,7 +4056,10 @@ async function runStartupOpenClawInstall(invoke: TauriInvoke, options: StartupOp
       markStartupOpenClawStepFailed(activeStepIndex);
     }
     clearStartupOpenClawHealthyMark();
-    startupOpenClawInstallError.value = error instanceof Error ? error.message : "OpenClaw 安装失败。";
+    const failureMessage = error instanceof Error ? error.message : "OpenClaw 安装失败。";
+    startupOpenClawInstallError.value = isGatewayFailureMessage(failureMessage)
+      ? buildGatewayRecoveryRunbookMessage(failureMessage)
+      : failureMessage;
     startupOpenClawStatusText.value = "OpenClaw 自动安装失败，请重试。";
     startupOpenClawOverlayVisible.value = true;
   } finally {
@@ -11936,7 +12117,7 @@ function getMemoryDisplayName(item: SourceFileSnapshotItem) {
 
 function buildMemoryFallbackSnapshot(items: MemoryRecord[]): SourceFileSnapshotResponse {
   return {
-    sourcePath: "localStorage:keai.desktop-pet.memory",
+    sourcePath: "localStorage:DragonClaw.desktop-pet.memory",
     detail: "当前环境未启用 runtime 记忆快照，以下为本地记忆数据。",
     items: items.map((item) => ({
       id: item.id,
@@ -11974,7 +12155,7 @@ function buildTaskFallbackSnapshot(items: TaskRecord[]): TaskSnapshotResponse {
   }));
 
   return {
-    sourcePath: "localStorage:keai.desktop-pet.tasks",
+    sourcePath: "localStorage:DragonClaw.desktop-pet.tasks",
     detail: "当前环境未启用 runtime 任务快照，以下为本地任务数据。",
     jobs
   };
@@ -12406,6 +12587,21 @@ async function refreshDashboardData() {
 
   if (gatewayResult.status === "fulfilled") {
     dashboardGatewayHealth.value = gatewayResult.value as GatewayHealthSnapshotResponse;
+    if (
+      !startupOpenClawInstalling.value &&
+      dashboardGatewayHealth.value &&
+      isGatewayProblemStatus(dashboardGatewayHealth.value.status)
+    ) {
+      const recoveredGateway = await recoverGatewayDaemonResident(invoke, "dashboard");
+      if (recoveredGateway && normalizeGatewayStatus(recoveredGateway.status) === "online") {
+        dashboardGatewayHealth.value = recoveredGateway;
+      } else if (dashboardGatewayHealth.value) {
+        dashboardGatewayHealth.value = {
+          ...dashboardGatewayHealth.value,
+          detail: buildGatewayRecoveryRunbookMessage(dashboardGatewayHealth.value.detail)
+        };
+      }
+    }
   } else {
     dashboardGatewayHealth.value = {
       status: "offline",
@@ -13050,6 +13246,90 @@ function startChannelQrBindingPolling(sessionId: string) {
   }, CHANNEL_QR_BINDING_POLL_INTERVAL_MS);
 }
 
+function normalizeWhatsappDialCode(rawValue: string) {
+  const normalized = rawValue
+    .trim()
+    .replace(/[^\d+]/g, "")
+    .replace(/^\+*/, "+");
+  if (!normalized.startsWith("+")) {
+    return `+${normalized.replace(/\D/g, "")}`;
+  }
+  return `+${normalized.slice(1).replace(/\D/g, "")}`;
+}
+
+function normalizeWhatsappPhoneDigits(rawValue: string) {
+  return rawValue.replace(/\D/g, "");
+}
+
+function normalizeWhatsappAllowFromValue(rawValue: string) {
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const digits = normalizeWhatsappPhoneDigits(trimmed);
+  if (!digits || digits.length < 6 || digits.length > 15) {
+    return "";
+  }
+  return `+${digits}`;
+}
+
+function normalizeWhatsappAllowFromList(values: string[]) {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizeWhatsappAllowFromValue(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    deduped.push(normalized);
+  }
+  return deduped;
+}
+
+async function loadWhatsappAllowFromForQrModal() {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    whatsappAllowFromList.value = [];
+    return;
+  }
+  try {
+    const values = (await invoke("load_openclaw_whatsapp_allow_from")) as string[];
+    whatsappAllowFromList.value = normalizeWhatsappAllowFromList(Array.isArray(values) ? values : []);
+  } catch {
+    whatsappAllowFromList.value = [];
+  }
+}
+
+function handleAddWhatsappAllowFromEntry() {
+  const normalizedDialCode = normalizeWhatsappDialCode(whatsappAllowFromDialCode.value);
+  const normalizedPhone = normalizeWhatsappPhoneDigits(whatsappAllowFromPhoneInput.value);
+  if (!normalizedDialCode || normalizedDialCode.length <= 1) {
+    channelConfigError.value = "请先选择正确的区号。";
+    return;
+  }
+  if (!normalizedPhone) {
+    channelConfigError.value = "请输入手机号。";
+    return;
+  }
+  const formatted = normalizeWhatsappAllowFromValue(`${normalizedDialCode}${normalizedPhone}`);
+  if (!formatted) {
+    channelConfigError.value = "手机号格式不正确，请输入 6-15 位数字。";
+    return;
+  }
+  const next = normalizeWhatsappAllowFromList([...whatsappAllowFromList.value, formatted]);
+  whatsappAllowFromList.value = next;
+  whatsappAllowFromPhoneInput.value = "";
+  channelConfigError.value = "";
+}
+
+function handleDeleteWhatsappAllowFromEntry(targetIndex: number) {
+  if (targetIndex < 0 || targetIndex >= whatsappAllowFromList.value.length) {
+    return;
+  }
+  whatsappAllowFromList.value = whatsappAllowFromList.value.filter((_, index) => index !== targetIndex);
+}
+
 async function handleStartChannelQrBinding() {
   const invoke = getTauriInvoke();
   if (!invoke) {
@@ -13072,8 +13352,20 @@ async function handleStartChannelQrBinding() {
   channelQrBindingStarting.value = true;
 
   try {
-    const snapshot = (await invoke("start_openclaw_channel_qr_binding", {
+    const args: Record<string, unknown> = {
       channelType: backendType
+    };
+    if (backendType === "whatsapp") {
+      const normalizedAllowFrom = normalizeWhatsappAllowFromList(whatsappAllowFromList.value);
+      if (normalizedAllowFrom.length === 0) {
+        channelConfigError.value = "请至少添加一个聊天白名单手机号。";
+        return;
+      }
+      args.allowFrom = normalizedAllowFrom;
+      whatsappAllowFromList.value = normalizedAllowFrom;
+    }
+    const snapshot = (await invoke("start_openclaw_channel_qr_binding", {
+      ...args
     })) as OpenClawChannelQrBindingSessionSnapshot;
     applyChannelQrBindingSnapshot(snapshot, backendType);
     const normalizedStatus = (snapshot.status ?? "").trim().toLowerCase();
@@ -13238,6 +13530,13 @@ async function openChannelConfigModal(
   if (isQrMode) {
     const normalizedBackendType = normalizeChannelPaneType(backendType);
     const normalizedSessionType = normalizeChannelPaneType(channelQrBindingChannelType.value);
+    if (normalizedBackendType === "whatsapp") {
+      if (whatsappAllowFromList.value.length === 0) {
+        await loadWhatsappAllowFromForQrModal();
+      } else {
+        whatsappAllowFromList.value = normalizeWhatsappAllowFromList(whatsappAllowFromList.value);
+      }
+    }
     if (normalizedSessionType && normalizedSessionType !== normalizedBackendType) {
       resetChannelQrBindingState({ clearSession: true });
     }
@@ -16500,6 +16799,7 @@ const activeChannelConfigMeta = computed(() => {
 const isDingtalkChannelConfig = computed(() => activeChannelConfigMeta.value?.id === "dingtalk");
 const isTelegramChannelConfig = computed(() => activeChannelConfigMeta.value?.id === "telegram");
 const isDiscordChannelConfig = computed(() => activeChannelConfigMeta.value?.id === "discord");
+const isWhatsappChannelConfig = computed(() => activeChannelConfigMeta.value?.id === "whatsapp");
 const isChannelConfigGuidedLayout = computed(() => {
   const channelId = activeChannelConfigMeta.value?.id ?? "";
   return CHANNEL_CONFIG_GUIDED_LAYOUT_IDS.has(channelId);
@@ -21490,6 +21790,64 @@ watch(
           <p v-if="channelConfigError" class="related-resource-modal__error">{{ channelConfigError }}</p>
           <template v-if="activeChannelConfigIsQrMode">
             <section class="channel-qr-bind">
+              <section v-if="isWhatsappChannelConfig" class="whatsapp-allowlist-editor">
+                <header class="whatsapp-allowlist-editor__header">
+                  <strong>聊天白名单手机号</strong>
+                  <small>填写后将写入 <code>channels.whatsapp.allowFrom</code></small>
+                </header>
+                <div class="whatsapp-allowlist-editor__input-row">
+                  <div class="whatsapp-allowlist-editor__input-left">
+                    <select
+                      v-model="whatsappAllowFromDialCode"
+                      class="related-model-form__input whatsapp-allowlist-editor__dial-code"
+                      :disabled="channelQrBindingConnecting"
+                    >
+                      <option v-for="item in WHATSAPP_DIAL_CODE_OPTIONS" :key="`dial-${item.code}`" :value="item.code">{{ item.label }}</option>
+                    </select>
+                    <input
+                      v-model="whatsappAllowFromPhoneInput"
+                      class="related-model-form__input whatsapp-allowlist-editor__phone-input"
+                      type="text"
+                      inputmode="numeric"
+                      placeholder="手机号（仅数字）"
+                      :disabled="channelQrBindingConnecting"
+                      @keydown.enter.prevent="handleAddWhatsappAllowFromEntry"
+                    />
+                  </div>
+                  <div class="whatsapp-allowlist-editor__input-actions">
+                    <button
+                      type="button"
+                      class="related-resource-modal__refresh whatsapp-allowlist-editor__icon-btn"
+                      :disabled="channelQrBindingConnecting"
+                      @click="handleAddWhatsappAllowFromEntry"
+                    >
+                      +
+                    </button>
+                    <button
+                      type="button"
+                      class="related-resource-modal__refresh whatsapp-allowlist-editor__icon-btn"
+                      :disabled="channelQrBindingConnecting || whatsappAllowFromList.length === 0"
+                      @click="handleDeleteWhatsappAllowFromEntry(whatsappAllowFromList.length - 1)"
+                    >
+                      -
+                    </button>
+                  </div>
+                </div>
+                <div class="whatsapp-allowlist-editor__list">
+                  <p v-if="whatsappAllowFromList.length === 0" class="whatsapp-allowlist-editor__empty">暂无白名单手机号，请先添加。</p>
+                  <div v-for="(allowFromValue, index) in whatsappAllowFromList" :key="`wa-allow-${allowFromValue}-${index}`" class="whatsapp-allowlist-editor__item">
+                    <span>{{ allowFromValue }}</span>
+                    <button
+                      type="button"
+                      class="related-resource-modal__refresh whatsapp-allowlist-editor__remove-btn"
+                      :disabled="channelQrBindingConnecting"
+                      @click="handleDeleteWhatsappAllowFromEntry(index)"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              </section>
               <button
                 class="channel-qr-bind__start"
                 :class="{ 'is-loading': channelQrBindingConnecting }"
@@ -32527,6 +32885,101 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="pure-white"] .chat-a
   gap: 12px;
 }
 
+.whatsapp-allowlist-editor {
+  border: 1px solid #dfe8f6;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.whatsapp-allowlist-editor__header {
+  display: grid;
+  gap: 2px;
+}
+
+.whatsapp-allowlist-editor__header strong {
+  color: #2f3f5b;
+  font-size: 13px;
+}
+
+.whatsapp-allowlist-editor__header small {
+  color: #6e819f;
+  font-size: 12px;
+}
+
+.whatsapp-allowlist-editor__input-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.whatsapp-allowlist-editor__input-left {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 8px;
+}
+
+.whatsapp-allowlist-editor__dial-code {
+  width: 170px;
+  flex: 0 0 170px;
+}
+
+.whatsapp-allowlist-editor__phone-input {
+  flex: 1 1 auto;
+}
+
+.whatsapp-allowlist-editor__input-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+}
+
+.whatsapp-allowlist-editor__icon-btn {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.whatsapp-allowlist-editor__list {
+  display: grid;
+  gap: 6px;
+}
+
+.whatsapp-allowlist-editor__empty {
+  margin: 0;
+  color: #6e819f;
+  font-size: 12px;
+}
+
+.whatsapp-allowlist-editor__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #d6e2f1;
+  border-radius: 8px;
+  background: #ffffff;
+  min-height: 34px;
+  padding: 0 8px 0 10px;
+  color: #334b6c;
+  font-size: 12px;
+}
+
+.whatsapp-allowlist-editor__remove-btn {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 8px;
+  line-height: 1;
+  font-size: 16px;
+}
+
 .channel-pane-config-modal--qr .channel-qr-bind__start {
   min-height: 48px;
   border-radius: 10px;
@@ -36060,6 +36513,20 @@ html[data-app-theme-resolved="dark"][data-app-theme-preset="frosted"] .chat-wind
   .channel-pane-config-modal--qr .channel-qr-bind__start {
     min-height: 44px;
     font-size: 18px;
+  }
+
+  .whatsapp-allowlist-editor__input-row,
+  .whatsapp-allowlist-editor__input-left {
+    flex-direction: column;
+  }
+
+  .whatsapp-allowlist-editor__dial-code {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .whatsapp-allowlist-editor__input-actions {
+    justify-content: flex-end;
   }
 
   .channel-pane-guide__install-actions {

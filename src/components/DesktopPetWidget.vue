@@ -156,7 +156,7 @@ onBeforeUnmount(() => {
       <header class="panel-header">
         <div>
           <p class="eyebrow">Embeddable Companion</p>
-          <h1>KeAI 桌宠系统</h1>
+          <h1>DragonClaw 桌宠系统</h1>
         </div>
         <div class="status-pill" :data-mood="mood">{{ moodLabel }}</div>
       </header>

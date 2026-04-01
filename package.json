@@ -13,7 +13,7 @@
     "bundle:openclaw:all": "npm run bundle:openclaw && npm run bundle:openclaw-plugins",
     "preview": "node ./node_modules/vite/bin/vite.js preview",
     "tauri": "CI=false tauri",
-    "tauri:dev": "CI=false tauri dev",
+    "tauri:dev": "tauri dev",
     "tauri:build": "CI=false tauri build",
     "tauri:build:win": "bash ./scripts/tauri-build-win.sh x86_64-pc-windows-msvc",
     "tauri:build:win:arm64": "bash ./scripts/tauri-build-win.sh aarch64-pc-windows-msvc"
@@ -35,7 +35,7 @@
     "@types/qrcode": "^1.5.6",
     "@vitejs/plugin-vue": "^5.2.1",
     "@wecom/wecom-openclaw-plugin": "^1.0.11",
-    "openclaw": "2026.3.13",
+    "openclaw": "^2026.3.28",
     "typescript": "^5.8.2",
     "vite": "^6.2.1",
     "vue-tsc": "^2.2.8"

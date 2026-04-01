@@ -8,7 +8,7 @@ export default defineConfig({
     outDir: "dist-lib",
     lib: {
       entry: resolve(__dirname, "src/embed.ts"),
-      name: "KeAIDesktopPet",
+      name: "DragonClawDesktopPet",
       fileName: "DragonClaw",
       formats: ["es", "umd"]
     },

@@ -2760,7 +2760,28 @@ fn merge_channel_alias_sections(
     Ok(canonical_key)
 }
 
-fn channel_section_has_configured_accounts(section_obj: &serde_json::Map<String, Value>) -> bool {
+fn account_has_non_empty_text(account_obj: &serde_json::Map<String, Value>, key: &str) -> bool {
+    account_obj
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+}
+
+fn whatsapp_account_has_login_identity(account_obj: &serde_json::Map<String, Value>) -> bool {
+    account_has_non_empty_text(account_obj, "pluginAccountId")
+        || account_has_non_empty_text(account_obj, "userId")
+        || account_has_non_empty_text(account_obj, "waId")
+        || account_has_non_empty_text(account_obj, "jid")
+        || account_has_non_empty_text(account_obj, "wid")
+        || account_has_non_empty_text(account_obj, "phone")
+}
+
+fn channel_section_has_configured_accounts(
+    channel_type: &str,
+    section_obj: &serde_json::Map<String, Value>,
+) -> bool {
     let mut section_clone = section_obj.clone();
     migrate_legacy_channel_section_to_accounts(&mut section_clone);
     if section_clone
@@ -2774,16 +2795,22 @@ fn channel_section_has_configured_accounts(section_obj: &serde_json::Map<String,
     let Some(accounts_obj) = section_clone.get("accounts").and_then(Value::as_object) else {
         return false;
     };
-    accounts_obj
-        .values()
-        .filter_map(Value::as_object)
-        .any(|account_obj| {
-            account_obj
-                .get("enabled")
-                .and_then(Value::as_bool)
-                .unwrap_or(true)
-                && channel_payload_has_content(account_obj)
-        })
+    let normalized_channel = normalize_channel_identifier(channel_type);
+    let is_whatsapp = is_whatsapp_channel_identifier(&normalized_channel);
+
+    accounts_obj.values().filter_map(Value::as_object).any(|account_obj| {
+        let is_enabled = account_obj
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        if !is_enabled || !channel_payload_has_content(account_obj) {
+            return false;
+        }
+        if is_whatsapp {
+            return whatsapp_account_has_login_identity(account_obj);
+        }
+        true
+    })
 }
 
 fn has_configured_channel_account_in_openclaw_config(channel_type: &str) -> Result<bool, String> {
@@ -2823,7 +2850,7 @@ fn has_configured_channel_account_in_openclaw_config(channel_type: &str) -> Resu
         let Some(section_obj) = section_value.as_object() else {
             continue;
         };
-        if channel_section_has_configured_accounts(section_obj) {
+        if channel_section_has_configured_accounts(channel_key, section_obj) {
             return Ok(true);
         }
     }
@@ -2847,6 +2874,152 @@ fn wait_for_channel_config_sync(channel_type: &str) -> Result<bool, String> {
         }
     }
     Ok(false)
+}
+
+fn normalize_whatsapp_allow_from_values(raw_values: Option<Vec<String>>) -> Vec<String> {
+    let Some(values) = raw_values else {
+        return Vec::new();
+    };
+
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = trimmed.to_ascii_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        normalized.push(trimmed.to_string());
+    }
+    normalized
+}
+
+fn write_whatsapp_qr_base_config(allow_from: Option<Vec<String>>) -> Result<(), String> {
+    let source_path = resolve_openclaw_config_path();
+    let mut parsed = match std::fs::read_to_string(&source_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    if !parsed.is_object() {
+        parsed = serde_json::json!({});
+    }
+
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+    ensure_channel_plugin_allowlist(root, "whatsapp")?;
+
+    if !matches!(root.get("channels"), Some(Value::Object(_))) {
+        root.insert(
+            "channels".to_string(),
+            Value::Object(serde_json::Map::<String, Value>::new()),
+        );
+    }
+    let channels_obj = root
+        .get_mut("channels")
+        .and_then(Value::as_object_mut)
+        .ok_or("channels 不是对象")?;
+    let normalized_allow_from = normalize_whatsapp_allow_from_values(allow_from);
+    let resolved_allow_from = if normalized_allow_from.is_empty() {
+        vec!["+8613800138000".to_string()]
+    } else {
+        normalized_allow_from
+    };
+
+    let aliases = resolve_channel_config_verification_aliases("whatsapp");
+    let alias_keys = channels_obj
+        .keys()
+        .cloned()
+        .filter(|key| {
+            let normalized = normalize_channel_identifier(key);
+            normalized != "whatsapp" && aliases.contains(&normalized)
+        })
+        .collect::<Vec<_>>();
+    for alias_key in alias_keys {
+        channels_obj.remove(&alias_key);
+    }
+
+    let whatsapp_section = serde_json::json!({
+        "dmPolicy": "allowlist",
+        "allowFrom": resolved_allow_from,
+        "groupPolicy": "allowlist",
+        "mediaMaxMb": 50,
+        "debounceMs": 0
+    });
+    channels_obj.insert("whatsapp".to_string(), whatsapp_section);
+
+    write_openclaw_config_value(&source_path, &parsed)
+}
+
+fn ensure_channel_binding_to_main_if_missing(channel_type: &str) -> Result<(), String> {
+    let source_path = resolve_openclaw_config_path();
+    let raw = match std::fs::read_to_string(&source_path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "读取 openclaw.json 失败（{}）：{error}",
+                source_path.display()
+            ))
+        }
+    };
+    let mut parsed: Value =
+        serde_json::from_str(&raw).map_err(|error| format!("openclaw.json 解析失败：{error}"))?;
+    if !parsed.is_object() {
+        return Ok(());
+    }
+
+    let root = parsed
+        .as_object_mut()
+        .ok_or("openclaw.json 根节点不是对象")?;
+    let normalized_channel = normalize_channel_identifier_for_openclaw_config(channel_type);
+    if normalized_channel.is_empty() {
+        return Ok(());
+    }
+    let Some(channels_obj) = root.get_mut("channels").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    let channel_config_key = merge_channel_alias_sections(channels_obj, &normalized_channel)?;
+
+    let resolved_account_id = {
+        let section_obj = channels_obj
+            .get_mut(&channel_config_key)
+            .and_then(Value::as_object_mut)
+            .ok_or("channels.<channelType> 不是对象")?;
+        migrate_legacy_channel_section_to_accounts(section_obj);
+        let fallback_account_id = section_obj
+            .get("accounts")
+            .and_then(Value::as_object)
+            .and_then(|accounts| accounts.keys().next())
+            .map(|value| value.to_string());
+        section_obj
+            .get("defaultAccount")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or(fallback_account_id)
+            .unwrap_or_else(|| "default".to_string())
+    };
+
+    let (channel_to_agent, account_to_agent) = resolve_channel_binding_maps(root);
+    let binding_key = channel_account_binding_key(&channel_config_key, &resolved_account_id);
+    let has_account_binding = account_to_agent.contains_key(&binding_key);
+    let has_channel_binding = channel_to_agent.contains_key(&channel_config_key);
+    if has_account_binding || has_channel_binding {
+        return Ok(());
+    }
+
+    let binding_account = if is_default_channel_account_id(&resolved_account_id) {
+        None
+    } else {
+        Some(resolved_account_id.as_str())
+    };
+    upsert_channel_binding(root, &channel_config_key, binding_account, Some("main"));
+    write_openclaw_config_value(&source_path, &parsed)
 }
 
 fn migrate_legacy_channel_section_to_accounts(section_obj: &mut serde_json::Map<String, Value>) {
@@ -2988,6 +3161,7 @@ fn ensure_channel_plugin_allowlist(
         }
     }
 
+    let skip_entries_for_whatsapp = plugin_id.eq_ignore_ascii_case("whatsapp");
     if !matches!(plugins_obj.get("entries"), Some(Value::Object(_))) {
         plugins_obj.insert(
             "entries".to_string(),
@@ -2998,6 +3172,10 @@ fn ensure_channel_plugin_allowlist(
         .get_mut("entries")
         .and_then(Value::as_object_mut)
     {
+        if skip_entries_for_whatsapp {
+            entries_obj.remove(plugin_id);
+            return Ok(());
+        }
         if !matches!(entries_obj.get(plugin_id), Some(Value::Object(_))) {
             entries_obj.insert(
                 plugin_id.to_string(),
@@ -13739,6 +13917,34 @@ fn extract_channel_qr_url_from_line(channel_type: &str, line: &str) -> Option<St
     urls.into_iter().next()
 }
 
+fn is_whatsapp_dns_resolution_failure_line(cleaned_lower: &str) -> bool {
+    if !cleaned_lower.contains("whatsapp") {
+        return false;
+    }
+
+    cleaned_lower.contains("getaddrinfo enotfound web.whatsapp.com")
+        || cleaned_lower.contains("enotfound web.whatsapp.com")
+        || (cleaned_lower.contains("dns")
+            && cleaned_lower.contains("web.whatsapp.com")
+            && cleaned_lower.contains("error"))
+}
+
+fn has_whatsapp_dns_resolution_failure(logs: &[String]) -> bool {
+    logs.iter().any(|line| {
+        let lowered = line.to_ascii_lowercase();
+        is_whatsapp_dns_resolution_failure_line(&lowered)
+    })
+}
+
+fn has_whatsapp_duplicate_plugin_warning(logs: &[String]) -> bool {
+    logs.iter().any(|line| {
+        let lowered = line.to_ascii_lowercase();
+        lowered.contains("plugins.entries.whatsapp")
+            && lowered.contains("duplicate plugin id")
+            && lowered.contains("overridden by global plugin")
+    })
+}
+
 fn update_openclaw_channel_qr_binding_session_from_line(
     session: &mut OpenClawChannelQrBindingSessionState,
     raw_line: &str,
@@ -13759,6 +13965,15 @@ fn update_openclaw_channel_qr_binding_session_from_line(
     }
     let cleaned_lower = cleaned.to_ascii_lowercase();
     let is_whatsapp = is_whatsapp_channel_identifier(&session.channel_type);
+
+    if is_whatsapp && is_whatsapp_dns_resolution_failure_line(&cleaned_lower) {
+        session.status = "error".to_string();
+        session.detail = Some(
+            "无法解析 `web.whatsapp.com`（DNS/网络异常）。请先确认当前网络可访问 WhatsApp，或配置可用代理后重试。"
+                .to_string(),
+        );
+        return;
+    }
 
     if is_whatsapp {
         let is_qr_heading = cleaned_lower.contains("scan this qr in whatsapp")
@@ -13855,6 +14070,7 @@ fn prune_openclaw_channel_qr_binding_sessions() {
 #[tauri::command]
 fn start_openclaw_channel_qr_binding(
     channel_type: String,
+    allow_from: Option<Vec<String>>,
 ) -> Result<OpenClawChannelQrBindingSessionSnapshot, String> {
     let normalized_input = normalize_channel_identifier(&channel_type);
     let normalized_channel = if is_weixin_channel_identifier(&normalized_input) {
@@ -13873,6 +14089,10 @@ fn start_openclaw_channel_qr_binding(
         eprintln!("[dragonclaw] sanitize plugins.load.paths failed before qr binding: {error}");
     }
 
+    if normalized_channel == "whatsapp" {
+        write_whatsapp_qr_base_config(allow_from)?;
+    }
+
     prune_openclaw_channel_qr_binding_sessions();
 
     let session_id = generate_ephemeral_openclaw_gateway_token()
@@ -13888,7 +14108,7 @@ fn start_openclaw_channel_qr_binding(
             "(openclaw channels login --channel wecom) || (openclaw channels login --channel openclaw-wecom)"
                 .to_string()
         }
-        _ => "openclaw channels login --channel whatsapp --verbose".to_string(),
+        _ => "openclaw channels login --channel whatsapp".to_string(),
     };
     let install_command = match normalized_channel.as_str() {
         "weixin" => Some("npx -y @tencent-weixin/openclaw-weixin-cli@latest install".to_string()),
@@ -14055,6 +14275,16 @@ fn start_openclaw_channel_qr_binding(
                         .unwrap_or_else(|| "unknown".to_string());
                     match config_sync_result {
                         Ok(true) => {
+                            if state.channel_type == "whatsapp" {
+                                if let Err(error) =
+                                    ensure_channel_binding_to_main_if_missing(&state.channel_type)
+                                {
+                                    state.status = "error".to_string();
+                                    state.detail =
+                                        Some(format!("二维码扫码成功，但写入绑定关系失败：{error}"));
+                                    return;
+                                }
+                            }
                             state.status = "success".to_string();
                             if !status.success() {
                                 state.logs.push(format!(
@@ -14068,26 +14298,42 @@ fn start_openclaw_channel_qr_binding(
                         }
                         Ok(false) => {
                             state.status = "error".to_string();
-                            let saw_whatsapp_install_prompt = state.channel_type == "whatsapp"
-                                && state.logs.iter().any(|line| {
-                                    let lowered = line.to_ascii_lowercase();
-                                    lowered.contains("install whatsapp plugin")
-                                        || lowered.contains("use local plugin path")
-                                        || lowered.contains("@openclaw/whatsapp")
-                                });
-                            if saw_whatsapp_install_prompt {
+                            let saw_whatsapp_dns_failure = state.channel_type == "whatsapp"
+                                && has_whatsapp_dns_resolution_failure(&state.logs);
+                            if saw_whatsapp_dns_failure {
                                 state.detail = Some(format!(
-                                    "扫码流程结束（exit code: {code_text}），检测到 WhatsApp 插件未完成安装。请先执行 `openclaw plugins install @openclaw/whatsapp && openclaw plugins enable whatsapp`，再点击“重新获取二维码”。"
+                                    "扫码流程结束（exit code: {code_text}），无法解析 `web.whatsapp.com`（DNS/网络异常）。请先确认当前网络可访问 WhatsApp，或配置可用代理后重试。"
                                 ));
                             } else {
-                                state.detail = Some(format!(
-                                    "扫码流程结束（exit code: {code_text}），但未在 openclaw 配置中检测到 {} 频道可用账号。请点击“重新获取二维码”重试；如仍失败，请检查 CLI 输出日志。",
-                                    match state.channel_type.as_str() {
-                                        "weixin" => "微信",
-                                        "wecom" => "企业微信",
-                                        _ => "WhatsApp",
-                                    }
-                                ));
+                                let saw_whatsapp_install_prompt = state.channel_type == "whatsapp"
+                                    && state.logs.iter().any(|line| {
+                                        let lowered = line.to_ascii_lowercase();
+                                        lowered.contains("install whatsapp plugin")
+                                            || lowered.contains("use local plugin path")
+                                            || lowered.contains("@openclaw/whatsapp")
+                                    });
+                                if saw_whatsapp_install_prompt {
+                                    state.detail = Some(format!(
+                                        "扫码流程结束（exit code: {code_text}），检测到 WhatsApp 插件未完成安装。请先执行 `openclaw plugins install @openclaw/whatsapp && openclaw plugins enable whatsapp`，再点击“重新获取二维码”。"
+                                    ));
+                                } else {
+                                    let duplicate_hint = if state.channel_type == "whatsapp"
+                                        && has_whatsapp_duplicate_plugin_warning(&state.logs)
+                                    {
+                                        " 同时检测到 `plugins.entries.whatsapp` 重复插件告警，建议清理后再试。"
+                                    } else {
+                                        ""
+                                    };
+                                    state.detail = Some(format!(
+                                        "扫码流程结束（exit code: {code_text}），但未在 openclaw 配置中检测到 {} 频道可用账号。请点击“重新获取二维码”重试；如仍失败，请检查 CLI 输出日志。{}",
+                                        match state.channel_type.as_str() {
+                                            "weixin" => "微信",
+                                            "wecom" => "企业微信",
+                                            _ => "WhatsApp",
+                                        },
+                                        duplicate_hint
+                                    ));
+                                }
                             }
                         }
                         Err(error) => {
@@ -14135,7 +14381,10 @@ fn poll_openclaw_channel_qr_binding(
         .lock()
         .map_err(|_| "二维码会话状态读取失败。".to_string())?;
     let normalized_status = state.status.trim().to_ascii_lowercase();
-    if normalized_status != "success" && normalized_status != "error" {
+    if normalized_status != "success"
+        && normalized_status != "error"
+        && !is_whatsapp_channel_identifier(&state.channel_type)
+    {
         let _ = sync_channel_accounts_from_plugin_store(&state.channel_type);
         if has_configured_channel_account_in_openclaw_config(&state.channel_type)? {
             state.status = "success".to_string();
@@ -15180,6 +15429,43 @@ mod tests {
     fn dotted_version_compare_handles_length_differences() {
         assert!(is_openclaw_official_version_newer("2026.4", "2026.3.99"));
         assert!(!is_openclaw_official_version_newer("2026.3", "2026.3.0"));
+    }
+
+    #[test]
+    fn detects_whatsapp_dns_resolution_failure_line() {
+        let line = "Channel login failed: Error: status=408 Request Time-out WebSocket Error (getaddrinfo ENOTFOUND web.whatsapp.com)";
+        assert!(is_whatsapp_dns_resolution_failure_line(
+            &line.to_ascii_lowercase()
+        ));
+    }
+
+    #[test]
+    fn update_session_marks_whatsapp_dns_resolution_failure_as_error() {
+        let mut session = OpenClawChannelQrBindingSessionState {
+            session_id: "dns-test".to_string(),
+            channel_type: "whatsapp".to_string(),
+            status: "running".to_string(),
+            qr_url: None,
+            qr_ascii: None,
+            qr_ascii_collecting: false,
+            qr_ascii_buffer: Vec::new(),
+            detail: None,
+            logs: Vec::new(),
+            started_at_ms: 0,
+            updated_at_ms: 0,
+        };
+
+        update_openclaw_channel_qr_binding_session_from_line(
+            &mut session,
+            "WebSocket Error (getaddrinfo ENOTFOUND web.whatsapp.com)",
+        );
+
+        assert_eq!(session.status, "error");
+        assert!(session
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("web.whatsapp.com"));
     }
 
     #[test]

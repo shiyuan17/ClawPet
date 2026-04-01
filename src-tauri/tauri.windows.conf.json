@@ -4,11 +4,10 @@
     "targets": ["nsis"],
     "windows": {
       "nsis": {
+        "template": "resources/installer/windows/nsis/installer.nsi",
         "installMode": "currentUser",
         "languages": ["SimpChinese"],
         "displayLanguageSelector": false,
-        "headerImage": "resources/installer/windows/header.bmp",
-        "sidebarImage": "resources/installer/windows/sidebar.bmp",
         "installerIcon": "icons/icon.ico",
         "startMenuFolder": "DragonClaw"
       }

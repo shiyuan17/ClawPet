@@ -4,8 +4,8 @@ import ChatAppPage from "./components/ChatAppPage.vue";
 import LoginPage from "./components/LoginPage.vue";
 
 const LOGIN_STORAGE_KEY = "dragonclaw.auth.session";
-const SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY = "keai.desktop-pet.sidebar-settings.appearance";
-const SIDEBAR_THEME_PRESET_STORAGE_KEY = "keai.desktop-pet.sidebar-theme.preset";
+const SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY = "DragonClaw.desktop-pet.sidebar-settings.appearance";
+const SIDEBAR_THEME_PRESET_STORAGE_KEY = "DragonClaw.desktop-pet.sidebar-theme.preset";
 const SKIP_LOGIN_PAGE = true;
 const isAuthenticated = ref(false);
 type SidebarSettingsAppearance = "system" | "light" | "dark";
