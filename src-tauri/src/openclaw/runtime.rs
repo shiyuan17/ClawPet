@@ -97,6 +97,7 @@ pub(crate) fn resolve_resource_root_candidates() -> Vec<PathBuf> {
     output
 }
 
+#[allow(dead_code)]
 fn resolve_openclaw_runtime_dir() -> Option<PathBuf> {
     if let Ok(explicit) = std::env::var("OPENCLAW_DIR") {
         let trimmed = explicit.trim();
@@ -153,10 +154,6 @@ fn collect_node_binary_candidates() -> Vec<PathBuf> {
         }
     }
     output
-}
-
-fn resolve_node_binary_path() -> Option<PathBuf> {
-    collect_node_binary_candidates().into_iter().next()
 }
 
 const OPENCLAW_MIN_NODE_MAJOR: u32 = 22;
@@ -311,6 +308,7 @@ pub(crate) fn resolve_openclaw_node_runtime() -> Result<(PathBuf, String), Strin
     ))
 }
 
+#[allow(dead_code)]
 fn read_json_version_field(path: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
     let parsed = serde_json::from_str::<Value>(&raw).ok()?;
@@ -322,6 +320,7 @@ fn read_json_version_field(path: &Path) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+#[cfg(test)]
 fn parse_dotted_numeric_version(raw: &str) -> Option<Vec<u32>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -342,6 +341,7 @@ fn parse_dotted_numeric_version(raw: &str) -> Option<Vec<u32>> {
     }
 }
 
+#[cfg(test)]
 fn compare_dotted_numeric_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
     let left_segments = parse_dotted_numeric_version(left)?;
     let right_segments = parse_dotted_numeric_version(right)?;
@@ -357,6 +357,7 @@ fn compare_dotted_numeric_versions(left: &str, right: &str) -> Option<std::cmp::
     Some(std::cmp::Ordering::Equal)
 }
 
+#[cfg(test)]
 pub(crate) fn is_openclaw_official_version_newer(official: &str, bundled: &str) -> bool {
     match compare_dotted_numeric_versions(official, bundled) {
         Some(std::cmp::Ordering::Greater) => true,
@@ -365,6 +366,7 @@ pub(crate) fn is_openclaw_official_version_newer(official: &str, bundled: &str) 
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn fetch_openclaw_latest_official_version() -> Result<String, String> {
     tauri::async_runtime::block_on(async {
         let client = reqwest::Client::builder()
@@ -395,11 +397,13 @@ pub(crate) fn fetch_openclaw_latest_official_version() -> Result<String, String>
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn read_bundled_openclaw_runtime_version() -> Option<String> {
     let runtime_dir = resolve_openclaw_runtime_dir()?;
     read_json_version_field(&runtime_dir.join("package.json"))
 }
 
+#[allow(dead_code)]
 fn resolve_openclaw_cli_wrapper_source() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     for root in resolve_resource_root_candidates() {
@@ -451,12 +455,6 @@ pub(crate) fn prepend_global_openclaw_cli_to_command_path(command: &mut Command)
     Some(preferred_dir.display().to_string())
 }
 
-fn build_openclaw_command_display(node: &Path, entry: &Path, args: &[&str]) -> String {
-    let mut parts = vec![node.display().to_string(), entry.display().to_string()];
-    parts.extend(args.iter().map(|arg| arg.to_string()));
-    parts.join(" ")
-}
-
 fn apply_openclaw_child_process_env(command: &mut Command) {
     let openclaw_state_dir =
         crate::normalize_windows_path_for_child_process(&crate::resolve_openclaw_home_path());
@@ -475,6 +473,7 @@ fn apply_openclaw_child_process_env(command: &mut Command) {
     }
 }
 
+#[allow(dead_code)]
 fn collect_npm_command_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::<PathBuf>::new();
 
@@ -525,6 +524,7 @@ fn collect_npm_command_candidates() -> Vec<PathBuf> {
     output
 }
 
+#[allow(dead_code)]
 pub(crate) fn run_openclaw_cli_via_npm_exec(
     package_spec: &str,
     args: &[String],
@@ -660,6 +660,7 @@ pub(crate) fn run_openclaw_cli_output(
     run_openclaw_cli_via_global_command(args)
 }
 
+#[allow(dead_code)]
 pub(crate) fn install_openclaw_cli_wrapper() -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -748,5 +749,29 @@ pub(crate) fn install_openclaw_cli_wrapper() -> Result<Option<String>, String> {
         }
 
         Ok(Some(target_path.display().to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_openclaw_official_version_newer;
+
+    #[test]
+    fn dotted_version_compare_detects_newer_official_version() {
+        assert!(is_openclaw_official_version_newer("2026.3.28", "2026.3.13"));
+        assert!(!is_openclaw_official_version_newer(
+            "2026.3.13",
+            "2026.3.28"
+        ));
+        assert!(!is_openclaw_official_version_newer(
+            "2026.3.28",
+            "2026.3.28"
+        ));
+    }
+
+    #[test]
+    fn dotted_version_compare_handles_length_differences() {
+        assert!(is_openclaw_official_version_newer("2026.4", "2026.3.99"));
+        assert!(!is_openclaw_official_version_newer("2026.3", "2026.3.0"));
     }
 }

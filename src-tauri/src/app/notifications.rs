@@ -15,11 +15,6 @@ unsafe extern "C" {
         body_utf8: *const c_char,
         error_out: *mut *mut c_char,
     ) -> c_int;
-    fn dragonclaw_show_legacy_user_notification(
-        title_utf8: *const c_char,
-        body_utf8: *const c_char,
-        error_out: *mut *mut c_char,
-    ) -> c_int;
     fn dragonclaw_free_c_string(value: *mut c_char);
 }
 
@@ -57,11 +52,6 @@ fn run_macos_notification_ffi(
 #[cfg(target_os = "macos")]
 fn show_macos_user_notification(title: &str, body: Option<&str>) -> Result<(), String> {
     run_macos_notification_ffi(dragonclaw_show_user_notification, title, body)
-}
-
-#[cfg(target_os = "macos")]
-fn show_macos_legacy_user_notification(title: &str, body: Option<&str>) -> Result<(), String> {
-    run_macos_notification_ffi(dragonclaw_show_legacy_user_notification, title, body)
 }
 
 #[cfg(target_os = "macos")]
@@ -175,10 +165,6 @@ fn show_platform_system_notification(
             })
             .or_else(|helper_error| {
                 eprintln!("[dragonclaw] dev helper notification failed: {helper_error}");
-                show_macos_legacy_user_notification(title, body)
-            })
-            .or_else(|legacy_error| {
-                eprintln!("[dragonclaw] legacy macOS notification failed: {legacy_error}");
                 show_macos_osascript_notification(title, body)
             });
     }
@@ -186,7 +172,7 @@ fn show_platform_system_notification(
     eprintln!("[dragonclaw] using modern macOS notification path in app bundle runtime");
     show_macos_user_notification(title, body).or_else(|modern_error| {
         eprintln!("[dragonclaw] modern macOS notification failed: {modern_error}");
-        show_macos_legacy_user_notification(title, body)
+        show_macos_osascript_notification(title, body)
     })
 }
 

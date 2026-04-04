@@ -1274,7 +1274,7 @@ pub(crate) fn check_openclaw_runtime_status_blocking(
         .trim()
         .to_string();
     let status_effective = crate::gateway_cli_step_effective_success(&output);
-    let status_payload = crate::extract_last_json_object_from_streams(&stdout, &stderr);
+    let status_payload = super::json::extract_last_json_object_from_streams(&stdout, &stderr);
     let status_running = if let Some(payload) = status_payload.as_ref() {
         crate::gateway_status_payload_indicates_running(payload)
     } else {

@@ -647,3 +647,59 @@ pub(crate) fn run_openclaw_gateway_bootstrap_once() -> GatewayBootstrapOutcome {
         stderr,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        gateway_cli_text_indicates_non_effective_success, gateway_status_payload_indicates_running,
+    };
+
+    #[test]
+    fn detects_gateway_not_loaded_text() {
+        let raw = r#"{
+  "action": "restart",
+  "ok": true,
+  "result": "not-loaded",
+  "message": "Gateway service not loaded."
+}"#;
+        assert!(gateway_cli_text_indicates_non_effective_success(raw));
+    }
+
+    #[test]
+    fn healthy_gateway_text_not_flagged() {
+        let raw = r#"{
+  "action": "start",
+  "ok": true,
+  "result": "started"
+}"#;
+        assert!(!gateway_cli_text_indicates_non_effective_success(raw));
+    }
+
+    #[test]
+    fn gateway_status_payload_running_when_loaded_and_running() {
+        let payload = serde_json::json!({
+            "ok": true,
+            "service": {
+                "loaded": true,
+                "runtime": {
+                    "status": "running"
+                }
+            }
+        });
+        assert!(gateway_status_payload_indicates_running(&payload));
+    }
+
+    #[test]
+    fn gateway_status_payload_not_running_when_not_loaded() {
+        let payload = serde_json::json!({
+            "ok": true,
+            "service": {
+                "loaded": false,
+                "runtime": {
+                    "status": "running"
+                }
+            }
+        });
+        assert!(!gateway_status_payload_indicates_running(&payload));
+    }
+}

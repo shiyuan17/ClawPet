@@ -96,3 +96,43 @@ pub(crate) fn extract_last_json_object_from_streams(stdout: &str, stderr: &str) 
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::extract_last_json_object_from_streams;
+    use serde_json::Value;
+
+    #[test]
+    fn extract_last_json_object_from_streams_prefers_latest_line_object() {
+        let stdout = "progress\n{\"ok\":true,\"service\":{\"loaded\":true}}\n";
+        let stderr = "warn: step\nprefix {\"ok\":false,\"result\":\"not-loaded\"}\n";
+        let payload = extract_last_json_object_from_streams(stdout, stderr).unwrap();
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn extract_last_json_object_from_streams_strips_ansi_and_noise() {
+        let stdout = "\u{1b}[35m[plugins]\u{1b}[39m init\n";
+        let stderr =
+            "prefix \u{1b}[36m{\"ok\":true,\"service\":{\"loaded\":true,\"runtime\":{\"status\":\"running\"}}}\u{1b}[39m tail";
+        let payload = extract_last_json_object_from_streams(stdout, stderr).unwrap();
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            payload
+                .get("service")
+                .and_then(Value::as_object)
+                .and_then(|service| service.get("loaded"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn extract_last_json_object_from_streams_supports_multiline_payload() {
+        let stdout = "progress line\n";
+        let stderr =
+            "boot logs\n{\n  \"ok\": true,\n  \"service\": { \"loaded\": true }\n}\nmore logs";
+        let payload = extract_last_json_object_from_streams(stdout, stderr).unwrap();
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
+    }
+}
