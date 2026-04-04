@@ -3,16 +3,203 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { sendOpenClawChat, type OpenClawMessage } from "../services/openclaw";
 import ControlIcon from "./ControlIcon.vue";
 import appLogoUrl from "../../images/DragonClaw-logo.png";
-import channelDingtalkIcon from "../images/channels/dingtalk.svg";
-import channelDiscordIcon from "../images/channels/discord.svg";
-import channelFeishuIcon from "../images/channels/feishu.svg";
-import channelQqIcon from "../images/channels/qq.svg";
-import channelTelegramIcon from "../images/channels/telegram.svg";
-import channelWhatsappIcon from "../images/channels/whatsapp.svg";
-import channelWecomIcon from "../images/channels/wecom.svg";
-import channelWeixinIcon from "../images/channels/weixin.svg";
 import QRCode from "qrcode";
 import packageJson from "../../package.json";
+import {
+  CHAT_ARCHIVE_STORAGE_PREFIX,
+  CHAT_CONVERSATION_GROUP_AGENT_PREFIX,
+  CHAT_CONVERSATION_GROUP_DEFAULT_ACTIVATION_COMMAND,
+  CHAT_CONVERSATION_GROUP_DEFAULT_ALLOW_FROM,
+  CHAT_CONVERSATION_GROUP_DEFAULT_HISTORY_LIMIT,
+  CHAT_CONVERSATION_GROUP_DEFAULT_POLICY,
+  CHAT_CONVERSATION_GROUP_DEFAULT_REQUIRE_MENTION,
+  CHAT_CONVERSATION_GROUP_MAX_HISTORY_LIMIT,
+  CHAT_CONVERSATION_GROUP_MIN_HISTORY_LIMIT,
+  CHAT_STORAGE_PREFIX,
+  CHAT_USER_AGENT_ORDER_STORAGE_KEY,
+  CHAT_USER_COLLAPSED_SECTIONS_STORAGE_KEY,
+  CHAT_CONVERSATION_GROUPS_STORAGE_KEY,
+  CHAT_USER_CUSTOM_AGENTS_STORAGE_KEY,
+  CHAT_USER_GROUP_MEMBERSHIP_STORAGE_KEY,
+  CHAT_USER_GROUPS_STORAGE_KEY,
+  CHAT_USER_PINNED_GROUP_ID,
+  CHANNEL_CONFIG_GUIDED_FIELD_ORDER,
+  CHANNEL_CONFIG_GUIDED_LAYOUT_IDS,
+  CHANNEL_QR_BINDING_POLL_INTERVAL_MS,
+  CREATE_EMPLOYEE_DEFAULT_RULES,
+  CREATE_EMPLOYEE_IDENTITY_OPTIONS,
+  CREATE_EMPLOYEE_MAX_RULES,
+  CREATE_EMPLOYEE_MAX_TASKS,
+  CREATE_EMPLOYEE_RANDOM_NAMES,
+  CREATE_EMPLOYEE_STEPS,
+  CREATE_EMPLOYEE_TASK_EXAMPLES,
+  FEISHU_APP_ID_PLACEHOLDER,
+  FEISHU_APP_SECRET_PLACEHOLDER,
+  FEISHU_CHANNEL_ID,
+  FEISHU_DEFAULT_ACCOUNT_ID,
+  FEISHU_DOCS_URL,
+  FEISHU_PLUGIN_PACKAGE_NAME,
+  LOCKED_STARTUP_OPENCLAW_PROVIDER,
+  MAIN_STAFF_DISPLAY_NAME,
+  PROTECTED_STAFF_AGENT_IDS,
+  RECRUITMENT_DIVISION_FILTER_ALL,
+  ROLE_WORKFLOW_INSTALL_PROMPT_PREFIX,
+  ROLE_WORKFLOW_OVERRIDES_STORAGE_KEY,
+  SESSION_STORAGE_PREFIX,
+  SIDEBAR_AGENT_AVATAR_OVERRIDES_STORAGE_KEY,
+  SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY,
+  SIDEBAR_AVATAR_UPLOAD_MAX_BYTES,
+  SIDEBAR_HANDDRAWN_AVATAR_PALETTES,
+  SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY,
+  SIDEBAR_SETTINGS_LANGUAGE_STORAGE_KEY,
+  SIDEBAR_THEME_MODE_STORAGE_KEY,
+  SIDEBAR_THEME_PRESET_STORAGE_KEY,
+  SIDEBAR_PIXEL_AVATAR_PALETTES,
+  STARTUP_OPENCLAW_HEALTHY_MARK_STORAGE_KEY,
+  STARTUP_OPENCLAW_STEPS_BASE,
+  TASK_BOARD_FILTER_ALL,
+  UTILITY_LOG_ROLE_FILTER_ACTIVE,
+  UTILITY_LOG_ROLE_FILTER_ALL,
+  VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE,
+  WHATSAPP_QR_BINDING_RETRY_HINT_DELAY_MS,
+  agentAvatarPool,
+  agentPaneTabs,
+  chatChannelAliasMap,
+  chatChannelCatalog,
+  chatChannelCatalogMap,
+  packageVersionFallback,
+  sidebarAvatarCategoryTabs,
+  sidebarItems,
+  sidebarSettingsAppearanceOptions,
+  sidebarSettingsLanguageOptions,
+  sidebarSettingsMenuGroups,
+  sidebarSettingsShortcutItems,
+  sidebarSettingsTips,
+  sidebarThemeModeOptions,
+  sidebarThemePresetOptions,
+  taskBoardColumns,
+  taskBoardGroupModeOptions,
+  taskStatusFlow
+} from "../features/chatapp/constants";
+import {
+  chatStorageKeyFor,
+  createSessionId,
+  getStableChatMessages as getStableChatMessagesFromStorage,
+  loadChatArchives as loadChatArchivesFromStorage,
+  loadChatHistory as loadChatHistoryFromStorage,
+  loadSessionId as loadSessionIdFromStorage,
+  peekSessionId as peekSessionIdFromStorage,
+  persistChatArchives as persistChatArchivesToStorage,
+  persistChatHistory as persistChatHistoryToStorage,
+  type ConversationStorageReadOptions
+} from "../features/chatapp/services/conversationStorage";
+import {
+  getTauriConvertFileSrc,
+  getTauriInvoke,
+  getTauriWindow,
+  type TauriInvoke,
+  type TauriWindowApi
+} from "../features/chatapp/services/runtime";
+import {
+  buildArchiveTitle as buildArchiveTitleFromService,
+  cloneMessages as cloneArchiveMessagesFromService,
+  collectMeaningfulArchiveMessages as collectMeaningfulArchiveMessagesFromService,
+  createArchiveRecord as createArchiveRecordFromService,
+  prependArchiveRecord as prependArchiveRecordFromService
+} from "../features/chatapp/services/archiveFlow";
+import {
+  buildOpenClawMessageContent as buildOpenClawMessageContentFromService,
+  buildLocalAttachmentSignature as buildLocalAttachmentSignatureFromService,
+  createChatAttachmentId as createChatAttachmentIdFromService,
+  getMessageDisplayText as getMessageDisplayTextFromService,
+  isLegacyWelcomeMessage as isLegacyWelcomeMessageFromService,
+  isPendingChatMessage as isPendingChatMessageFromService,
+  isRecentDuplicateUserSubmit as isRecentDuplicateUserSubmitFromService,
+  isRuntimeToolMessage as isRuntimeToolMessageFromService,
+  normalizeAttachment as normalizeAttachmentFromService,
+  normalizeLocalUserMessageDedupText as normalizeLocalUserMessageDedupTextFromService,
+  normalizeMessage as normalizeMessageFromService,
+  normalizeMessageAttachments as normalizeMessageAttachmentsFromService,
+  normalizeRole as normalizeRoleFromService,
+  normalizeStatus as normalizeStatusFromService,
+  normalizeToolStatus as normalizeToolStatusFromService
+} from "../features/chatapp/services/message";
+import {
+  cloneConversationMessages as cloneConversationMessagesFromService,
+  pickConversationHistory as pickConversationHistoryFromService,
+  resolveFreshSessionId as resolveFreshSessionIdFromService,
+  resolveConversationReadOptions as resolveConversationReadOptionsFromService,
+  shouldResetSelectedAgent as shouldResetSelectedAgentFromService,
+  shouldSkipAgentSwitch as shouldSkipAgentSwitchFromService
+} from "../features/chatapp/services/sessionFlow";
+import { safeStorageGet, safeStorageKeysByPrefix, safeStorageRemove, safeStorageSet } from "../features/chatapp/services/storage";
+import {
+  buildLocalFilePreviewUrls as buildLocalFilePreviewUrlsFromUtils,
+  extractDetectedFilesFromText as extractDetectedFilesFromTextFromUtils,
+  formatAttachmentSummaryForPrompt as formatAttachmentSummaryForPromptFromUtils,
+  isAbsoluteLocalPath as isAbsoluteLocalPathFromUtils,
+  isAudioDetectedFile as isAudioDetectedFileFromUtils,
+  isHtmlDetectedFile as isHtmlDetectedFileFromUtils,
+  isImageDetectedFile as isImageDetectedFileFromUtils,
+  isVideoDetectedFile as isVideoDetectedFileFromUtils,
+  normalizeChatComposerFileExtension as normalizeChatComposerFileExtensionFromUtils,
+  normalizeChatComposerLocalPathCandidate as normalizeChatComposerLocalPathCandidateFromUtils,
+  normalizeDetectedFilePath as normalizeDetectedFilePathFromUtils,
+  resolveChatComposerAttachmentDetectedKind as resolveChatComposerAttachmentDetectedKindFromUtils,
+  resolveChatComposerFallbackFileName as resolveChatComposerFallbackFileNameFromUtils,
+  resolveChatComposerFileDisplayName as resolveChatComposerFileDisplayNameFromUtils,
+  resolveChatComposerFileLocalPath as resolveChatComposerFileLocalPathFromUtils,
+  resolveDetectedFileKind as resolveDetectedFileKindFromUtils,
+  resolveDetectedFileKindFromMimeType as resolveDetectedFileKindFromMimeTypeFromUtils,
+  sanitizeChatAttachmentWorkspaceHint as sanitizeChatAttachmentWorkspaceHintFromUtils
+} from "../features/chatapp/utils/filePreview";
+import {
+  formatAttachmentSize as formatAttachmentSizeFromUtils,
+  formatCompactTime as formatCompactTimeFromUtils,
+  formatDateTime as formatDateTimeFromUtils,
+  formatDurationLabel as formatDurationLabelFromUtils,
+  formatInteger as formatIntegerFromUtils,
+  formatRunDurationLabel as formatRunDurationLabelFromUtils,
+  formatTaskNextRunCountdown as formatTaskNextRunCountdownFromUtils,
+  formatTaskScheduleKind as formatTaskScheduleKindFromUtils,
+  formatTimeLabel as formatTimeLabelFromUtils
+} from "../features/chatapp/utils/formatters";
+import {
+  escapeHtml as escapeHtmlFromUtils,
+  renderMarkdownToHtml as renderMarkdownToHtmlFromUtils,
+  sanitizeMessageTextForDisplay as sanitizeMessageTextForDisplayFromUtils
+} from "../features/chatapp/utils/markdown";
+import type {
+  AgentGroupKind,
+  AgentPaneTab,
+  AgentStatusTone,
+  ChatMessageKind,
+  ChatQuickCreateActionId,
+  ChatRole,
+  ChatSettingsPanelMode,
+  ChatStatus,
+  ChatToolStatus,
+  OpenClawProviderApiKind,
+  OpenClawProviderProtocol,
+  RelatedResourceTarget,
+  RelatedScheduleFilter,
+  RelatedSkillCategory,
+  RelatedToolsFilter,
+  SidebarAvatarCategoryId,
+  SidebarAvatarOption,
+  SidebarSection,
+  SidebarSettingsAppearance,
+  SidebarSettingsLanguage,
+  SidebarSettingsMenuGroup,
+  SidebarSettingsMenuGroupId,
+  SidebarThemeMode,
+  SidebarThemePreset,
+  UtilityLogCategory,
+  UtilityLogDetailTab,
+  UtilityLogScheduleFilter,
+  UtilityLogTab,
+  UtilityModalType
+} from "../features/chatapp/types";
 import {
   createTaskDraft,
   deleteStaff,
@@ -34,43 +221,6 @@ import {
 } from "../services/skillsMarket";
 import { loadAgentDetailMarkdownZh } from "../services/agentDetail";
 
-type SidebarSection = "chat" | "dashboard" | "recruitment" | "skills" | "tasks" | "market";
-type AgentGroupKind = "staff" | "group";
-type AgentStatusTone = "online" | "busy" | "offline";
-type ChatRole = "assistant" | "user" | "system";
-type ChatStatus = "pending" | "done" | "error";
-type ChatMessageKind = "default" | "runtime_tool";
-type ChatToolStatus = "running" | "done" | "error";
-type AgentPaneTab = "staff" | "group" | "channel";
-type ChatQuickCreateActionId = "role" | "group" | "friend";
-type RelatedResourceTarget = "memory" | "skills" | "tools" | "model" | "channel" | "schedule";
-type RelatedSkillCategory = "builtIn" | "installed";
-type RelatedToolsFilter = string;
-type RelatedScheduleFilter = "all" | "enabled" | "stopped" | "disabled";
-type UtilityModalType = "history" | "logs";
-type ChatSettingsPanelMode = "agent" | "group" | "logs" | "history";
-type UtilityLogTab = "runtime" | "errorAnalysis";
-type UtilityLogDetailTab = "request" | "response" | "stream" | "raw";
-type UtilityLogCategory = "all" | "message" | "tool";
-type UtilityLogScheduleFilter = "all" | "scheduled" | "manual";
-type SidebarSettingsMenuGroupId = "general" | "providers" | "about";
-type SidebarSettingsAppearance = "system" | "light" | "dark";
-type SidebarSettingsLanguage = "zh-CN" | "en-US";
-type SidebarThemePreset = "elegant" | "frosted" | "pure-white";
-type SidebarThemeMode = "day" | "night";
-type SidebarAvatarCategoryId = "pixel" | "illustration" | "animal" | "cute";
-type SidebarSettingsMenuGroup = {
-  id: SidebarSettingsMenuGroupId;
-  label: string;
-};
-type SidebarAvatarOption = {
-  id: string;
-  label: string;
-  category: SidebarAvatarCategoryId;
-  url: string;
-};
-type OpenClawProviderProtocol = "openai" | "anthropic";
-type OpenClawProviderApiKind = "openai-completions" | "openai-responses" | "anthropic-messages";
 type SkillMarketSectionCategory = "top" | SkillMarketCategory;
 type SkillMarketCategoryOption = {
   id: SkillMarketSectionCategory;
@@ -770,435 +920,7 @@ type ChannelPaneCatalogItem = {
   fields?: ChannelPaneConfigField[];
 };
 
-type TauriInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-type TauriWindowApi = {
-  close?: () => Promise<void> | void;
-  minimize?: () => Promise<void> | void;
-  maximize?: () => Promise<void> | void;
-  unmaximize?: () => Promise<void> | void;
-  toggleMaximize?: () => Promise<void> | void;
-  isMaximized?: () => Promise<boolean> | boolean;
-  toggleFullscreen?: () => Promise<void> | void;
-  setFullscreen?: (value: boolean) => Promise<void> | void;
-  isFullscreen?: () => Promise<boolean> | boolean;
-};
-type TauriNamespace = {
-  core?: {
-    invoke?: TauriInvoke;
-    convertFileSrc?: (filePath: string, protocol?: string) => string;
-  };
-  window?: {
-    getCurrentWindow?: () => TauriWindowApi;
-  };
-};
-
-const sidebarItems: SidebarItem[] = [
-  { id: "dashboard", label: "仪表盘" },
-  { id: "chat", label: "聊天" },
-  { id: "tasks", label: "任务管理" },
-  { id: "recruitment", label: "数字员工" },
-  { id: "skills", label: "技能市场" },
-  { id: "market", label: "商城" }
-];
-const sidebarSettingsMenuGroups: SidebarSettingsMenuGroup[] = [
-  { id: "general", label: "通用设置" },
-  { id: "providers", label: "模型商管理" },
-  { id: "about", label: "关于我们" }
-];
-const sidebarSettingsAppearanceOptions: Array<{ id: SidebarSettingsAppearance; label: string }> = [
-  { id: "system", label: "跟随系统" },
-  { id: "light", label: "浅色" },
-  { id: "dark", label: "深色" }
-];
-const sidebarThemePresetOptions: Array<{ id: SidebarThemePreset; label: string }> = [
-  { id: "elegant", label: "淡雅" },
-  { id: "frosted", label: "磨砂" },
-  { id: "pure-white", label: "纯白" }
-];
-const sidebarThemeModeOptions: Array<{ id: SidebarThemeMode; label: string }> = [
-  { id: "day", label: "日间" },
-  { id: "night", label: "夜间" }
-];
-const sidebarSettingsLanguageOptions: Array<{ id: SidebarSettingsLanguage; label: string }> = [
-  { id: "zh-CN", label: "简体中文" },
-  { id: "en-US", label: "English" }
-];
-const sidebarSettingsShortcutItems: Array<{ id: string; label: string; value: string; note: string }> = [
-  { id: "toggle-window", label: "显示或隐藏窗口", value: "Ctrl+` / Alt+`", note: "全局快捷键，可在任意应用中呼出。" },
-  { id: "open-chat", label: "打开聊天窗口", value: "Alt+1", note: "快速回到主聊天界面。" }
-];
-const sidebarSettingsTips: string[] = [
-  "在聊天页右键会话，点击“信息”可查看员工状态与排班信息。",
-  "日志页支持复制请求/响应详情，便于排查问题。",
-  "技能市场可按分类和评分筛选，优先启用高分技能。"
-];
-const SIDEBAR_SETTINGS_APPEARANCE_STORAGE_KEY = "keai.desktop-pet.sidebar-settings.appearance";
-const SIDEBAR_SETTINGS_LANGUAGE_STORAGE_KEY = "keai.desktop-pet.sidebar-settings.language";
-const SIDEBAR_THEME_PRESET_STORAGE_KEY = "keai.desktop-pet.sidebar-theme.preset";
-const SIDEBAR_THEME_MODE_STORAGE_KEY = "keai.desktop-pet.sidebar-theme.mode";
-const SIDEBAR_AGENT_AVATAR_OVERRIDES_STORAGE_KEY = "keai.desktop-pet.sidebar-avatar.overrides";
-const packageVersionFallback =
-  typeof packageJson.version === "string" && packageJson.version.trim() ? packageJson.version.trim() : "0.2.0";
-const FEISHU_CHANNEL_ID = "feishu";
-const FEISHU_DEFAULT_ACCOUNT_ID = "default";
-const FEISHU_PLUGIN_PACKAGE_NAME = "@larksuite/openclaw-lark";
-const FEISHU_DOCS_URL = "https://www.feishu.cn/content/article/7613711414611463386";
-const FEISHU_APP_ID_PLACEHOLDER = "cli_xxxxxxxxxxxxxxxx";
-const FEISHU_APP_SECRET_PLACEHOLDER = "请输入飞书应用的 Secret";
-const CHANNEL_QR_BINDING_POLL_INTERVAL_MS = 2000;
-const WHATSAPP_QR_BINDING_RETRY_HINT_DELAY_MS = 60 * 1000;
-
-const taskStatusFlow: TaskBoardStatus[] = ["todo", "in_progress", "in_review", "done", "cancelled"];
-const TASK_BOARD_FILTER_ALL = "__all__";
-const taskBoardGroupModeOptions: Array<{ id: TaskBoardGroupMode; label: string }> = [
-  { id: "status", label: "按状态" },
-  { id: "agent", label: "按 Agent" },
-  { id: "team", label: "按团队" }
-];
-const taskBoardColumns: TaskBoardColumn[] = [
-  { id: "todo", label: "To do", subtitle: "待办事项", emptyText: "暂无待办任务。" },
-  { id: "in_progress", label: "In progress", subtitle: "进行中", emptyText: "暂无进行中的任务。" },
-  { id: "in_review", label: "In review", subtitle: "回顾", emptyText: "暂无待回顾任务。" },
-  { id: "done", label: "Done", subtitle: "完成", emptyText: "暂无已完成任务。" },
-  { id: "cancelled", label: "Cancelled", subtitle: "取消", emptyText: "暂无已取消任务。" }
-];
-const agentPaneTabs: Array<{ id: AgentPaneTab; label: string }> = [
-  { id: "staff", label: "数字员工" },
-  { id: "channel", label: "频道" },
-  { id: "group", label: "团队" }
-];
-const chatChannelCatalog: ChannelPaneCatalogItem[] = [
-  {
-    id: "weixin",
-    name: "微信",
-    description: "微信消息触达与机器人接入",
-    icon: channelWeixinIcon,
-    connectionMode: "qr",
-    aliases: ["wechat", "wx", "wechat_official_account", "wechat-official-account", "openclaw-weixin", "openclaw_weixin"],
-    instructions: [],
-    fields: []
-  },
-  {
-    id: "feishu",
-    name: "飞书",
-    description: "飞书机器人与消息通知",
-    icon: channelFeishuIcon,
-    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/GKn8wOvHnibpPNkNkPzcAvGlnzK#Py88dTltfoJc1jxAhIBcW3Pkn7b",
-    instructions: [
-      "前往 飞书开放平台 (open.feishu.cn) 并创建企业自建应用",
-      "在应用详情页获取 App ID 和 App Secret 并填入",
-      "确保应用已开通“机器人”能力",
-      "保存配置后，根据网关提示完成机器人创建"
-    ],
-    fields: [
-      { key: "appId", label: "应用 ID (App ID)", placeholder: "cli_xxxxxx", required: true },
-      { key: "appSecret", label: "应用密钥 (App Secret)", placeholder: "输入应用密钥", required: true, secret: true }
-    ]
-  },
-  {
-    id: "wecom",
-    name: "企业微信",
-    description: "企业微信应用与群机器人",
-    icon: channelWecomIcon,
-    connectionMode: "qr",
-    aliases: ["workwechat", "wechatwork", "qywx", "openclaw-wecom", "openclaw_wecom"],
-    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/JTGnwoV0RixKPtkr4w7c7gpAnDc",
-    instructions: [],
-    fields: []
-  },
-  {
-    id: "dingtalk",
-    name: "钉钉",
-    description: "钉钉机器人与工作通知",
-    icon: channelDingtalkIcon,
-    aliases: ["dingding"],
-    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/Y5eNwiSiZidkLskrwtJc1rUln0b#doxcnr8KfaA2mNPeQUeHO83eDPh",
-    instructions: [
-      "点击“安装钉钉插件”并完成组件安装",
-      "在钉钉开放平台创建应用，获取 Client ID 与 Client Secret",
-      "保存后返回频道列表检查连接状态"
-    ],
-    fields: [
-      { key: "clientId", label: "Client ID", placeholder: "dingxxxx（在钉钉开放平台应用信息中获取）", required: true },
-      { key: "clientSecret", label: "Client Secret", placeholder: "在钉钉开放平台应用凭证中获取", required: true, secret: true }
-    ]
-  },
-  {
-    id: "qq",
-    name: "QQ",
-    description: "QQ群机器人与私聊触达",
-    icon: channelQqIcon,
-    backendChannelType: "qqbot",
-    aliases: ["qqbot", "qq-bot"],
-    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/KPIJwlyiGiupMrkiS9ice39Zn2c",
-    instructions: ["前往 QQ 机器人开放平台创建应用", "获取 App ID 与 Client Secret", "填写凭证后保存并连接"],
-    fields: [
-      { key: "appId", label: "App ID", placeholder: "输入 QQ 机器人 App ID", required: true },
-      { key: "clientSecret", label: "Client Secret", placeholder: "输入 Client Secret", required: true, secret: true }
-    ]
-  },
-  {
-    id: "telegram",
-    name: "Telegram",
-    description: "Bot API 多账号接入",
-    icon: channelTelegramIcon,
-    aliases: ["tg"],
-    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/TjiGwxsMWi7hpDkDAQBc0ydMnEf#PL8ndvsEwoYVWIx1T4mcB1EvnSb",
-    instructions: [
-      "在 Telegram 中搜索 @BotFather，发送 /newbot 创建机器人",
-      "按提示设置机器人名称，成功后 BotFather 会返回 Bot Token",
-      "将 Bot Token 填入下方表单并保存",
-      "把机器人拉入目标群，或私聊机器人完成授权"
-    ],
-    fields: [
-      { key: "botToken", label: "Bot Token", placeholder: "粘贴来自 @BotFather 的 Token", required: true, secret: true }
-    ]
-  },
-  {
-    id: "whatsapp",
-    name: "WhatsApp",
-    description: "WhatsApp 消息收发与会话接入",
-    icon: channelWhatsappIcon,
-    connectionMode: "qr",
-    aliases: ["wa", "wacli", "openclaw-whatsapp", "openclaw_whatsapp"],
-    docsUrl: "https://docs.openclaw.ai/channels/whatsapp",
-    instructions: [],
-    fields: []
-  },
-  {
-    id: "discord",
-    name: "Discord",
-    description: "Guild / Channel 事件联动",
-    icon: channelDiscordIcon,
-    docsUrl: "https://icnnp7d0dymg.feishu.cn/wiki/BkOywJYCAiYRN9k4KTTceKPMnxg#C9zjdBRT1oqZ4VxF8q7ceRxQnLk",
-    instructions: [
-      "打开 Discord Developer Portal，创建应用并添加 Bot",
-      "进入应用 > Bot 页面点击 Reset Token 获取 Bot Token，并开启 Message Content Intent",
-      "在下方填写凭证并生成授权链接，将机器人添加到目标服务器"
-    ],
-    fields: [
-      { key: "appId", label: "Application ID", placeholder: "例如 1470267845714645176", required: true },
-      { key: "token", label: "Bot Token", placeholder: "从开发者门户 > Bot > Token 粘贴", required: true, secret: true }
-    ]
-  }
-];
-const CHANNEL_CONFIG_GUIDED_LAYOUT_IDS = new Set(["dingtalk", "telegram", "discord"]);
-const CHANNEL_CONFIG_GUIDED_FIELD_ORDER: Record<string, string[]> = {
-  dingtalk: ["clientId", "clientSecret"],
-  telegram: ["botToken"],
-  discord: ["appId", "token"]
-};
-const chatChannelCatalogMap = new Map<string, ChannelPaneCatalogItem>(chatChannelCatalog.map((channel) => [channel.id, channel]));
-const chatChannelAliasMap = new Map<string, string>();
-for (const channel of chatChannelCatalog) {
-  chatChannelAliasMap.set(channel.id, channel.id);
-  for (const alias of channel.aliases ?? []) {
-    chatChannelAliasMap.set(alias, channel.id);
-  }
-}
-for (const alias of ["work-wechat", "work_wechat"]) {
-  chatChannelAliasMap.set(alias, "wecom");
-}
-for (const alias of ["ding-talk", "ding_talk"]) {
-  chatChannelAliasMap.set(alias, "dingtalk");
-}
-for (const alias of ["wechat-official", "wechat_service"]) {
-  chatChannelAliasMap.set(alias, "weixin");
-}
-for (const alias of ["tencent-qq"]) {
-  chatChannelAliasMap.set(alias, "qq");
-}
-for (const alias of ["qqbot"]) {
-  chatChannelAliasMap.set(alias, "qq");
-}
-for (const alias of ["lark"]) {
-  chatChannelAliasMap.set(alias, "feishu");
-}
-for (const alias of ["whats-app"]) {
-  chatChannelAliasMap.set(alias, "whatsapp");
-}
-const agentAvatarModules = import.meta.glob("../../images/avatar/*.{png,jpg,jpeg,webp,avif,svg}", {
-  eager: true,
-  import: "default"
-}) as Record<string, string>;
-const agentAvatarPool = Object.entries(agentAvatarModules)
-  .sort(([leftPath], [rightPath]) => leftPath.localeCompare(rightPath, "en"))
-  .map(([, url]) => url)
-  .filter((url) => typeof url === "string" && url.trim().length > 0);
-const SIDEBAR_AVATAR_PRESET_COUNT_PER_CATEGORY = 14;
-const SIDEBAR_AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
-const sidebarAvatarCategoryTabs: Array<{ id: SidebarAvatarCategoryId; label: string }> = [
-  { id: "pixel", label: "像素风" },
-  { id: "illustration", label: "插画" },
-  { id: "animal", label: "动物" },
-  { id: "cute", label: "手绘风" }
-];
-const SIDEBAR_PIXEL_AVATAR_PALETTES = [
-  { bg: "#6f85ff", frame: "#4156aa", skin: "#f6cfaf", hair: "#22273d", eye: "#0d1224", top: "#eef2ff", accent: "#9eb0ff" },
-  { bg: "#5db4ff", frame: "#2f709f", skin: "#f8d8ba", hair: "#5e3a24", eye: "#122039", top: "#f8f1e7", accent: "#9ad5ff" },
-  { bg: "#7fda9a", frame: "#3b8a57", skin: "#f2cdb2", hair: "#253243", eye: "#152238", top: "#f4fff3", accent: "#9ce8b4" },
-  { bg: "#ffa6a6", frame: "#b35f63", skin: "#f9d5be", hair: "#3b2b2b", eye: "#23161b", top: "#fff3f3", accent: "#ffc9c9" },
-  { bg: "#c695ff", frame: "#6c4ba8", skin: "#f7d7c5", hair: "#2c2148", eye: "#101026", top: "#f5ecff", accent: "#dac1ff" },
-  { bg: "#f4ca6b", frame: "#ad8435", skin: "#f4cfb2", hair: "#2f2a1e", eye: "#1b1a15", top: "#fff7e4", accent: "#f8de9f" },
-  { bg: "#6dd0c8", frame: "#2d857d", skin: "#f5d8c0", hair: "#2f3c31", eye: "#0d1c16", top: "#ebfffb", accent: "#9be5de" },
-  { bg: "#8db6ff", frame: "#4f71b8", skin: "#f6d1b9", hair: "#2f2f4f", eye: "#121a33", top: "#eef5ff", accent: "#c0d4ff" },
-  { bg: "#ffb774", frame: "#b8713f", skin: "#f7d9c1", hair: "#3f2f21", eye: "#20150f", top: "#fff2e3", accent: "#ffd3a8" },
-  { bg: "#97e58e", frame: "#51914a", skin: "#f5d4ba", hair: "#2a3b2d", eye: "#132018", top: "#f3fff0", accent: "#bdf0b7" },
-  { bg: "#ff95d8", frame: "#b75493", skin: "#f8d6c6", hair: "#3e2442", eye: "#1f1231", top: "#fff0fb", accent: "#ffc5ea" },
-  { bg: "#79d5ff", frame: "#3f7ea6", skin: "#f6d7bd", hair: "#213246", eye: "#122130", top: "#ecf8ff", accent: "#afe4ff" },
-  { bg: "#a6b1ff", frame: "#5f6ab7", skin: "#f7d8c0", hair: "#2e2d54", eye: "#171734", top: "#f1f3ff", accent: "#cad0ff" },
-  { bg: "#ffae98", frame: "#b86455", skin: "#f8d4bc", hair: "#3f3028", eye: "#241a16", top: "#fff1ed", accent: "#ffd2c7" }
-] as const;
-const SIDEBAR_HANDDRAWN_AVATAR_PALETTES = [
-  { bg: "#2d6ff5", skin: "#f6dfe2", hair: "#f8f8f8", top: "#071737", lens: "#7262df", accent: "#f08e8e" },
-  { bg: "#4e7dff", skin: "#f9dfcc", hair: "#273245", top: "#0f233f", lens: "#6cb5ff", accent: "#ef9a87" },
-  { bg: "#4abf9a", skin: "#f7dbc8", hair: "#232d2f", top: "#102635", lens: "#8f7cff", accent: "#f19680" },
-  { bg: "#7b74ff", skin: "#f3d6db", hair: "#efeef9", top: "#101d44", lens: "#5a78ff", accent: "#e88692" },
-  { bg: "#5a9df6", skin: "#f8ddc9", hair: "#f2e1c5", top: "#112548", lens: "#6f8fff", accent: "#f2a57f" },
-  { bg: "#3e8ddf", skin: "#f6d7c9", hair: "#412f28", top: "#0d1b3a", lens: "#8b6ee9", accent: "#ee8f8c" },
-  { bg: "#3570cf", skin: "#f5dad2", hair: "#f0f5ff", top: "#0a1a38", lens: "#7d6ce3", accent: "#eb9287" }
-] as const;
 const sidebarAvatarPresetOptions = buildSidebarAvatarPresetOptions();
-
-const CHAT_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-history";
-const SESSION_STORAGE_PREFIX = "keai.desktop-pet.openclaw.session-id";
-const CHAT_ARCHIVE_STORAGE_PREFIX = "keai.desktop-pet.openclaw.chat-archives";
-const STARTUP_OPENCLAW_HEALTHY_MARK_STORAGE_KEY = "keai.desktop-pet.openclaw.startup-healthy.v1";
-const VIRTUAL_OPENCLAW_SESSION_CHANNEL_TYPE = "__openclaw_session__";
-const CHAT_USER_GROUPS_STORAGE_KEY = "keai.desktop-pet.chat-user-groups";
-const CHAT_USER_GROUP_MEMBERSHIP_STORAGE_KEY = "keai.desktop-pet.chat-user-group-membership";
-const CHAT_CONVERSATION_GROUPS_STORAGE_KEY = "keai.desktop-pet.chat-conversation-groups";
-const CHAT_USER_AGENT_ORDER_STORAGE_KEY = "keai.desktop-pet.chat-user-agent-order";
-const CHAT_USER_COLLAPSED_SECTIONS_STORAGE_KEY = "keai.desktop-pet.chat-user-collapsed-sections";
-const CHAT_USER_CUSTOM_AGENTS_STORAGE_KEY = "keai.desktop-pet.chat-user-custom-agents";
-const CHAT_USER_PINNED_GROUP_ID = "builtin:pinned";
-const CHAT_CONVERSATION_GROUP_AGENT_PREFIX = "chat-group:";
-const CHAT_CONVERSATION_GROUP_DEFAULT_POLICY: ChatConversationGroupPolicy = "allowlist";
-const CHAT_CONVERSATION_GROUP_DEFAULT_ALLOW_FROM = ["local:*"] as const;
-const CHAT_CONVERSATION_GROUP_DEFAULT_REQUIRE_MENTION = true;
-const CHAT_CONVERSATION_GROUP_DEFAULT_ACTIVATION_COMMAND = "/activation";
-const CHAT_CONVERSATION_GROUP_MIN_HISTORY_LIMIT = 8;
-const CHAT_CONVERSATION_GROUP_MAX_HISTORY_LIMIT = 80;
-const CHAT_CONVERSATION_GROUP_DEFAULT_HISTORY_LIMIT = 40;
-const CHAT_MARKDOWN_RENDER_CACHE_MAX = 220;
-const CHAT_FILE_DETECTION_CACHE_MAX = 220;
-const CHAT_FILE_UNIX_PATH_PATTERN = /(?:^|[\s"'`([{<])((?:\/|~\/)[^\s"'`<>|]+?\.[a-z0-9]{1,12})(?=$|[\s"')\]}>.,;:!?，。；：！？`])/gim;
-const CHAT_FILE_WINDOWS_PATH_PATTERN = /(?:^|[\s"'`([{<])([a-z]:\\[^\s"'`<>|]+?\.[a-z0-9]{1,12})(?=$|[\s"')\]}>.,;:!?，。；：！？`])/gim;
-const CHAT_FILE_URL_PATTERN = /(?:^|[\s"'`([{<])(file:\/\/\/?[^\s"'`<>|]+?\.[a-z0-9]{1,12})(?=$|[\s"')\]}>.,;:!?，。；：！？`])/gim;
-const CHAT_FILE_PATH_TRAILING_TOKENS = new Set([".", ",", ";", ":", "!", "?", "，", "。", "；", "：", "！", "？", ")", "]", "}", ">", "`"]);
-const CHAT_FILE_IMAGE_EXTENSIONS = new Set([
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "bmp",
-  "avif",
-  "svg",
-  "heic",
-  "heif",
-  "tif",
-  "tiff",
-  "ico",
-  "jfif"
-]);
-const CHAT_FILE_AUDIO_EXTENSIONS = new Set([
-  "mp3",
-  "wav",
-  "ogg",
-  "m4a",
-  "aac",
-  "flac",
-  "opus",
-  "wma",
-  "amr",
-  "aif",
-  "aiff",
-  "caf",
-  "alac"
-]);
-const CHAT_FILE_VIDEO_EXTENSIONS = new Set([
-  "mp4",
-  "webm",
-  "mov",
-  "m4v",
-  "mkv",
-  "avi",
-  "wmv",
-  "flv",
-  "mpg",
-  "mpeg",
-  "3gp",
-  "ogv",
-  "ts",
-  "m2ts",
-  "mts"
-]);
-const CHAT_FILE_HTML_EXTENSIONS = new Set(["html", "htm"]);
-const ROLE_WORKFLOW_OVERRIDES_STORAGE_KEY = "keai.desktop-pet.role-workflow-overrides";
-const RECRUITMENT_DIVISION_FILTER_ALL = "__all__";
-const CREATE_EMPLOYEE_IDENTITY_OPTIONS: CreateEmployeeIdentityOption[] = [
-  { id: "efficiency", icon: "🧮", name: "效率专家", desc: "擅长分析、规划、总结" },
-  { id: "creative", icon: "🎨", name: "创意伙伴", desc: "擅长写作、头脑风暴、设计" },
-  { id: "coach", icon: "👨‍🏫", name: "知识教练", desc: "擅长教学、解释、答疑" },
-  { id: "advisor", icon: "💼", name: "专业顾问", desc: "模拟法律、财务、技术等角色" },
-  { id: "companion", icon: "😄", name: "趣味玩伴", desc: "擅长聊天、游戏、角色扮演" },
-  { id: "researcher", icon: "🔍", name: "研究助手", desc: "擅长查找、对比、调研" }
-];
-const CREATE_EMPLOYEE_RANDOM_NAMES = [
-  "财税小专家",
-  "灵感火花",
-  "决策导航仪",
-  "行程百事通",
-  "代码医生",
-  "创意引擎",
-  "学习伙伴",
-  "分析大师",
-  "写作助手",
-  "策划专家",
-  "翻译官",
-  "记忆管家"
-];
-const CREATE_EMPLOYEE_TASK_EXAMPLES = [
-  "生成会议纪要",
-  "润色邮件文案",
-  "生成Python代码片段",
-  "进行SWOT分析",
-  "制定旅行计划",
-  "总结长篇文章"
-];
-const CREATE_EMPLOYEE_STEPS: Array<{ id: CreateEmployeeModalStep; label: string }> = [
-  { id: 1, label: "定义身份" },
-  { id: 2, label: "设定能力" },
-  { id: 3, label: "调整性格" }
-];
-const CREATE_EMPLOYEE_DEFAULT_RULES: CreateEmployeeRuleItem[] = [
-  { id: "rule-reference", text: "所有建议仅供参考，不构成专业（医疗/法律/财务）意见。", enabled: true },
-  { id: "rule-safe", text: "回答应安全、合规、健康。", enabled: true },
-  { id: "rule-honest", text: "在不确定答案时，应诚实告知。", enabled: true }
-];
-const CREATE_EMPLOYEE_MAX_TASKS = 20;
-const CREATE_EMPLOYEE_MAX_RULES = 12;
-const UTILITY_LOG_ROLE_FILTER_ACTIVE = "__active__";
-const UTILITY_LOG_ROLE_FILTER_ALL = "__all__";
-const ROLE_WORKFLOW_INSTALL_PROMPT_PREFIX = "请根据以下角色信息创建 agent:";
-const PROTECTED_STAFF_AGENT_IDS = new Set(["main"]);
-const MAIN_STAFF_DISPLAY_NAME = "超级管理者";
-const STARTUP_OPENCLAW_STEPS_BASE: Array<Omit<StartupInstallStep, "status">> = [
-  { id: "env", title: "检测环境", etaLabel: "" },
-  { id: "node", title: "准备 Node.js", etaLabel: "" },
-  { id: "install", title: "安装/修复 openClaw", etaLabel: "~30秒" },
-  { id: "model", title: "配置 AI 大模型", etaLabel: "~3秒" },
-  { id: "gateway", title: "启动并连接服务", etaLabel: "~10秒" }
-];
-const LOCKED_STARTUP_OPENCLAW_PROVIDER = {
-  providerId: "openai",
-  protocol: "openai" as OpenClawProviderProtocol,
-  apiKind: "openai-responses" as OpenClawProviderApiKind,
-  baseUrl: "https://api-vip.codex-for.me/v1",
-  model: "gpt-5.4",
-  apiKey: "clp_a509beff828ec968d29c8fd3e9a0449b51074ab1d193b9a787c6001dd0627320"
-};
 
 const activeSection = ref<SidebarSection>("chat");
 const activeAgentPaneTab = ref<AgentPaneTab>("staff");
@@ -1793,60 +1515,6 @@ const marketPlansByTab: Record<MarketTabId, MarketPlanCard[]> = {
 const activeMarketPlans = computed(() => marketPlansByTab[activeMarketTab.value]);
 const marketPointsFormatter = new Intl.NumberFormat("zh-CN");
 const SKILL_MARKET_SKILLHUB_URL = "https://skillhub.tencent.com/";
-
-function getStorage() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
-function safeStorageGet(key: string) {
-  try {
-    return getStorage()?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function safeStorageSet(key: string, value: string) {
-  try {
-    getStorage()?.setItem(key, value);
-  } catch {
-    // Ignore storage failures.
-  }
-}
-
-function safeStorageRemove(key: string) {
-  try {
-    getStorage()?.removeItem(key);
-  } catch {
-    // Ignore storage failures.
-  }
-}
-
-function safeStorageKeysByPrefix(prefix: string) {
-  try {
-    const storage = getStorage();
-    if (!storage) {
-      return [] as string[];
-    }
-    const keys: string[] = [];
-    for (let index = 0; index < storage.length; index += 1) {
-      const key = storage.key(index);
-      if (typeof key === "string" && key.startsWith(prefix)) {
-        keys.push(key);
-      }
-    }
-    return keys;
-  } catch {
-    return [] as string[];
-  }
-}
 
 function hasStartupOpenClawHealthyMark() {
   const raw = safeStorageGet(STARTUP_OPENCLAW_HEALTHY_MARK_STORAGE_KEY);
@@ -3443,43 +3111,6 @@ function updateTaskRecord(nextTask: Omit<TaskRecord, "updatedAt">) {
   taskItems.value = upsertTask(taskItems.value, nextTask);
 }
 
-function getTauriNamespace(): TauriNamespace | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  return (window as Window & { __TAURI__?: TauriNamespace }).__TAURI__ ?? null;
-}
-
-function getTauriInvoke(): TauriInvoke | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const runtime = window as Window & {
-    __TAURI__?: TauriNamespace;
-    __TAURI_INTERNALS__?: {
-      invoke?: TauriInvoke;
-    };
-  };
-  return runtime.__TAURI__?.core?.invoke ?? runtime.__TAURI_INTERNALS__?.invoke ?? null;
-}
-
-function getTauriConvertFileSrc(): ((filePath: string, protocol?: string) => string) | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const runtime = window as Window & {
-    __TAURI__?: TauriNamespace;
-    __TAURI_INTERNALS__?: {
-      convertFileSrc?: (filePath: string, protocol?: string) => string;
-    };
-  };
-  return runtime.__TAURI__?.core?.convertFileSrc ?? runtime.__TAURI_INTERNALS__?.convertFileSrc ?? null;
-}
-
-function getTauriWindow(): TauriWindowApi | null {
-  return getTauriNamespace()?.window?.getCurrentWindow?.() ?? null;
-}
-
 function cloneStartupOpenClawSteps() {
   return STARTUP_OPENCLAW_STEPS_BASE.map((step) => ({
     ...step,
@@ -4055,10 +3686,6 @@ function createMessageId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function createSessionId() {
-  return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 function stripRuntimeSessionInstanceSuffix(value: string) {
   const source = value.trim();
   if (!source) {
@@ -4127,30 +3754,6 @@ function resolveConversationScopeKey(agentId: string | null, channelSession: Cha
     return buildAgentConversationScopeKey(normalizedAgentId);
   }
   return buildChannelConversationScopeKey(normalizedAgentId, channelSession);
-}
-
-function chatStorageKeyFor(conversationScopeKey: string) {
-  return `${CHAT_STORAGE_PREFIX}.${conversationScopeKey}`;
-}
-
-function sessionStorageKeyFor(conversationScopeKey: string) {
-  return `${SESSION_STORAGE_PREFIX}.${conversationScopeKey}`;
-}
-
-function chatArchiveStorageKeyFor(conversationScopeKey: string) {
-  return `${CHAT_ARCHIVE_STORAGE_PREFIX}.${conversationScopeKey}`;
-}
-
-function legacyChatStorageKeyForAgent(agentId: string) {
-  return `${CHAT_STORAGE_PREFIX}.${agentId}`;
-}
-
-function legacySessionStorageKeyForAgent(agentId: string) {
-  return `${SESSION_STORAGE_PREFIX}.${agentId}`;
-}
-
-function legacyChatArchiveStorageKeyForAgent(agentId: string) {
-  return `${CHAT_ARCHIVE_STORAGE_PREFIX}.${agentId}`;
 }
 
 function stripRoleLabel(name: string) {
@@ -4309,104 +3912,47 @@ function inferGroupKind(displayName: string, roleLabel: string): AgentGroupKind 
 }
 
 function formatTimeLabel(timestamp: number) {
-  return new Date(timestamp).toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
+  return formatTimeLabelFromUtils(timestamp);
 }
 
 function normalizeRole(value: unknown): ChatRole | null {
-  return value === "assistant" || value === "user" || value === "system" ? value : null;
+  return normalizeRoleFromService(value);
 }
 
 function normalizeStatus(value: unknown): ChatStatus {
-  if (value === "pending" || value === "done" || value === "error") {
-    return value;
-  }
-  return "done";
+  return normalizeStatusFromService(value);
 }
 
 function normalizeToolStatus(value: unknown): ChatToolStatus | undefined {
-  if (value === "running" || value === "done" || value === "error") {
-    return value;
-  }
-  return undefined;
+  return normalizeToolStatusFromService(value);
 }
 
 function createChatAttachmentId() {
-  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return createChatAttachmentIdFromService();
 }
 
 function normalizeChatComposerFileExtension(fileName: string) {
-  const normalized = fileName.trim().toLowerCase();
-  const dotIndex = normalized.lastIndexOf(".");
-  if (dotIndex < 0 || dotIndex >= normalized.length - 1) {
-    return "";
-  }
-  return normalized.slice(dotIndex + 1);
+  return normalizeChatComposerFileExtensionFromUtils(fileName);
 }
 
 function resolveChatComposerFallbackFileName(file: File, index: number) {
-  const mimeType = file.type.trim().toLowerCase();
-  if (mimeType.startsWith("image/")) {
-    const extension = mimeType.split("/")[1] || "png";
-    return `粘贴图片-${Date.now()}-${index + 1}.${extension}`;
-  }
-  const extension = normalizeChatComposerFileExtension(file.name);
-  if (extension) {
-    return `附件-${Date.now()}-${index + 1}.${extension}`;
-  }
-  return `附件-${Date.now()}-${index + 1}`;
+  return resolveChatComposerFallbackFileNameFromUtils(file, index);
 }
 
 function resolveChatComposerFileDisplayName(file: File, index: number) {
-  const normalized = file.name.trim();
-  if (normalized) {
-    return normalized;
-  }
-  return resolveChatComposerFallbackFileName(file, index);
+  return resolveChatComposerFileDisplayNameFromUtils(file, index);
 }
 
 function resolveChatComposerFileLocalPath(file: File) {
-  const candidatePath = (file as File & { path?: unknown }).path;
-  if (typeof candidatePath !== "string") {
-    return "";
-  }
-  const normalized = normalizeDetectedFilePath(candidatePath);
-  if (!normalized || !isAbsoluteLocalPath(normalized)) {
-    return "";
-  }
-  return normalized;
+  return resolveChatComposerFileLocalPathFromUtils(file);
 }
 
 function resolveDetectedFileKindFromMimeType(mimeTypeRaw: string) {
-  const mimeType = mimeTypeRaw.trim().toLowerCase();
-  if (!mimeType) {
-    return "other" as ChatDetectedFileKind;
-  }
-  if (mimeType.startsWith("image/")) {
-    return "image" as ChatDetectedFileKind;
-  }
-  if (mimeType.startsWith("audio/")) {
-    return "audio" as ChatDetectedFileKind;
-  }
-  if (mimeType.startsWith("video/")) {
-    return "video" as ChatDetectedFileKind;
-  }
-  if (mimeType === "text/html" || mimeType === "application/xhtml+xml") {
-    return "html" as ChatDetectedFileKind;
-  }
-  return "other" as ChatDetectedFileKind;
+  return resolveDetectedFileKindFromMimeTypeFromUtils(mimeTypeRaw) as ChatDetectedFileKind;
 }
 
 function resolveChatComposerAttachmentDetectedKind(attachment: Pick<ChatComposerAttachment, "name" | "type">) {
-  const fromMimeType = resolveDetectedFileKindFromMimeType(attachment.type);
-  if (fromMimeType !== "other") {
-    return fromMimeType;
-  }
-  const extension = normalizeChatComposerFileExtension(attachment.name);
-  return extension ? resolveDetectedFileKind(extension) : "other";
+  return resolveChatComposerAttachmentDetectedKindFromUtils(attachment) as ChatDetectedFileKind;
 }
 
 function revokeChatAttachmentLocalPreviewObjectUrl(objectUrl: string) {
@@ -4552,22 +4098,11 @@ function collectFilesFromDataTransfer(dataTransfer: DataTransfer | null | undefi
 }
 
 function normalizeChatComposerLocalPathCandidate(rawPath: string | null | undefined) {
-  if (!rawPath) {
-    return "";
-  }
-  const normalized = normalizeDetectedFilePath(rawPath);
-  if (!normalized || !isAbsoluteLocalPath(normalized)) {
-    return "";
-  }
-  return normalized;
+  return normalizeChatComposerLocalPathCandidateFromUtils(rawPath);
 }
 
 function sanitizeChatAttachmentWorkspaceHint(rawWorkspace: string | null | undefined) {
-  const normalized = (rawWorkspace ?? "").trim();
-  if (!normalized || normalized === "—" || normalized === "-") {
-    return "";
-  }
-  return normalizeChatComposerLocalPathCandidate(normalized);
+  return sanitizeChatAttachmentWorkspaceHintFromUtils(rawWorkspace);
 }
 
 function readAttachmentFileAsDataUrl(file: File) {
@@ -4637,631 +4172,75 @@ function resetChatComposerDragState() {
 }
 
 function formatAttachmentSize(size: number) {
-  if (!Number.isFinite(size) || size <= 0) {
-    return "0 B";
-  }
-  if (size < 1024) {
-    return `${Math.round(size)} B`;
-  }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return formatAttachmentSizeFromUtils(size);
 }
 
 function normalizeAttachment(raw: unknown): ChatComposerAttachment | null {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const candidate = raw as Partial<ChatComposerAttachment>;
-  const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
-  if (!name) {
-    return null;
-  }
-  const size = typeof candidate.size === "number" && Number.isFinite(candidate.size) ? Math.max(0, candidate.size) : 0;
-  const type = typeof candidate.type === "string" ? candidate.type : "";
-  const rawLocalPath = typeof candidate.localPath === "string" ? normalizeDetectedFilePath(candidate.localPath) : "";
-  const localPath = rawLocalPath && isAbsoluteLocalPath(rawLocalPath) ? rawLocalPath : undefined;
-  return {
-    id: typeof candidate.id === "string" && candidate.id.trim() ? candidate.id : createChatAttachmentId(),
-    name,
-    size,
-    type,
-    localPath
-  };
+  return normalizeAttachmentFromService(raw, createChatAttachmentId) as ChatComposerAttachment | null;
 }
 
 function normalizeMessageAttachments(raw: unknown): ChatComposerAttachment[] | undefined {
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  const list = raw.map((item) => normalizeAttachment(item)).filter((item): item is ChatComposerAttachment => item !== null);
-  return list.length > 0 ? list : undefined;
+  return normalizeMessageAttachmentsFromService(raw, createChatAttachmentId) as ChatComposerAttachment[] | undefined;
 }
 
 function formatAttachmentSummaryForPrompt(attachments: ChatComposerAttachment[]) {
-  if (attachments.length === 0) {
-    return "";
-  }
-  const details = attachments.map((attachment) => {
-    const base = `${attachment.name} (${formatAttachmentSize(attachment.size)})`;
-    const localPath = normalizeChatComposerLocalPathCandidate(attachment.localPath);
-    if (!localPath) {
-      return base;
-    }
-    return `${base} [localPath: ${localPath}]`;
-  });
-  return `[附件: ${details.join("；")}]`;
+  return formatAttachmentSummaryForPromptFromUtils(attachments);
 }
 
 const CHAT_LOCAL_USER_DUPLICATE_WINDOW_MS = 4 * 1000;
 
 function buildLocalAttachmentSignature(attachments: ChatComposerAttachment[]) {
-  if (attachments.length === 0) {
-    return "";
-  }
-  return attachments
-    .map((attachment) => `${attachment.name.trim().toLowerCase()}|${Math.max(0, Math.floor(attachment.size))}`)
-    .sort()
-    .join(";");
+  return buildLocalAttachmentSignatureFromService(attachments);
 }
 
 function normalizeLocalUserMessageDedupText(text: string, attachments: ChatComposerAttachment[]) {
-  const normalizedText = text.replace(/\s+/g, " ").trim();
-  if (normalizedText) {
-    return normalizedText;
-  }
-  return attachments.length > 0 ? "(附件)" : "";
+  return normalizeLocalUserMessageDedupTextFromService(text, attachments);
 }
 
 function isRecentDuplicateUserSubmit(text: string, attachments: ChatComposerAttachment[], nowMs: number) {
-  const dedupText = normalizeLocalUserMessageDedupText(text, attachments);
-  if (!dedupText) {
-    return false;
-  }
-  const dedupAttachmentSignature = buildLocalAttachmentSignature(attachments);
-  for (let index = chatMessages.value.length - 1; index >= 0; index -= 1) {
-    const item = chatMessages.value[index];
-    if (!item || item.role !== "user" || item.status !== "done") {
-      continue;
-    }
-    const createdAt = typeof item.createdAt === "number" && Number.isFinite(item.createdAt) ? item.createdAt : 0;
-    if (createdAt <= 0 || nowMs - createdAt > CHAT_LOCAL_USER_DUPLICATE_WINDOW_MS) {
-      if (createdAt > 0) {
-        break;
-      }
-      continue;
-    }
-    const existingText = normalizeLocalUserMessageDedupText(item.text, item.attachments ?? []);
-    const existingAttachmentSignature = buildLocalAttachmentSignature(item.attachments ?? []);
-    if (existingText === dedupText && existingAttachmentSignature === dedupAttachmentSignature) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function stripLeadingUntrustedMetadataEnvelope(text: string) {
-  const normalized = text.replace(/\r\n/g, "\n");
-  const hasMetadataMarker = /\(untrusted metadata\):/i.test(normalized);
-  const hasCodeBlock = /```(?:json)?/i.test(normalized);
-  const likelyEnvelopeStart = /^System:\s*\[/.test(normalized) || /^[^\n]*\(untrusted metadata\):/i.test(normalized);
-  if (!hasMetadataMarker || !hasCodeBlock || !likelyEnvelopeStart) {
-    return text;
-  }
-
-  let rest = normalized;
-  rest = rest.replace(/^System:[\s\S]*?\n{2}/, "");
-
-  const metadataSectionPattern = /^[^\n]*\(untrusted metadata\):\s*\n```(?:json)?\n[\s\S]*?\n```(?:\n{1,2})?/i;
-  let previous = "";
-  while (rest !== previous) {
-    previous = rest;
-    rest = rest.replace(metadataSectionPattern, "");
-  }
-
-  return rest.trimStart();
-}
-
-function stripLeadingMessageIdLabel(text: string) {
-  const normalized = text.replace(/\r\n/g, "\n");
-  const markerPattern = /^\s*\[(?:message|msg)[_\s-]?id\s*[:：]\s*[^\]\n]+\]\s*(?:\n+)?/i;
-  let rest = normalized;
-  let previous = "";
-  while (rest !== previous) {
-    previous = rest;
-    rest = rest.replace(markerPattern, "");
-  }
-  return rest.trimStart();
-}
-
-function stripLeadingChannelSenderIdLabel(text: string) {
-  const normalized = text.replace(/\r\n/g, "\n");
-  const labeledSenderPattern =
-    /^\s*(?:feishu:(?:direct|group):)?(?:user:|chat:)?((?:ou|oc)_[a-z0-9]{8,})\s*(?:[:：-]\s*|\s+)([\s\S]+)$/i;
-  const labeledSenderMatch = normalized.match(labeledSenderPattern);
-  if (labeledSenderMatch?.[2]?.trim()) {
-    return labeledSenderMatch[2].trimStart();
-  }
-
-  const compactSenderPattern = /^\s*((?:ou|oc)_[a-z0-9]{16,})(?=[\u4e00-\u9fff])/i;
-  const compactSenderMatch = normalized.match(compactSenderPattern);
-  if (compactSenderMatch?.[1]) {
-    const rest = normalized.slice(compactSenderMatch[0].length).trimStart();
-    if (rest) {
-      return rest;
-    }
-  }
-
-  return text;
-}
-
-function extractLatestUserLineFromPromptEnvelope(text: string) {
-  const normalized = text.replace(/\r\n/g, "\n");
-  const markerPattern = /\[Current message - respond to this\]/i;
-  const markerMatch = markerPattern.exec(normalized);
-  const scope = markerMatch ? normalized.slice(markerMatch.index + markerMatch[0].length) : normalized;
-
-  const userLinePattern = /^(?:User|用户)\s*[:：]\s*(.+)$/gim;
-  let lastContent = "";
-  let matched: RegExpExecArray | null = null;
-  while ((matched = userLinePattern.exec(scope)) !== null) {
-    const content = (matched[1] ?? "").trim();
-    if (content) {
-      lastContent = content;
-    }
-  }
-  return lastContent;
-}
-
-function stripChatContextEnvelope(text: string) {
-  const normalized = text.replace(/\r\n/g, "\n");
-  const hasContextHeader = /^\s*\[Chat messages since your last reply - for context\]/i.test(normalized);
-  const hasCurrentMarker = /\[Current message - respond to this\]/i.test(normalized);
-  const hasConversationTurns = /(?:^|\n)(?:User|用户)\s*[:：]/i.test(normalized) && /(?:^|\n)(?:Assistant|助手)\s*[:：]/i.test(normalized);
-  if (!hasContextHeader && !hasCurrentMarker && !hasConversationTurns) {
-    return text;
-  }
-
-  const extractedCurrentMessage = extractLatestUserLineFromPromptEnvelope(normalized);
-  if (extractedCurrentMessage) {
-    return extractedCurrentMessage;
-  }
-  return text;
+  return isRecentDuplicateUserSubmitFromService({
+    text,
+    attachments,
+    messages: chatMessages.value,
+    nowMs,
+    duplicateWindowMs: CHAT_LOCAL_USER_DUPLICATE_WINDOW_MS
+  });
 }
 
 function sanitizeMessageTextForDisplay(rawText: string) {
-  return stripChatContextEnvelope(
-    stripLeadingChannelSenderIdLabel(stripLeadingMessageIdLabel(stripLeadingUntrustedMetadataEnvelope(rawText)))
-  ).trim();
-}
-
-const chatMarkdownRenderCache = new Map<string, string>();
-const chatDetectedFilesCache = new Map<string, ChatDetectedFile[]>();
-
-function setLimitedCacheEntry<T>(cache: Map<string, T>, key: string, value: T, maxEntries: number) {
-  cache.set(key, value);
-  if (cache.size <= maxEntries) {
-    return value;
-  }
-  const firstKey = cache.keys().next().value;
-  if (typeof firstKey === "string") {
-    cache.delete(firstKey);
-  }
-  return value;
+  return sanitizeMessageTextForDisplayFromUtils(rawText);
 }
 
 function escapeHtml(raw: string) {
-  return raw
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function escapeHtmlAttribute(raw: string) {
-  return escapeHtml(raw).replace(/`/g, "&#96;");
-}
-
-function encodeTextForHtmlDataAttribute(raw: string) {
-  return escapeHtmlAttribute(encodeURIComponent(raw));
-}
-
-function sanitizeMarkdownHref(rawHref: string) {
-  const candidate = rawHref.trim().replace(/&amp;/g, "&");
-  if (!candidate) {
-    return null;
-  }
-  if (
-    candidate.startsWith("http://") ||
-    candidate.startsWith("https://") ||
-    candidate.startsWith("mailto:") ||
-    candidate.startsWith("file://")
-  ) {
-    return candidate;
-  }
-  return null;
-}
-
-function renderInlineMarkdown(raw: string) {
-  const codeTokens: string[] = [];
-  const withTokens = raw.replace(/`([^`]+?)`/g, (_match: string, codeText: string) => {
-    const token = `@@CODE_${codeTokens.length}@@`;
-    const encodedCodeText = encodeTextForHtmlDataAttribute(codeText);
-    codeTokens.push(
-      `<span class="message-md-inline-code"><code>${escapeHtml(codeText)}</code><button type="button" class="message-md-copy message-md-inline-code__copy" data-copy-code="${encodedCodeText}">复制</button></span>`
-    );
-    return token;
-  });
-  let html = escapeHtml(withTokens);
-  html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_match: string, label: string, href: string) => {
-    const normalizedHref = sanitizeMarkdownHref(href);
-    if (!normalizedHref) {
-      return label;
-    }
-    return `<a href="${escapeHtmlAttribute(normalizedHref)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-  });
-  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
-  html = html.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-  for (let index = 0; index < codeTokens.length; index += 1) {
-    html = html.replace(`@@CODE_${index}@@`, codeTokens[index]);
-  }
-  return html;
-}
-
-function sanitizeMarkdownLanguage(raw: string) {
-  return raw.trim().replace(/[^a-z0-9_-]+/gi, "").slice(0, 24);
+  return escapeHtmlFromUtils(raw);
 }
 
 function renderMarkdownToHtml(markdown: string) {
-  const normalized = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  if (!normalized) {
-    return "";
-  }
-
-  const cached = chatMarkdownRenderCache.get(normalized);
-  if (typeof cached === "string") {
-    return cached;
-  }
-
-  const lines = normalized.split("\n");
-  const blocks: string[] = [];
-  const paragraphLines: string[] = [];
-  const quoteLines: string[] = [];
-  let listType: "ul" | "ol" | null = null;
-  let listItems: string[] = [];
-  let inCodeBlock = false;
-  let codeLanguage = "";
-  let codeLines: string[] = [];
-
-  const flushParagraph = () => {
-    if (paragraphLines.length === 0) {
-      return;
-    }
-    const text = paragraphLines.map((line) => renderInlineMarkdown(line.trim())).join("<br />");
-    blocks.push(`<p>${text}</p>`);
-    paragraphLines.length = 0;
-  };
-
-  const flushQuote = () => {
-    if (quoteLines.length === 0) {
-      return;
-    }
-    const content = quoteLines.map((line) => renderInlineMarkdown(line)).join("<br />");
-    blocks.push(`<blockquote><p>${content}</p></blockquote>`);
-    quoteLines.length = 0;
-  };
-
-  const flushList = () => {
-    if (!listType || listItems.length === 0) {
-      listType = null;
-      listItems = [];
-      return;
-    }
-    blocks.push(`<${listType}>${listItems.map((item) => `<li>${item}</li>`).join("")}</${listType}>`);
-    listType = null;
-    listItems = [];
-  };
-
-  const flushCodeBlock = () => {
-    if (!inCodeBlock) {
-      return;
-    }
-    const languageClass = codeLanguage ? ` class="language-${escapeHtmlAttribute(codeLanguage)}"` : "";
-    const codeText = codeLines.join("\n");
-    const encodedCodeText = encodeTextForHtmlDataAttribute(codeText);
-    blocks.push(
-      `<div class="message-md-codeblock"><button type="button" class="message-md-copy message-md-codeblock__copy" data-copy-code="${encodedCodeText}">复制</button><pre><code${languageClass}>${escapeHtml(codeText)}</code></pre></div>`
-    );
-    inCodeBlock = false;
-    codeLanguage = "";
-    codeLines = [];
-  };
-
-  const flushTextBlocks = () => {
-    flushParagraph();
-    flushQuote();
-    flushList();
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    if (inCodeBlock) {
-      if (/^```/.test(trimmed)) {
-        flushCodeBlock();
-      } else {
-        codeLines.push(line);
-      }
-      continue;
-    }
-
-    const fenceMatch = trimmed.match(/^```([a-z0-9_-]+)?\s*$/i);
-    if (fenceMatch) {
-      flushTextBlocks();
-      inCodeBlock = true;
-      codeLanguage = sanitizeMarkdownLanguage(fenceMatch[1] ?? "");
-      codeLines = [];
-      continue;
-    }
-
-    if (!trimmed) {
-      flushTextBlocks();
-      continue;
-    }
-
-    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-    if (headingMatch) {
-      flushTextBlocks();
-      const level = headingMatch[1].length;
-      blocks.push(`<h${level}>${renderInlineMarkdown(headingMatch[2].trim())}</h${level}>`);
-      continue;
-    }
-
-    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
-      flushTextBlocks();
-      blocks.push("<hr />");
-      continue;
-    }
-
-    const quoteMatch = line.match(/^\s*>\s?(.*)$/);
-    if (quoteMatch) {
-      flushParagraph();
-      flushList();
-      quoteLines.push(quoteMatch[1].trim());
-      continue;
-    }
-    flushQuote();
-
-    const orderedMatch = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (orderedMatch) {
-      flushParagraph();
-      if (listType !== "ol") {
-        flushList();
-        listType = "ol";
-      }
-      listItems.push(renderInlineMarkdown(orderedMatch[1].trim()));
-      continue;
-    }
-
-    const unorderedMatch = line.match(/^\s*[-*+]\s+(.+)$/);
-    if (unorderedMatch) {
-      flushParagraph();
-      if (listType !== "ul") {
-        flushList();
-        listType = "ul";
-      }
-      listItems.push(renderInlineMarkdown(unorderedMatch[1].trim()));
-      continue;
-    }
-
-    flushList();
-    paragraphLines.push(line);
-  }
-
-  flushTextBlocks();
-  flushCodeBlock();
-  const rendered = blocks.join("");
-  return setLimitedCacheEntry(chatMarkdownRenderCache, normalized, rendered, CHAT_MARKDOWN_RENDER_CACHE_MAX);
+  return renderMarkdownToHtmlFromUtils(markdown);
 }
 
 function shouldRenderMessageAsMarkdown(message: AgentChatMessage) {
   return message.role === "assistant" || message.role === "system";
 }
 
-function stripTrailingPathTokens(rawPath: string) {
-  let result = rawPath.trim();
-  while (result.length > 0) {
-    const tail = result.slice(-1);
-    if (!CHAT_FILE_PATH_TRAILING_TOKENS.has(tail)) {
-      break;
-    }
-    result = result.slice(0, -1);
-  }
-  return result;
-}
-
 function normalizeDetectedFilePath(rawPath: string) {
-  let normalized = rawPath.trim();
-  if (
-    normalized.length >= 2 &&
-    ((normalized.startsWith('"') && normalized.endsWith('"')) || (normalized.startsWith("'") && normalized.endsWith("'")))
-  ) {
-    normalized = normalized.slice(1, -1).trim();
-  }
-  return stripTrailingPathTokens(normalized);
+  return normalizeDetectedFilePathFromUtils(rawPath);
 }
 
 function isAbsoluteLocalPath(path: string) {
-  return path.startsWith("/") || /^[a-z]:[\\/]/i.test(path);
+  return isAbsoluteLocalPathFromUtils(path);
 }
 
 function resolveDetectedFileKind(extension: string): ChatDetectedFileKind {
-  const normalized = extension.trim().toLowerCase();
-  if (CHAT_FILE_IMAGE_EXTENSIONS.has(normalized)) {
-    return "image";
-  }
-  if (CHAT_FILE_AUDIO_EXTENSIONS.has(normalized)) {
-    return "audio";
-  }
-  if (CHAT_FILE_VIDEO_EXTENSIONS.has(normalized)) {
-    return "video";
-  }
-  if (CHAT_FILE_HTML_EXTENSIONS.has(normalized)) {
-    return "html";
-  }
-  return "other";
-}
-
-function encodePathForFileUrl(path: string) {
-  return path
-    .split("/")
-    .map((segment, index) => {
-      if (index === 0 && segment === "") {
-        return "";
-      }
-      if (/^[a-z]:$/i.test(segment)) {
-        return segment;
-      }
-      return encodeURIComponent(segment);
-    })
-    .join("/");
+  return resolveDetectedFileKindFromUtils(extension) as ChatDetectedFileKind;
 }
 
 function buildLocalFilePreviewUrls(path: string) {
-  const normalized = path.trim();
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-  const pushCandidate = (value: string | null | undefined) => {
-    const candidate = (value ?? "").trim();
-    if (!candidate || seen.has(candidate)) {
-      return;
-    }
-    seen.add(candidate);
-    candidates.push(candidate);
-  };
-
-  const convertFileSrc = getTauriConvertFileSrc();
-  if (convertFileSrc) {
-    try {
-      pushCandidate(convertFileSrc(normalized));
-    } catch {
-      // Keep fallback previews below.
-    }
-    try {
-      pushCandidate(convertFileSrc(normalized, "asset"));
-    } catch {
-      // Keep fallback previews below.
-    }
-  }
-
-  if (normalized.startsWith("/")) {
-    pushCandidate(`file://${encodePathForFileUrl(normalized)}`);
-    pushCandidate(`file://${normalized}`);
-    return candidates;
-  }
-  if (/^[a-z]:[\\/]/i.test(normalized)) {
-    const windowsPath = normalized.replace(/\\/g, "/");
-    pushCandidate(`file:///${encodePathForFileUrl(windowsPath)}`);
-    pushCandidate(`file:///${windowsPath}`);
-    return candidates;
-  }
-  return candidates;
-}
-
-function decodeFileUrlToPath(rawUrl: string) {
-  const source = stripTrailingPathTokens(rawUrl.trim());
-  if (!/^file:\/\//i.test(source)) {
-    return null;
-  }
-  try {
-    const url = new URL(source);
-    if (url.protocol !== "file:") {
-      return null;
-    }
-    let pathname = decodeURIComponent(url.pathname || "");
-    if (/^\/[a-z]:/i.test(pathname)) {
-      pathname = pathname.slice(1);
-    }
-    if (url.hostname && url.hostname !== "localhost") {
-      const hostPath = pathname.startsWith("/") ? pathname : `/${pathname}`;
-      return `//${url.hostname}${hostPath}`;
-    }
-    return pathname || null;
-  } catch {
-    const fallback = source.replace(/^file:\/\/+/, "/");
-    try {
-      return decodeURIComponent(fallback);
-    } catch {
-      return fallback;
-    }
-  }
+  return buildLocalFilePreviewUrlsFromUtils(path, getTauriConvertFileSrc());
 }
 
 function extractDetectedFilesFromText(text: string) {
-  const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!normalizedText.trim()) {
-    return [] as ChatDetectedFile[];
-  }
-  const cached = chatDetectedFilesCache.get(normalizedText);
-  if (cached) {
-    return cached;
-  }
-
-  const files: ChatDetectedFile[] = [];
-  const seen = new Set<string>();
-  const addDetectedPath = (rawPath: string) => {
-    const normalizedPath = normalizeDetectedFilePath(rawPath);
-    if (!normalizedPath || !isAbsoluteLocalPath(normalizedPath)) {
-      return;
-    }
-    const extension = normalizedPath.includes(".") ? normalizedPath.split(".").pop()?.toLowerCase() ?? "" : "";
-    if (!extension) {
-      return;
-    }
-    const id = normalizedPath.toLowerCase();
-    if (seen.has(id)) {
-      return;
-    }
-    seen.add(id);
-    const kind = resolveDetectedFileKind(extension);
-    files.push({
-      id,
-      normalizedPath,
-      extension,
-      kind,
-      previewUrls: buildLocalFilePreviewUrls(normalizedPath)
-    });
-  };
-
-  CHAT_FILE_UNIX_PATH_PATTERN.lastIndex = 0;
-  let unixMatch: RegExpExecArray | null = null;
-  while ((unixMatch = CHAT_FILE_UNIX_PATH_PATTERN.exec(normalizedText)) !== null) {
-    if (unixMatch[1]) {
-      addDetectedPath(unixMatch[1]);
-    }
-  }
-
-  CHAT_FILE_WINDOWS_PATH_PATTERN.lastIndex = 0;
-  let windowsMatch: RegExpExecArray | null = null;
-  while ((windowsMatch = CHAT_FILE_WINDOWS_PATH_PATTERN.exec(normalizedText)) !== null) {
-    if (windowsMatch[1]) {
-      addDetectedPath(windowsMatch[1]);
-    }
-  }
-
-  CHAT_FILE_URL_PATTERN.lastIndex = 0;
-  let fileUrlMatch: RegExpExecArray | null = null;
-  while ((fileUrlMatch = CHAT_FILE_URL_PATTERN.exec(normalizedText)) !== null) {
-    const decodedPath = decodeFileUrlToPath(fileUrlMatch[1] ?? "");
-    if (decodedPath) {
-      addDetectedPath(decodedPath);
-    }
-  }
-
-  return setLimitedCacheEntry(chatDetectedFilesCache, normalizedText, files, CHAT_FILE_DETECTION_CACHE_MAX);
+  return extractDetectedFilesFromTextFromUtils(text, getTauriConvertFileSrc()) as ChatDetectedFile[];
 }
 
 function getMessageDisplayHtml(message: AgentChatMessage) {
@@ -5651,204 +4630,115 @@ function getDetectedFilePreviewHint(file: ChatDetectedFile) {
 }
 
 function isImageDetectedFile(file: ChatDetectedFile) {
-  return file.kind === "image";
+  return isImageDetectedFileFromUtils(file);
 }
 
 function isAudioDetectedFile(file: ChatDetectedFile) {
-  return file.kind === "audio";
+  return isAudioDetectedFileFromUtils(file);
 }
 
 function isVideoDetectedFile(file: ChatDetectedFile) {
-  return file.kind === "video";
+  return isVideoDetectedFileFromUtils(file);
 }
 
 function isHtmlDetectedFile(file: ChatDetectedFile) {
-  return file.kind === "html";
+  return isHtmlDetectedFileFromUtils(file);
 }
 
 function buildOpenClawMessageContent(message: AgentChatMessage) {
-  const normalizedText = sanitizeMessageTextForDisplay(message.text);
-  if (message.role !== "user" || !message.attachments || message.attachments.length === 0) {
-    return normalizedText;
-  }
-  const summary = formatAttachmentSummaryForPrompt(message.attachments);
-  if (!summary) {
-    return normalizedText;
-  }
-  const baseText = normalizedText === "(附件)" ? "" : normalizedText;
-  return baseText ? `${baseText}\n\n${summary}` : summary;
+  return buildOpenClawMessageContentFromService(message, {
+    sanitizeText: sanitizeMessageTextForDisplay,
+    formatAttachmentSummary: formatAttachmentSummaryForPrompt
+  });
 }
 
 function getMessageDisplayText(message: AgentChatMessage) {
-  if (message.role === "user" && message.text.trim() === "(附件)" && message.attachments && message.attachments.length > 0) {
-    return "";
-  }
-  return sanitizeMessageTextForDisplay(message.text);
+  return getMessageDisplayTextFromService(message, sanitizeMessageTextForDisplay);
 }
 
 function isRuntimeToolMessage(message: AgentChatMessage) {
-  return message.kind === "runtime_tool";
+  return isRuntimeToolMessageFromService(message);
 }
 
 function normalizeMessage(raw: unknown): AgentChatMessage | null {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-
-  const candidate = raw as Partial<AgentChatMessage>;
-  const role = normalizeRole(candidate.role);
-  if (!role || typeof candidate.text !== "string") {
-    return null;
-  }
-  const kind: ChatMessageKind = candidate.kind === "runtime_tool" ? "runtime_tool" : "default";
-  const toolName = typeof candidate.toolName === "string" && candidate.toolName.trim() ? candidate.toolName.trim() : undefined;
-  const toolStatus = normalizeToolStatus(candidate.toolStatus);
-  const toolInput = typeof candidate.toolInput === "string" && candidate.toolInput.trim() ? candidate.toolInput.trim() : undefined;
-  const toolOutput =
-    typeof candidate.toolOutput === "string" && candidate.toolOutput.trim() ? candidate.toolOutput.trim() : undefined;
-  const attachments = normalizeMessageAttachments((candidate as { attachments?: unknown }).attachments);
-
-  return {
-    id: typeof candidate.id === "string" && candidate.id.trim() ? candidate.id : createMessageId("msg"),
-    role,
-    text: sanitizeMessageTextForDisplay(candidate.text),
-    status: normalizeStatus(candidate.status),
-    createdAt: typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt) ? candidate.createdAt : Date.now(),
-    attachments,
-    kind,
-    toolName,
-    toolStatus,
-    toolInput,
-    toolOutput
-  };
+  return normalizeMessageFromService(raw, {
+    createMessageId,
+    sanitizeText: sanitizeMessageTextForDisplay,
+    normalizeAttachments: normalizeMessageAttachments
+  }) as AgentChatMessage | null;
 }
 
 function isLegacyWelcomeMessage(message: AgentChatMessage) {
-  if (message.id.startsWith("welcome-")) {
-    return true;
-  }
-  if (message.role !== "assistant") {
-    return false;
-  }
-  const text = message.text.trim();
-  if (!text) {
-    return false;
-  }
-  return text === "请选择一个 Agent 开始对话。" || (text.startsWith("已切换到 ") && text.endsWith("，可以直接发送消息并由该 Agent 执行。"));
+  return isLegacyWelcomeMessageFromService(message);
 }
 
 function createWelcomeMessages(_agent: AgentListItem | null): AgentChatMessage[] {
   return [];
 }
 
-type ConversationStorageReadOptions = {
-  legacyAgentId?: string | null;
-};
+function isPendingChatMessage(message: AgentChatMessage) {
+  return isPendingChatMessageFromService(message);
+}
 
 function loadChatHistory(conversationScopeKey: string, options: ConversationStorageReadOptions = {}) {
-  const primaryRaw = safeStorageGet(chatStorageKeyFor(conversationScopeKey));
-  const legacyRaw = options.legacyAgentId ? safeStorageGet(legacyChatStorageKeyForAgent(options.legacyAgentId)) : null;
-  const raw = primaryRaw && primaryRaw.trim() ? primaryRaw : legacyRaw;
-  if (!raw) {
-    return [] as AgentChatMessage[];
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [] as AgentChatMessage[];
-    }
-
-    return parsed
-      .map((item) => normalizeMessage(item))
-      .filter((item): item is AgentChatMessage => item !== null)
-      .filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item));
-  } catch {
-    return [] as AgentChatMessage[];
-  }
+  return loadChatHistoryFromStorage<AgentChatMessage>({
+    conversationScopeKey,
+    options,
+    normalizeMessage,
+    isLegacyWelcomeMessage,
+    isPending: isPendingChatMessage
+  });
 }
 
 function loadChatArchives(conversationScopeKey: string, options: ConversationStorageReadOptions = {}) {
-  const primaryRaw = safeStorageGet(chatArchiveStorageKeyFor(conversationScopeKey));
-  const legacyRaw = options.legacyAgentId ? safeStorageGet(legacyChatArchiveStorageKeyForAgent(options.legacyAgentId)) : null;
-  const raw = primaryRaw && primaryRaw.trim() ? primaryRaw : legacyRaw;
-  if (!raw) {
-    return [] as ChatArchiveRecord[];
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [] as ChatArchiveRecord[];
-    }
-    return parsed
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") {
-          return null;
-        }
-        const candidate = entry as Partial<ChatArchiveRecord> & { messages?: unknown[] };
-        if (!Array.isArray(candidate.messages)) {
-          return null;
-        }
-        const messages = candidate.messages
-          .map((item) => normalizeMessage(item))
-          .filter((item): item is AgentChatMessage => item !== null)
-          .filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item));
-        if (messages.length === 0) {
-          return null;
-        }
-        return {
-          id: typeof candidate.id === "string" && candidate.id.trim() ? candidate.id : createMessageId("archive"),
-          archivedAt:
-            typeof candidate.archivedAt === "number" && Number.isFinite(candidate.archivedAt) ? candidate.archivedAt : Date.now(),
-          title: typeof candidate.title === "string" && candidate.title.trim() ? candidate.title : "会话归档",
-          messages
-        } satisfies ChatArchiveRecord;
-      })
-      .filter((item): item is ChatArchiveRecord => item !== null)
-      .slice(0, 60);
-  } catch {
-    return [] as ChatArchiveRecord[];
-  }
+  const archives = loadChatArchivesFromStorage<AgentChatMessage>({
+    conversationScopeKey,
+    options,
+    normalizeMessage,
+    isLegacyWelcomeMessage,
+    isPending: isPendingChatMessage,
+    createArchiveId: () => createMessageId("archive")
+  });
+  return archives.map((item) => ({ ...item })) as ChatArchiveRecord[];
 }
 
 function persistChatArchives(conversationScopeKey: string, archives: ChatArchiveRecord[]) {
-  safeStorageSet(chatArchiveStorageKeyFor(conversationScopeKey), JSON.stringify(archives.slice(0, 60)));
+  persistChatArchivesToStorage(conversationScopeKey, archives);
 }
 
 function loadSessionId(conversationScopeKey: string, options: ConversationStorageReadOptions = {}) {
-  const key = sessionStorageKeyFor(conversationScopeKey);
-  const existing = safeStorageGet(key);
-  if (existing && existing.trim()) {
-    return existing;
-  }
-
-  const legacyExisting = options.legacyAgentId ? safeStorageGet(legacySessionStorageKeyForAgent(options.legacyAgentId)) : null;
-  if (legacyExisting && legacyExisting.trim()) {
-    safeStorageSet(key, legacyExisting);
-    return legacyExisting;
-  }
-
-  const next = createSessionId();
-  safeStorageSet(key, next);
-  return next;
+  return loadSessionIdFromStorage(conversationScopeKey, options, createSessionId);
 }
 
 function peekSessionId(conversationScopeKey: string, options: ConversationStorageReadOptions = {}) {
-  const existing = safeStorageGet(sessionStorageKeyFor(conversationScopeKey));
-  if (existing && existing.trim()) {
-    return existing.trim();
-  }
-  const legacyExisting = options.legacyAgentId ? safeStorageGet(legacySessionStorageKeyForAgent(options.legacyAgentId)) : null;
-  if (legacyExisting && legacyExisting.trim()) {
-    return legacyExisting.trim();
-  }
-  return "";
+  return peekSessionIdFromStorage(conversationScopeKey, options);
 }
 
 function persistChatHistory(conversationScopeKey: string) {
-  const stableMessages = chatMessages.value.filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item));
-  safeStorageSet(chatStorageKeyFor(conversationScopeKey), JSON.stringify(stableMessages));
-  safeStorageSet(sessionStorageKeyFor(conversationScopeKey), currentSessionId.value || createSessionId());
+  persistChatHistoryToStorage({
+    conversationScopeKey,
+    messages: chatMessages.value,
+    currentSessionId: currentSessionId.value,
+    createSessionIdFn: createSessionId,
+    isPending: isPendingChatMessage,
+    isLegacyWelcomeMessage
+  });
+}
+
+function resolveFreshConversationSessionId(conversationScopeKey: string, agentId: string) {
+  const parsedScope = parseConversationScope(conversationScopeKey);
+  return resolveFreshSessionIdFromService({
+    isAgentScope: parsedScope?.kind === "agent",
+    conversationScopeKey,
+    agentId,
+    buildScopedRuntimeSessionKey,
+    createSessionId
+  });
+}
+
+function persistConversationSnapshot(conversationScopeKey: string) {
+  persistChatHistory(conversationScopeKey);
+  agentHistories.value[conversationScopeKey] = cloneConversationMessagesFromService(chatMessages.value);
 }
 
 function getOpenClawMessages(items: AgentChatMessage[]): OpenClawMessage[] {
@@ -6301,9 +5191,11 @@ async function loadAgents() {
     if (!defaultConversationScopeKey) {
       continue;
     }
-    const readOptions: ConversationStorageReadOptions = isChatConversationGroupAgentId(agent.agentId)
-      ? {}
-      : { legacyAgentId: agent.agentId };
+    const readOptions = resolveConversationReadOptionsFromService({
+      agentId: agent.agentId,
+      channelSession: null,
+      isConversationGroupAgent: isChatConversationGroupAgentId(agent.agentId)
+    });
     const history = loadChatHistory(defaultConversationScopeKey, readOptions);
     if (history.length > 0) {
       agentHistories.value[defaultConversationScopeKey] = history;
@@ -6311,7 +5203,8 @@ async function loadAgents() {
     refreshAgentMetaFromHistory(agent.agentId, history, agent.currentWork);
   }
 
-  if (!selectedAgentId.value || !loadedAgents.some((agent) => agent.agentId === selectedAgentId.value)) {
+  const loadedAgentIds = loadedAgents.map((agent) => agent.agentId);
+  if (shouldResetSelectedAgentFromService(selectedAgentId.value, loadedAgentIds)) {
     switchAgent(loadedAgents[0]?.agentId ?? null);
   }
 }
@@ -6340,16 +5233,21 @@ function switchAgent(agentId: string | null, options: SwitchAgentOptions = {}) {
   const previousAgentId = selectedAgentId.value;
   const previousChannelSession = activeChannelChatSession.value;
   const nextChannelSession = options.channelSession ?? null;
-  const sameAgent = previousAgentId ? equalsIgnoreCase(previousAgentId, agentId) : false;
-  const sameChannelSession = (previousChannelSession?.id ?? "") === (nextChannelSession?.id ?? "");
-  if (!options.force && sameAgent && sameChannelSession) {
+  if (
+    shouldSkipAgentSwitchFromService({
+      previousAgentId,
+      nextAgentId: agentId,
+      previousChannelSession,
+      nextChannelSession,
+      force: options.force
+    })
+  ) {
     return;
   }
 
   const previousConversationScopeKey = resolveConversationScopeKey(previousAgentId, previousChannelSession);
   if (previousConversationScopeKey) {
-    agentHistories.value[previousConversationScopeKey] = [...chatMessages.value];
-    persistChatHistory(previousConversationScopeKey);
+    persistConversationSnapshot(previousConversationScopeKey);
   }
 
   const nextConversationScopeKey = resolveConversationScopeKey(agentId, nextChannelSession);
@@ -6359,15 +5257,18 @@ function switchAgent(agentId: string | null, options: SwitchAgentOptions = {}) {
 
   selectedAgentId.value = agentId;
   activeChannelChatSession.value = nextChannelSession ? { ...nextChannelSession } : null;
-  const loadOptions: ConversationStorageReadOptions = nextChannelSession ? {} : { legacyAgentId: agentId };
+  const loadOptions = resolveConversationReadOptionsFromService({
+    agentId,
+    channelSession: nextChannelSession,
+    isConversationGroupAgent: isChatConversationGroupAgentId(agentId)
+  });
   currentSessionId.value = loadSessionId(nextConversationScopeKey, loadOptions);
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
 
   const cachedHistory = agentHistories.value[nextConversationScopeKey];
-  const loadedHistory =
-    cachedHistory && cachedHistory.length > 0 ? cachedHistory : loadChatHistory(nextConversationScopeKey, loadOptions);
+  const loadedHistory = pickConversationHistoryFromService(cachedHistory, loadChatHistory(nextConversationScopeKey, loadOptions));
 
   const active = agents.value.find((item) => item.agentId === agentId) ?? null;
   chatMessages.value = loadedHistory.length > 0 ? [...loadedHistory] : createWelcomeMessages(active);
@@ -6401,11 +5302,8 @@ function handleNewChat() {
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
-  const parsedScope = parseConversationScope(conversationScopeKey);
-  currentSessionId.value =
-    parsedScope?.kind === "agent" ? buildScopedRuntimeSessionKey(conversationScopeKey, activeId) : createSessionId();
-  persistChatHistory(conversationScopeKey);
-  agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+  currentSessionId.value = resolveFreshConversationSessionId(conversationScopeKey, activeId);
+  persistConversationSnapshot(conversationScopeKey);
   refreshAgentMetaFromHistory(activeId, chatMessages.value, active?.currentWork || "暂无会话");
   void scrollMessagesToBottom();
 }
@@ -8495,8 +7393,7 @@ function interruptActiveChatReply(options: { guided?: boolean } = {}) {
   }
 
   if (conversationScopeKey) {
-    persistChatHistory(conversationScopeKey);
-    agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+    persistConversationSnapshot(conversationScopeKey);
   }
 
   void scrollMessagesToBottom();
@@ -8593,8 +7490,7 @@ async function submitChat() {
           timeLabel: formatTimeLabel(noticeAt),
           unread: 0
         });
-        persistChatHistory(conversationScopeKey);
-        agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+        persistConversationSnapshot(conversationScopeKey);
         void scrollMessagesToBottom();
         return;
       }
@@ -8711,8 +7607,7 @@ async function submitChat() {
       } finally {
         if (!isRunInterrupted()) {
           isSending.value = false;
-          persistChatHistory(conversationScopeKey);
-          agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+          persistConversationSnapshot(conversationScopeKey);
           void scrollMessagesToBottom();
         }
       }
@@ -8846,8 +7741,7 @@ async function submitChat() {
           }
         }
         isSending.value = false;
-        persistChatHistory(conversationScopeKey);
-        agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+        persistConversationSnapshot(conversationScopeKey);
         void scrollMessagesToBottom();
       }
     }
@@ -10013,78 +8907,27 @@ function resolveRelatedModelPlatform(agent: AgentListItem | null, platforms: Ope
 }
 
 function formatDateTime(timestampMs: number | null | undefined) {
-  if (!timestampMs || !Number.isFinite(timestampMs)) {
-    return "—";
-  }
-  return new Date(timestampMs).toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
+  return formatDateTimeFromUtils(timestampMs);
 }
 
 function formatTaskScheduleKind(kind: string, deleteAfterRun: boolean) {
-  if (deleteAfterRun) {
-    return "一次性";
-  }
-  if (kind === "cron") {
-    return "周期";
-  }
-  if (kind === "at") {
-    return "定时";
-  }
-  return "任务";
+  return formatTaskScheduleKindFromUtils(kind, deleteAfterRun);
 }
 
 function formatTaskNextRunCountdown(nextRunAtMs: number | null | undefined) {
-  if (!nextRunAtMs || !Number.isFinite(nextRunAtMs)) {
-    return "未设置";
-  }
-  const delta = nextRunAtMs - Date.now();
-  const absDelta = Math.abs(delta);
-  if (absDelta < 60 * 60 * 1000) {
-    return delta >= 0 ? "1h内" : "已逾期";
-  }
-  const hours = Math.round(absDelta / (60 * 60 * 1000));
-  if (hours < 24) {
-    return delta >= 0 ? `${hours}h后` : `${hours}h前`;
-  }
-  const days = Math.round(absDelta / (24 * 60 * 60 * 1000));
-  return delta >= 0 ? `${days}天后` : `${days}天前`;
+  return formatTaskNextRunCountdownFromUtils(nextRunAtMs);
 }
 
 function formatCompactTime(timestampMs: number | null | undefined) {
-  if (!timestampMs || !Number.isFinite(timestampMs)) {
-    return "--:--:--";
-  }
-  return new Date(timestampMs).toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  });
+  return formatCompactTimeFromUtils(timestampMs);
 }
 
 function formatRunDurationLabel(durationMs: number | null | undefined) {
-  if (!durationMs || !Number.isFinite(durationMs) || durationMs <= 0) {
-    return "—";
-  }
-  const totalMinutes = Math.floor(durationMs / 60000);
-  if (totalMinutes < 60) {
-    return `${Math.max(1, totalMinutes)} 分`;
-  }
-  const totalHours = Math.floor(totalMinutes / 60);
-  if (totalHours < 24) {
-    return `${totalHours} 小时`;
-  }
-  const totalDays = Math.floor(totalHours / 24);
-  return `${totalDays} 天`;
+  return formatRunDurationLabelFromUtils(durationMs);
 }
 
 function formatInteger(value: number) {
-  return Math.max(0, Math.round(value)).toLocaleString("zh-CN");
+  return formatIntegerFromUtils(value);
 }
 
 function getEffectiveLogTotalTokens(log: OpenClawMessageLogItem) {
@@ -10164,18 +9007,14 @@ function clearRelatedResourceSnapshots() {
 }
 
 function getStableChatMessages(messages: AgentChatMessage[]) {
-  return messages.filter((item) => item.status !== "pending" && !isLegacyWelcomeMessage(item));
+  return getStableChatMessagesFromStorage(messages, {
+    isPending: isPendingChatMessage,
+    isLegacy: isLegacyWelcomeMessage
+  });
 }
 
 function buildArchiveTitle(messages: AgentChatMessage[]) {
-  const firstUserMessage = messages.find((item) => item.role === "user" && item.text.trim());
-  const firstAssistantMessage = messages.find((item) => item.role === "assistant" && item.text.trim());
-  const base = firstUserMessage?.text.trim() || firstAssistantMessage?.text.trim() || "会话归档";
-  const clipped = base.replace(/\s+/g, " ").trim();
-  if (clipped.length > 22) {
-    return `${clipped.slice(0, 22)}...`;
-  }
-  return clipped || "会话归档";
+  return buildArchiveTitleFromService(messages);
 }
 
 function getArchivePreviewText(record: ChatArchiveRecord) {
@@ -10790,12 +9629,20 @@ function getRelatedMessageItems(messages: AgentChatMessage[]) {
   );
 }
 
-function shouldUseLegacyAgentStorage(scopeKey: string, agentId: string) {
+function isLegacyAgentStorageScope(scopeKey: string, agentId: string) {
   const normalizedScopeKey = normalizeStoredConversationScopeKey(scopeKey);
   if (!normalizedScopeKey) {
     return false;
   }
   return normalizedScopeKey === buildAgentConversationScopeKey(agentId);
+}
+
+function resolveConversationReadOptionsForScope(scopeKey: string, agentId: string) {
+  return resolveConversationReadOptionsFromService({
+    agentId,
+    channelSession: isLegacyAgentStorageScope(scopeKey, agentId) ? null : { id: scopeKey },
+    isConversationGroupAgent: isChatConversationGroupAgentId(agentId)
+  });
 }
 
 function formatOpenClawSessionScopeLabel(item: OpenClawAgentSessionSnapshotItem, ownerAgentId: string) {
@@ -11135,9 +9982,7 @@ async function handleRelatedHistoryRecordSelect(record: ChatRelatedHistoryRecord
     return;
   }
 
-  const loadOptions: ConversationStorageReadOptions = shouldUseLegacyAgentStorage(normalizedScopeKey, agent.agentId)
-    ? { legacyAgentId: agent.agentId }
-    : {};
+  const loadOptions = resolveConversationReadOptionsForScope(normalizedScopeKey, agent.agentId);
   if (isOpenClawAgentSessionScope(normalizedScopeKey, agent.agentId)) {
     await syncOpenClawSessionHistoryToLocal(agent, normalizedScopeKey);
   } else {
@@ -11200,9 +10045,7 @@ function collectRelatedHistoryRecords(agent: AgentListItem) {
   const records: ChatRelatedHistoryRecord[] = [];
 
   for (const scopeKey of scopeKeys) {
-    const loadOptions: ConversationStorageReadOptions = shouldUseLegacyAgentStorage(scopeKey, agent.agentId)
-      ? { legacyAgentId: agent.agentId }
-      : {};
+    const loadOptions = resolveConversationReadOptionsForScope(scopeKey, agent.agentId);
     const sessionId = peekSessionId(scopeKey, loadOptions);
     let messages = getRelatedMessageItems(loadChatHistory(scopeKey, loadOptions));
     if (normalizedActiveScopeKey && scopeKey === normalizedActiveScopeKey) {
@@ -11252,9 +10095,7 @@ function collectRelatedArchiveRecords(agent: AgentListItem) {
   const scopeKeys = collectRelatedConversationScopeKeys(agent);
   const records: ChatRelatedArchiveRecord[] = [];
   for (const scopeKey of scopeKeys) {
-    const loadOptions: ConversationStorageReadOptions = shouldUseLegacyAgentStorage(scopeKey, agent.agentId)
-      ? { legacyAgentId: agent.agentId }
-      : {};
+    const loadOptions = resolveConversationReadOptionsForScope(scopeKey, agent.agentId);
     const archives = loadChatArchives(scopeKey, loadOptions);
     for (const record of archives) {
       records.push({
@@ -11420,13 +10261,7 @@ function getLogStatusTone(status: number) {
 }
 
 function formatDurationLabel(durationMs: number) {
-  if (!Number.isFinite(durationMs)) {
-    return "—";
-  }
-  if (durationMs >= 1000) {
-    return `${(durationMs / 1000).toFixed(2)}s`;
-  }
-  return `${Math.max(0, Math.round(durationMs))}ms`;
+  return formatDurationLabelFromUtils(durationMs);
 }
 
 function parseRuntimeLogEndpoint(errorText: string) {
@@ -15374,7 +14209,11 @@ async function refreshUtilityModalData(type: UtilityModalType, options: RefreshU
       if (refreshToken !== utilityModalRefreshToken) {
         return;
       }
-      const readOptions: ConversationStorageReadOptions = activeChannelChatSession.value ? {} : { legacyAgentId: agent.agentId };
+      const readOptions = resolveConversationReadOptionsFromService({
+        agentId: agent.agentId,
+        channelSession: activeChannelChatSession.value,
+        isConversationGroupAgent: isChatConversationGroupAgentId(agent.agentId)
+      });
       const nextHistoryArchives = loadChatArchives(conversationScopeKey, readOptions);
       const localRelatedRecords = collectRelatedHistoryRecords(agent);
       const openclawRelatedRecords = await loadOpenClawRelatedHistoryRecords(
@@ -15466,23 +14305,27 @@ async function handleArchiveCurrentChat() {
   }
 
   const stableMessages = getStableChatMessages(chatMessages.value);
-  const meaningfulMessages = stableMessages.filter(
-    (item) => (item.role === "assistant" || item.role === "user") && !isRuntimeToolMessage(item)
+  const meaningfulMessages = collectMeaningfulArchiveMessagesFromService(
+    stableMessages,
+    (item) => isRuntimeToolMessage(item)
   );
   if (meaningfulMessages.length === 0) {
     utilityModalNotice.value = "当前会话暂无可归档的消息。";
     return;
   }
 
-  const readOptions: ConversationStorageReadOptions = activeChannelChatSession.value ? {} : { legacyAgentId: agent.agentId };
+  const readOptions = resolveConversationReadOptionsFromService({
+    agentId: agent.agentId,
+    channelSession: activeChannelChatSession.value,
+    isConversationGroupAgent: isChatConversationGroupAgentId(agent.agentId)
+  });
   const archives = loadChatArchives(conversationScopeKey, readOptions);
-  const archiveRecord: ChatArchiveRecord = {
-    id: createMessageId("archive"),
-    archivedAt: Date.now(),
-    title: buildArchiveTitle(meaningfulMessages),
-    messages: meaningfulMessages.map((item) => ({ ...item }))
-  };
-  const nextArchives = [archiveRecord, ...archives].slice(0, 60);
+  const archiveRecord = createArchiveRecordFromService<AgentChatMessage>({
+    messages: meaningfulMessages,
+    createArchiveId: () => createMessageId("archive"),
+    buildTitle: buildArchiveTitle
+  });
+  const nextArchives = prependArchiveRecordFromService(archiveRecord, archives, 60);
   persistChatArchives(conversationScopeKey, nextArchives);
   chatHistoryArchives.value = nextArchives;
 
@@ -15492,12 +14335,8 @@ async function handleArchiveCurrentChat() {
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
-  currentSessionId.value =
-    parseConversationScope(conversationScopeKey)?.kind === "agent"
-      ? buildScopedRuntimeSessionKey(conversationScopeKey, agent.agentId)
-      : createSessionId();
-  persistChatHistory(conversationScopeKey);
-  agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+  currentSessionId.value = resolveFreshConversationSessionId(conversationScopeKey, agent.agentId);
+  persistConversationSnapshot(conversationScopeKey);
   refreshAgentMetaFromHistory(agent.agentId, chatMessages.value, agent.currentWork);
 
   utilityModalNotice.value = "当前会话已归档，可在聊天记录中查看。";
@@ -15513,15 +14352,14 @@ function handleRestoreArchive(record: ChatArchiveRecord) {
   if (!agent || !conversationScopeKey) {
     return;
   }
-  const restoredMessages = record.messages.map((message) => ({ ...message }));
+  const restoredMessages = cloneArchiveMessagesFromService(record.messages) as AgentChatMessage[];
   chatMessages.value = restoredMessages.length > 0 ? restoredMessages : createWelcomeMessages(agent);
   chatAttachments.value = [];
   chatComposerError.value = "";
   runtimeToolSyncContext.value = null;
   expandedRuntimeToolMessages.value = {};
   clearRuntimeToolSyncRetryTimer();
-  persistChatHistory(conversationScopeKey);
-  agentHistories.value[conversationScopeKey] = [...chatMessages.value];
+  persistConversationSnapshot(conversationScopeKey);
   refreshAgentMetaFromHistory(agent.agentId, chatMessages.value, agent.currentWork);
   utilityModalNotice.value = `已恢复归档会话「${record.title}」。`;
   if (utilityModalType.value === "history") {
