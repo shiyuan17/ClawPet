@@ -5,7 +5,7 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "macos" {
         println!("cargo:rerun-if-changed=src/macos_notifications.m");
-        println!("cargo:rerun-if-changed=src/macos_dev_notifier.applescript");
+        println!("cargo:rerun-if-changed=src/macos_dev_notifier.js");
         cc::Build::new()
             .file("src/macos_notifications.m")
             .flag("-fobjc-arc")
@@ -16,9 +16,11 @@ fn main() {
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR must be set"));
         let notifier_app_path = out_dir.join("DragonClaw Dev Notifier.app");
         let status = Command::new("/usr/bin/osacompile")
+            .arg("-l")
+            .arg("JavaScript")
             .arg("-o")
             .arg(&notifier_app_path)
-            .arg("src/macos_dev_notifier.applescript")
+            .arg("src/macos_dev_notifier.js")
             .status()
             .expect("failed to launch osacompile for DragonClaw dev notifier");
         if !status.success() {

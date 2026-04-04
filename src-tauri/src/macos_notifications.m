@@ -38,19 +38,7 @@ didReceiveNotificationResponse:(UNNotificationResponse*)response
 
 @end
 
-@interface DragonClawLegacyNotificationDelegate : NSObject <NSUserNotificationCenterDelegate>
-@end
-
-@implementation DragonClawLegacyNotificationDelegate
-
-- (BOOL)userNotificationCenter:(NSUserNotificationCenter*)center shouldPresentNotification:(NSUserNotification*)notification {
-    return YES;
-}
-
-@end
-
 static DragonClawNotificationDelegate* dragonclaw_shared_delegate = nil;
-static DragonClawLegacyNotificationDelegate* dragonclaw_shared_legacy_delegate = nil;
 
 static void dragonclaw_set_error(char** error_out, NSString* message) {
     if (error_out == NULL) {
@@ -91,15 +79,6 @@ static BOOL dragonclaw_is_app_bundle_runtime(void) {
     }
 
     return [path_extension caseInsensitiveCompare:@"app"] == NSOrderedSame;
-}
-
-static void dragonclaw_ensure_legacy_delegate(void) {
-    static dispatch_once_t once_token;
-    dispatch_once(&once_token, ^{
-        dragonclaw_shared_legacy_delegate = [DragonClawLegacyNotificationDelegate new];
-    });
-
-    [NSUserNotificationCenter defaultUserNotificationCenter].delegate = dragonclaw_shared_legacy_delegate;
 }
 
 static UNAuthorizationStatus dragonclaw_get_authorization_status(void) {
@@ -220,31 +199,5 @@ int dragonclaw_show_user_notification(const char* title_utf8, const char* body_u
 void dragonclaw_free_c_string(char* value) {
     if (value != NULL) {
         free(value);
-    }
-}
-
-int dragonclaw_show_legacy_user_notification(const char* title_utf8, const char* body_utf8, char** error_out) {
-    @autoreleasepool {
-        NSString* title = title_utf8 != NULL ? [NSString stringWithUTF8String:title_utf8] : @"";
-        NSString* body = body_utf8 != NULL ? [NSString stringWithUTF8String:body_utf8] : @"";
-        if (title == nil || title.length == 0) {
-            dragonclaw_set_error(error_out, @"通知标题不能为空。");
-            return 0;
-        }
-
-        dragonclaw_ensure_legacy_delegate();
-
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        NSUserNotification* notification = [NSUserNotification new];
-        notification.title = title;
-        if (body != nil && body.length > 0) {
-            notification.informativeText = body;
-        }
-        notification.soundName = NSUserNotificationDefaultSoundName;
-        [[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
-#pragma clang diagnostic pop
-
-        return 1;
     }
 }
